@@ -1,0 +1,42 @@
+{
+    "configurations": [
+        {
+            "name": "Win32",
+            "includePath": [
+                "${workspaceFolder}/engine/source/**",
+                "${workspaceFolder}/sandbox/source/**",
+                "${VULKAN_SDK}/include"
+            ],
+            "defines": [
+                "IBX_DEBUG",
+                "UNICODE",
+                "_UNICODE",
+                "IBXEXPORT"
+            ],
+            "windowsSdkVersion": "10.0.18362.0",
+            "compilerPath": "C:/LLVM/bin/clang++.exe",
+            "cStandard": "c17",
+            "cppStandard": "c++17",
+            "intelliSenseMode": "windows-clang-x64"
+        },
+        {
+            "name": "Linux",
+            "includePath": [
+                "${workspaceFolder}/engine/source/**",
+                "${workspaceFolder}/sandbox/source/**",
+                "${VULKAN_SDK}/include"
+            ],
+            "defines": [
+                "IBX_DEBUG",
+                "UNICODE",
+                "_UNICODE",
+                "IBXEXPORT"
+            ],
+            "compilerPath": "/usr/bin/clang++",
+            "cStandard": "c17",
+            "cppStandard": "c++17",
+            "intelliSenseMode": "linux-clang-x64"
+        }
+    ],
+    "version": 4
+}
