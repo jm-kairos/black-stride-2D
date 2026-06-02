@@ -1,6 +1,6 @@
 #include "core/input.h"
 #include "core/event.h"
-#include "core/memory/ibx_memory.h"
+#include "core/memory/bs_memory.h"
 #include "core/logger.h"
 #include "input.h"
 
@@ -28,7 +28,7 @@ static input_state_t state;
 void input_initialize(){
     state = {};
     initialized = TRUE;
-    IBX_LOG_INFO("Input subsystem initialized.")
+    BS_LOG_INFO("Input subsystem initialized.")
 }
 
 void input_terminate(){
@@ -41,8 +41,8 @@ void input_update(real dt){
     }
     
     // Copy current state to the previous state;
-    ibx_memory_copy(&state.keyboard_previous, &state.keyboard_current, sizeof(keyboard_state_t));
-    ibx_memory_copy(&state.mouse_previous, &state.mouse_current, sizeof(mouse_state_t));
+    bs_memory_copy(&state.keyboard_previous, &state.keyboard_current, sizeof(keyboard_state_t));
+    bs_memory_copy(&state.mouse_previous, &state.mouse_current, sizeof(mouse_state_t));
 }
 
 void input_process_key(keys key, b8 pressed){
@@ -79,7 +79,7 @@ void input_process_mouse_move(i16 x, i16 y){
     if (state.mouse_current.x != x || state.mouse_current.y != y)
     {
 
-        // IBX_LOG_DEBUG("Mouse pos: %i, %i", x, y);
+        // BS_LOG_DEBUG("Mouse pos: %i, %i", x, y);
 
         state.mouse_current.x = x;
         state.mouse_current.y = y;

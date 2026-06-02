@@ -149,18 +149,18 @@ void input_terminate();
 void input_update(real dt);
 
 // Keyboard input.
-ibx__api__ b8 input_is_key_down(keys key);
-ibx__api__ b8 input_is_key_up(keys key);
-ibx__api__ b8 input_was_key_down(keys key);
-ibx__api__ b8 input_was_key_up(keys key);
+bs__api__ b8 input_is_key_down(keys key);
+bs__api__ b8 input_is_key_up(keys key);
+bs__api__ b8 input_was_key_down(keys key);
+bs__api__ b8 input_was_key_up(keys key);
 
 // Mouse input
-ibx__api__ b8 input_is_button_down(buttons button);
-ibx__api__ b8 input_is_button_up(buttons button);
-ibx__api__ b8 input_was_button_down(buttons button);
-ibx__api__ b8 input_was_button_up(buttons button);
-ibx__api__ void input_get_mouse_position(i32* x, i32* y);
-ibx__api__ void input_get_previous_mouse_position(i32* x, i32* y);
+bs__api__ b8 input_is_button_down(buttons button);
+bs__api__ b8 input_is_button_up(buttons button);
+bs__api__ b8 input_was_button_down(buttons button);
+bs__api__ b8 input_was_button_up(buttons button);
+bs__api__ void input_get_mouse_position(i32* x, i32* y);
+bs__api__ void input_get_previous_mouse_position(i32* x, i32* y);
 
 void input_process_key(keys key, b8 pressed);
 void input_process_button(buttons button, b8 pressed);

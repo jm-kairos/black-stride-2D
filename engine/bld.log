@@ -1,0 +1,5 @@
+
+C:\dev\blackstride\engine>REM Build script for engine 
+"Building engine..."
+lld-link: error: could not open 'SDL3.lib': no such file or directory
+clang++: error: linker command failed with exit code 1 (use -v to see invocation)

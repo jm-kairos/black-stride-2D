@@ -2,13 +2,13 @@
 
 #include "defines.h"
 
-#if IBX_PLATFORM_WINDOWS
+#if BS_PLATFORM_WINDOWS
 #include <windows.h>
 #endif
 
 // Dynamically get the OS page size once.
 const unsigned long PAGE_SIZE = []() {
-#if IBX_PLATFORM_WINDOWS
+#if BS_PLATFORM_WINDOWS
     SYSTEM_INFO sysInfo;
     GetSystemInfo(&sysInfo);
     return sysInfo.dwPageSize;

@@ -18,6 +18,6 @@ typedef struct application_config{
     const char* name;
 } application_config;
 
-ibx__api__ b8 application_init(game* game_inst);
+bs__api__ b8 application_init(game* game_inst);
 
-ibx__api__ b8 application_run();
+bs__api__ b8 application_run();

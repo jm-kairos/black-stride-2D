@@ -2,9 +2,9 @@
 
 #include "defines.h"
 
-#define IBX_ASSERTIONS_ENABLED
+#define BS_ASSERTIONS_ENABLED
 
-#ifdef IBX_ASSERTIONS_ENABLED
+#ifdef BS_ASSERTIONS_ENABLED
 // If we are using the VS compiler
 #if _MSC_VER
 // Clang on windows does in fact support some of the MS extensions
@@ -21,9 +21,9 @@
     file: name of the code file where the assertion was raised.
     line: line within the file, where the assertion was raised.
 */
-ibx__api__ void report_assertion_failure(const char* expression, const char* message, const char* file, i32 line);
+bs__api__ void report_assertion_failure(const char* expression, const char* message, const char* file, i32 line);
 
-#define IBX_ASSERT(expr)                                            \
+#define BS_ASSERT(expr)                                            \
     {                                                               \
         if(expr){                                                   \
                                                                     \
@@ -32,7 +32,7 @@ ibx__api__ void report_assertion_failure(const char* expression, const char* mes
             debugBreak();                                           \
         }                                                           \
     }          
-#define IBX_ASSERT_MSG(expr, message)                                    \
+#define BS_ASSERT_MSG(expr, message)                                    \
     {                                                                    \
         if(expr){                                                        \
                                                                          \
@@ -42,8 +42,8 @@ ibx__api__ void report_assertion_failure(const char* expression, const char* mes
         }                                                                \
     }   
 
-#ifdef IBX_DEBUG
-#define IBX_ASSERT_DEBUG(expr)                                           \
+#ifdef BS_DEBUG
+#define BS_ASSERT_DEBUG(expr)                                           \
     {                                                                    \
         if(expr){                                                        \
                                                                          \
@@ -53,12 +53,12 @@ ibx__api__ void report_assertion_failure(const char* expression, const char* mes
         }                                                                \
     } 
 #else
-#define IBX_ASSERT_DEBUG(expr) // Does nothing
+#define BS_ASSERT_DEBUG(expr) // Does nothing
 #endif
 
 #else
-#define IBX_ASSERT(expr)
-#define IBX_ASSERT_MSG(expr)
-#define IBX_ASSERT_DEBUG(expr)
+#define BS_ASSERT(expr)
+#define BS_ASSERT_MSG(expr)
+#define BS_ASSERT_DEBUG(expr)
 #endif
 

@@ -7,21 +7,21 @@
 
 ARENA_PTR arena_initialize(u64 reserve_size)
 {
-    ARENA_PTR out_arena = (ARENA_PTR)ibx_memory_allocator(sizeof(arena_t), MEMORY_TAG_ARENA);
+    ARENA_PTR out_arena = (ARENA_PTR)bs_memory_allocator(sizeof(arena_t), MEMORY_TAG_ARENA);
     if (!out_arena)
     {
-        IBX_LOG_ERROR("Failed to allocate memory for arena !");
+        BS_LOG_ERROR("Failed to allocate memory for arena !");
         return 0;
     } 
 
     // Align reservation up to the nearest page size
     reserve_size = _aligment_to_nearest_page_size(reserve_size); 
 
-    VOID_PTR block = ibx_memory_allocator_virtual_memory_reserve(reserve_size);
+    VOID_PTR block = bs_memory_allocator_virtual_memory_reserve(reserve_size);
     if (!block)
     {
-        IBX_LOG_ERROR("Failed to reserve virtual memory for arena !");
-        ibx_memory_free(out_arena, sizeof(arena_t), MEMORY_TAG_ARENA);
+        BS_LOG_ERROR("Failed to reserve virtual memory for arena !");
+        bs_memory_free(out_arena, sizeof(arena_t), MEMORY_TAG_ARENA);
         return 0;
     }
 
@@ -38,7 +38,7 @@ VOID_PTR arena_allocate(ARENA_PTR arena, u64 size)
 {
     if(!arena || size == 0)
     {
-        IBX_LOG_ERROR("Invalid arena or size for allocation !");
+        BS_LOG_ERROR("Invalid arena or size for allocation !");
         return 0;
     }
 
@@ -46,7 +46,7 @@ VOID_PTR arena_allocate(ARENA_PTR arena, u64 size)
 
     if (new_offset > arena->reserved_size)
     {
-        IBX_LOG_ERROR("Arena out of reserved space !");
+        BS_LOG_ERROR("Arena out of reserved space !");
         return 0;
     }
 
@@ -61,9 +61,9 @@ VOID_PTR arena_allocate(ARENA_PTR arena, u64 size)
         u64 size_to_commit = new_commit_target - arena->commited_size;
         VOID_PTR commit_start_adress = arena->base_ptr + arena->commited_size;
 
-        if (!ibx_memory_allocator_virtual_memory_commit(commit_start_adress, size_to_commit))
+        if (!bs_memory_allocator_virtual_memory_commit(commit_start_adress, size_to_commit))
         {
-            IBX_LOG_ERROR("Unable to commit memory !");
+            BS_LOG_ERROR("Unable to commit memory !");
             return 0;
         }
 
@@ -83,8 +83,8 @@ void arena_reset(ARENA_PTR arena){
 
 // Release memory to the OS completely.
 void arena_terminate(ARENA_PTR arena){
-    ibx_memory_virtual_free(arena->base_ptr, 0); // base_ptr is a pointer to the beginning of the entire block of memory. With size set to 0, the entire block is released. 
-    ibx_memory_free(arena, sizeof(arena_t), MEMORY_TAG_ARENA);
+    bs_memory_virtual_free(arena->base_ptr, 0); // base_ptr is a pointer to the beginning of the entire block of memory. With size set to 0, the entire block is released. 
+    bs_memory_free(arena, sizeof(arena_t), MEMORY_TAG_ARENA);
 }
 
 

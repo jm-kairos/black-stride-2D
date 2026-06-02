@@ -3,12 +3,10 @@
 
 #include "logger.h"
 #include "platform/platform.h"
-#include "core/memory/ibx_memory.h"
+#include "core/memory/bs_memory.h"
 #include "core/memory/arena.h"
 #include "core/event.h"
 #include "core/input.h"
-
-#include "renderer/renderer_client.h"
 
 // Singleton design for the state of the application struct.
 
@@ -34,7 +32,7 @@ b8 application_on_key(u16 code, VOID_PTR sender, VOID_PTR listener_inst, event_c
 b8 application_init(game* game_inst){
     if (initialized)
     {
-        IBX_LOG_ERROR("application_init called more than once !");
+        BS_LOG_ERROR("application_init called more than once !");
         return FALSE;
     }
 
@@ -45,12 +43,12 @@ b8 application_init(game* game_inst){
     input_initialize();
 
     // TODO: remove this
-    IBX_LOG_FATAL("A test message: %f", 3.14f);
-    IBX_LOG_ERROR("A test message: %f", 3.14f);
-    IBX_LOG_WARN("A test message: %f", 3.14f);
-    IBX_LOG_INFO("A test message: %f", 3.14f);
-    IBX_LOG_DEBUG("A test message: %f", 3.14f);    
-    IBX_LOG_TRACE("A test message: %f", 3.14f); 
+    BS_LOG_FATAL("A test message: %f", 3.14f);
+    BS_LOG_ERROR("A test message: %f", 3.14f);
+    BS_LOG_WARN("A test message: %f", 3.14f);
+    BS_LOG_INFO("A test message: %f", 3.14f);
+    BS_LOG_DEBUG("A test message: %f", 3.14f);    
+    BS_LOG_TRACE("A test message: %f", 3.14f); 
 
     app_state.is_running = TRUE;
     // State the application enters in when the window is, for example, minimized.
@@ -58,7 +56,7 @@ b8 application_init(game* game_inst){
 
     if (!event_initialize())
     {
-        IBX_LOG_ERROR("event subsystem failed to initialize !");
+        BS_LOG_ERROR("event subsystem failed to initialize !");
         return FALSE;
     }
     
@@ -73,20 +71,13 @@ b8 application_init(game* game_inst){
         game_inst->app_config.start_width, 
         game_inst->app_config.start_height)){
 
-        IBX_LOG_ERROR("platform_initialize failed !");
+        BS_LOG_ERROR("platform_initialize failed !");
         return FALSE;
     }
-
-    if (!renderer_initialize(game_inst->app_config.name, &app_state.platform))
-    {
-        IBX_LOG_FATAL("Failed to initialize renderer. Aborting application.")
-        return FALSE;
-    }
-    
 
     if (!app_state.game_inst->init(app_state.game_inst))
     {
-        IBX_LOG_FATAL("Game failed to initialized.");
+        BS_LOG_FATAL("Game failed to initialized.");
         return FALSE;
     }
 
@@ -105,7 +96,7 @@ b8 application_run(){
 
     ARENA_PTR frame_arena = arena_initialize(1024 * 1024 * 64); // 64MB frame arena
     
-    IBX_LOG_INFO(ibx_memory_get_memory_usage_string());
+    BS_LOG_INFO(bs_memory_get_memory_usage_string());
 
     while (app_state.is_running){
 
@@ -119,21 +110,17 @@ b8 application_run(){
         {
             // if (!app_state.game_inst->update(app_state.game_inst, (f32)0))
             // {
-            //     IBX_LOG_FATAL("Game update failed, shutting down.");
+            //     BS_LOG_FATAL("Game update failed, shutting down.");
             //     app_state.is_running = FALSE;
             //     break;
             // }
             // 
             // if (!app_state.game_inst->render(app_state.game_inst, (f32)0))
             // {
-            //     IBX_LOG_FATAL("Game render failed, shutting down.");
+            //     BS_LOG_FATAL("Game render failed, shutting down.");
             //     app_state.is_running = FALSE;
             //     break;
             // }
-
-            // TODO: refactor packet creation
-            RenderPacket rp = {};
-            renderer_draw_frame(&rp);
 
             input_update((real)0);
         }
@@ -152,8 +139,6 @@ b8 application_run(){
     
     app_state.is_running = FALSE; 
 
-    renderer_terminate();
-
     platform_terminate(&app_state.platform);
 
     return TRUE;
@@ -163,7 +148,7 @@ b8 application_on_event(u16 code, VOID_PTR sender, VOID_PTR listener_inst, event
     switch (code)
     {
         case EVENT_CODE_APPLICATION_QUIT:{
-            IBX_LOG_INFO("EVENT_CODE_APPLICATION_QUIT received, shutting down."); 
+            BS_LOG_INFO("EVENT_CODE_APPLICATION_QUIT received, shutting down."); 
             app_state.is_running = FALSE;
             return TRUE;
         }
@@ -182,19 +167,19 @@ b8 application_on_key(u16 code, VOID_PTR sender, VOID_PTR listener_inst, event_c
 
             return TRUE;
         } else if (key_code == KEY_A){
-            IBX_LOG_DEBUG("Explicit - A key pressed !");
+            BS_LOG_DEBUG("Explicit - A key pressed !");
 
         }else{
-            IBX_LOG_DEBUG("'%c' key pressed in window. ", key_code);
+            BS_LOG_DEBUG("'%c' key pressed in window. ", key_code);
         }
     }
     else if (code == EVENT_CODE_KEY_RELEASED){
         u16 key_code = context.data.u16[0];
         if (key_code == KEY_B)
         {
-            IBX_LOG_DEBUG("Explicit - B key released !");
+            BS_LOG_DEBUG("Explicit - B key released !");
         }else{
-            IBX_LOG_DEBUG("'%c' key released in window. ", key_code);
+            BS_LOG_DEBUG("'%c' key released in window. ", key_code);
         }
     }
     return FALSE;

@@ -4,12 +4,12 @@
 * Inspired by: https://andreleite.com/posts/2025/nstl/virtual-memory-arena-allocator/
 */
 
-// TODO: in ibx_memory.h, include statistic concerning arena allocation.
+// TODO: in bs_memory.h, include statistic concerning arena allocation.
 
 #include "defines.h"
 
 #include "core/logger.h"
-#include "ibx_memory.h"
+#include "bs_memory.h"
 
 struct arena_t;
 
@@ -24,8 +24,8 @@ struct arena_t{
 
 // Create the area.
 // This function reserves virtual memory for the arena and initializes its metadata.
-ibx__api__ ARENA_PTR arena_initialize(u64 reserve_size);
-ibx__api__ VOID_PTR arena_allocate(ARENA_PTR arena, u64 size);
+bs__api__ ARENA_PTR arena_initialize(u64 reserve_size);
+bs__api__ VOID_PTR arena_allocate(ARENA_PTR arena, u64 size);
 
-ibx__api__ void arena_reset(ARENA_PTR arena);
-ibx__api__ void arena_terminate(ARENA_PTR arena);
+bs__api__ void arena_reset(ARENA_PTR arena);
+bs__api__ void arena_terminate(ARENA_PTR arena);

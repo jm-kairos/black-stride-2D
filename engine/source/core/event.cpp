@@ -1,6 +1,6 @@
 #include "core/event.h"
 
-#include "core/memory/ibx_memory.h"
+#include "core/memory/bs_memory.h"
 
 #include "containers/vector.h"
 #include "containers/array.h"
