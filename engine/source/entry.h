@@ -8,7 +8,7 @@
 // Externally-defined function to create a game
 // The engine dll does not know how this function is defined.
 // It just knows that it is defined externally.
-extern b8 game_create(game* out_game);
+extern b8 game_create(Game* out_game);
 
 /**
  * The main entry point of the application. 
@@ -17,7 +17,7 @@ int main(void){
 
     bs_memory_initialize();
 
-    game game_inst;
+    Game game_inst;
     if (!game_create(&game_inst))
     {
         BS_LOG_FATAL("Could not create game !");

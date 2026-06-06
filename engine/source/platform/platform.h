@@ -2,21 +2,26 @@
 
 #include "defines.h"
 
-typedef struct platform_state{
+struct PlatformState{
     VOID_PTR internal_state; // type of this will be determined on the particular implementation on the cpp file
-} platform_state;
+};
 
 b8 platform_initialize(
-    platform_state* plat_state,
+    PlatformState* plat_state,
     const char* app_name,
     i32 x,
     i32 y,
     i32 width,
     i32 height);
 
-void platform_terminate(platform_state* plat_state);
+void platform_terminate(PlatformState* plat_state);
 
-b8 platform_pump_messages(platform_state* plat_state);
+b8 platform_pump_messages(PlatformState* plat_state);
+
+// Returns an opaque handle to the OS/SDL window (an SDL_Window* under the hood).
+// The renderer backend uses this to claim the window for the GPU device without
+// the renderer needing to know about the platform's internal SDL types.
+bs__api__ VOID_PTR platform_get_window_handle(PlatformState* plat_state);
 
 VOID_PTR platform_allocate_virtual_memory_commit(VOID_PTR block, u64 commit_size);
 

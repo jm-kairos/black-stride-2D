@@ -3,6 +3,7 @@
 #include "core/logger.h"
 #include "core/input.h"
 #include "core/event.h"
+#include "renderer/bs_imgui.h" // SDL-free ImGui facade: feed events to ImGui from the pump
 
 #include <SDL3/SDL.h>
 
@@ -13,9 +14,9 @@
 #include <windows.h>
 #endif
 
-typedef struct internal_state {
+struct InternalState {
     SDL_Window* window;
-} internal_state;
+};
 
 static Uint64 perf_freq;
 static Uint64 perf_start;
@@ -23,15 +24,15 @@ static Uint64 perf_start;
 static keys sdl_scancode_to_bs_key(SDL_Scancode sc);
 
 b8 platform_initialize(
-    platform_state* plat_state,
+    PlatformState* plat_state,
     const char* app_name,
     i32 x,
     i32 y,
     i32 width,
     i32 height)
 {
-    plat_state->internal_state = malloc(sizeof(internal_state));
-    internal_state* state = (internal_state*)plat_state->internal_state;
+    plat_state->internal_state = malloc(sizeof(InternalState));
+    InternalState* state = (InternalState*)plat_state->internal_state;
     state->window = NULL;
 
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS))
@@ -55,9 +56,9 @@ b8 platform_initialize(
     return TRUE;
 }
 
-void platform_terminate(platform_state* plat_state)
+void platform_terminate(PlatformState* plat_state)
 {
-    internal_state* state = (internal_state*)plat_state->internal_state;
+    InternalState* state = (InternalState*)plat_state->internal_state;
     if (state)
     {
         if (state->window)
@@ -71,11 +72,34 @@ void platform_terminate(platform_state* plat_state)
     SDL_Quit();
 }
 
-b8 platform_pump_messages(platform_state* plat_state)
+// SDL3 reports mouse-motion in LOGICAL window coordinates, but the renderer drawable (and
+// hence game_state.fb_width/height and the camera projection) is sized in PIXELS. On a HiDPI
+// display (e.g. 125%% scaling: 1024x576 logical vs 1280x720 pixels) those spaces differ, so
+// raw motion coords would land ~0.8x off from where the UI and world are drawn. Scale logical
+// -> pixel here, at the single input boundary, so every downstream consumer (UI hit-test, crew
+// pick) agrees with fb_width/height. On a 1.0x display the ratio is 1.0, so this is a no-op.
+static void mouse_logical_to_pixel(SDL_Window* win, float lx, float ly, i16* out_x, i16* out_y)
+{
+    int lw = 0, lh = 0, pw = 0, ph = 0;
+    SDL_GetWindowSize(win, &lw, &lh);
+    SDL_GetWindowSizeInPixels(win, &pw, &ph);
+    float sx = (lw > 0) ? ((float)pw / (float)lw) : 1.0f;
+    float sy = (lh > 0) ? ((float)ph / (float)lh) : 1.0f;
+    *out_x = (i16)(lx * sx);
+    *out_y = (i16)(ly * sy);
+}
+
+b8 platform_pump_messages(PlatformState* plat_state)
 {
     SDL_Event ev;
     while (SDL_PollEvent(&ev))
     {
+        // Let ImGui see every event first (mouse, keyboard, focus, text). This updates ImGui's
+        // WantCaptureMouse/Keyboard flags; the game gates its own world input on bs_imgui_wants_*
+        // so input consumed by a UI panel does not also drive the game. Passing &ev as void* keeps
+        // this TU free of ImGui headers (the facade casts it back inside the backend TU).
+        bs_imgui_process_event(&ev);
+
         switch (ev.type)
         {
             case SDL_EVENT_QUIT:
@@ -94,7 +118,10 @@ b8 platform_pump_messages(platform_state* plat_state)
             } break;
             case SDL_EVENT_MOUSE_MOTION:
             {
-                input_process_mouse_move((i16)ev.motion.x, (i16)ev.motion.y);
+                InternalState* st = (InternalState*)plat_state->internal_state;
+                i16 px = 0, py = 0;
+                mouse_logical_to_pixel(st->window, ev.motion.x, ev.motion.y, &px, &py);
+                input_process_mouse_move(px, py);
             } break;
             case SDL_EVENT_MOUSE_BUTTON_DOWN:
             case SDL_EVENT_MOUSE_BUTTON_UP:
@@ -116,12 +143,25 @@ b8 platform_pump_messages(platform_state* plat_state)
                 if (ev.wheel.y != 0)
                     input_process_mouse_wheel(ev.wheel.y > 0 ? 1 : -1);
             } break;
-            // TODO: window resize event (SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED)
+            case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
+            {
+                event_context_t data = {};
+                data.data.u16[0] = (u16)ev.window.data1; // new width
+                data.data.u16[1] = (u16)ev.window.data2; // new height
+                event_fire(EVENT_CODE_WINDOW_RESIZED, 0, data);
+            } break;
             default: break;
         }
     }
 
     return TRUE;
+}
+
+VOID_PTR platform_get_window_handle(PlatformState* plat_state)
+{
+    InternalState* state = (InternalState*)plat_state->internal_state;
+    if (!state) return NULL;
+    return (VOID_PTR)state->window;
 }
 
 VOID_PTR platform_allocate_virtual_memory_commit(VOID_PTR block, u64 commit_size)

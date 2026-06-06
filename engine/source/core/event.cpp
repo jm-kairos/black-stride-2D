@@ -5,26 +5,26 @@
 #include "containers/vector.h"
 #include "containers/array.h"
 
-struct event_registered_t {
+struct __EventRegistered {
     VOID_PTR listener;
     PFN_on_event callback;
 };
 
-struct event_code_entry_t {
-    Vector(event_registered_t) events;
+struct __EventCodeEntry {
+    Vector(__EventRegistered) events;
 };
 
 #define MAX_MESSAGE_CODES 10000
 
-struct event_system_state_t
+struct __EventSystemState
 {
     // Lookup table for event codes. 
-    Array(event_code_entry_t, MAX_MESSAGE_CODES) registered;
+    Array(__EventCodeEntry, MAX_MESSAGE_CODES) registered;
 };
 
 // Internal state of the event system.
 static b8 initialized = FALSE;
-static event_system_state_t state;
+static __EventSystemState state;
 
 b8 event_initialize()
 {
@@ -62,7 +62,7 @@ b8 event_register(u16 code, VOID_PTR listener, PFN_on_event on_event)
         }
     }
 
-    event_registered_t event;
+    __EventRegistered event;
     event.listener = listener;
     event.callback = on_event;
     state.registered[code].events.push_back(event);
@@ -80,7 +80,7 @@ b8 event_unregister(u16 code, VOID_PTR listener, PFN_on_event on_event)
     size_t registered_count = state.registered[code].events.size();
     for (size_t i = 0; i < registered_count; ++i)
     {
-        event_registered_t e = state.registered[code].events[i];
+        __EventRegistered e = state.registered[code].events[i];
         if (e.listener == listener && e.callback == on_event)
         {
             // WARN: vector "erase" method is O(n).
@@ -103,7 +103,7 @@ b8 event_fire(u16 code, VOID_PTR sender, event_context context)
     size_t registered_count = state.registered[code].events.size();
     for (size_t i = 0; i < registered_count; ++i)
     {
-        event_registered_t e = state.registered[code].events[i];
+        __EventRegistered e = state.registered[code].events[i];
         if (e.callback(code, sender, e.listener, context))
         {
             // Message has been handled, do not send to other listeners.

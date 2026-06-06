@@ -2,10 +2,10 @@
 
 #include "defines.h"
 
-struct game;
+struct Game;
 
 // Application configuration.
-typedef struct application_config{
+struct ApplicationConfig{
     // Window starting x axis, if applicable.
     i16 start_pos_x;
     // Window starting y axis, if applicable.
@@ -16,8 +16,8 @@ typedef struct application_config{
     i16 start_height;
     // Application name used in windowing, if applicable.
     const char* name;
-} application_config;
+};
 
-bs__api__ b8 application_init(game* game_inst);
+bs__api__ b8 application_init(Game* game_inst);
 
 bs__api__ b8 application_run();

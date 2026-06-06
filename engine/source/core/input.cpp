@@ -4,26 +4,31 @@
 #include "core/logger.h"
 #include "input.h"
 
-struct keyboard_state_t {
+struct __KeyboardState {
     b8 keys[256];
 };
 
-struct mouse_state_t {
+struct __MouseState {
     i16 x;
     i16 y;
     u8 buttons[BUTTON_MAX_BUTTONS];
 };
 
-struct input_state_t {
-    keyboard_state_t keyboard_current;
-    keyboard_state_t keyboard_previous;
-    mouse_state_t mouse_current;
-    mouse_state_t mouse_previous;
+struct __InputState {
+    __KeyboardState keyboard_current;
+    __KeyboardState keyboard_previous;
+    __MouseState mouse_current;
+    __MouseState mouse_previous;
 };
 
 // Internal input state.
 static b8 initialized = FALSE;
-static input_state_t state; 
+static __InputState state;
+
+// Mouse-wheel scroll accumulated within the current frame. Reset to 0 at the top of every
+// input_update so the game sees only this frame's net scroll. Kept outside __InputState
+// because it is an event-driven delta, not a sampled level like key/button/position.
+static i32 mouse_wheel_accum = 0;
 
 void input_initialize(){
     state = {};
@@ -41,8 +46,12 @@ void input_update(real dt){
     }
     
     // Copy current state to the previous state;
-    bs_memory_copy(&state.keyboard_previous, &state.keyboard_current, sizeof(keyboard_state_t));
-    bs_memory_copy(&state.mouse_previous, &state.mouse_current, sizeof(mouse_state_t));
+    bs_memory_copy(&state.keyboard_previous, &state.keyboard_current, sizeof(__KeyboardState));
+    bs_memory_copy(&state.mouse_previous, &state.mouse_current, sizeof(__MouseState));
+
+    // Wheel is an accumulated per-frame delta, not a sampled level: clear it once the frame
+    // that consumed it is done. input_update runs after the game's update each frame.
+    mouse_wheel_accum = 0;
 }
 
 void input_process_key(keys key, b8 pressed){
@@ -94,6 +103,7 @@ void input_process_mouse_move(i16 x, i16 y){
 }
 
 void input_process_mouse_wheel(i8 z_delta){
+    mouse_wheel_accum += (i32)z_delta;
     event_context context;
     context.data.u8[0] = z_delta;
     event_fire(EVENT_CODE_MOUSE_WHEEL, 0, context);
@@ -167,5 +177,11 @@ void input_get_previous_mouse_position(i32* x, i32* y){
     }
     *x = state.mouse_previous.x;
     *y = state.mouse_previous.y;
+}
+
+i32 input_get_mouse_wheel(){
+    if (!initialized)
+        return 0;
+    return mouse_wheel_accum;
 }
 

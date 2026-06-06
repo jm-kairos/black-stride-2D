@@ -53,6 +53,9 @@ typedef enum ESystemEventCode {
     EVENT_CODE_BUTTON_PRESSED = 0x04,
     EVENT_CODE_BUTTON_RELEASED = 0x05,
     EVENT_CODE_MOUSE_MOVED = 0x06,
-    EVENT_CODE_MOUSE_WHEEL = 0x07
+    EVENT_CODE_MOUSE_WHEEL = 0x07,
+    // Window was resized/resolution changed.
+    // context.data.u16[0] = width, context.data.u16[1] = height.
+    EVENT_CODE_WINDOW_RESIZED = 0x08
 } ESystemEventCode;
 

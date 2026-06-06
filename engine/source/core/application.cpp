@@ -3,6 +3,7 @@
 
 #include "logger.h"
 #include "platform/platform.h"
+#include "renderer/renderer.h"
 #include "core/memory/bs_memory.h"
 #include "core/memory/arena.h"
 #include "core/event.h"
@@ -10,26 +11,27 @@
 
 // Singleton design for the state of the application struct.
 
-typedef struct application_state{
-    game* game_inst;
+struct ApplicationState{
+    Game* game_inst;
     b8 is_running;
     b8 is_suspended;
-    platform_state platform;
+    PlatformState platform;
     i16 width;
     i16 height;
     real last_time;
-} application_state;
+};
 
 // Safety check if there is more than one instance of application state.
 static b8 initialized = FALSE;
 
 // Private to this CPP file.
-static application_state app_state;
+static ApplicationState app_state;
 
 b8 application_on_event(u16 code, VOID_PTR sender, VOID_PTR listener_inst, event_context_t context);
 b8 application_on_key(u16 code, VOID_PTR sender, VOID_PTR listener_inst, event_context_t context);
+b8 application_on_resized(u16 code, VOID_PTR sender, VOID_PTR listener_inst, event_context_t context);
 
-b8 application_init(game* game_inst){
+b8 application_init(Game* game_inst){
     if (initialized)
     {
         BS_LOG_ERROR("application_init called more than once !");
@@ -37,6 +39,12 @@ b8 application_init(game* game_inst){
     }
 
     app_state.game_inst = game_inst;
+
+    // Seed the window dimensions from the requested config size. The platform
+    // resize event will keep these current once the window is live.
+    app_state.width  = (i16)game_inst->app_config.start_width;
+    app_state.height = (i16)game_inst->app_config.start_height;
+    app_state.last_time = 0;
 
     // Initialize subsystems
     logger_initialize();
@@ -63,6 +71,7 @@ b8 application_init(game* game_inst){
     event_register(EVENT_CODE_APPLICATION_QUIT, 0, application_on_event);
     event_register(EVENT_CODE_KEY_PRESSED, 0, application_on_key);
     event_register(EVENT_CODE_KEY_RELEASED, 0, application_on_key);
+    event_register(EVENT_CODE_WINDOW_RESIZED, 0, application_on_resized);
 
     if (!platform_initialize(&app_state.platform, 
         game_inst->app_config.name, 
@@ -72,6 +81,14 @@ b8 application_init(game* game_inst){
         game_inst->app_config.start_height)){
 
         BS_LOG_ERROR("platform_initialize failed !");
+        return FALSE;
+    }
+
+    // Bring up the renderer after the window exists but before the game's init, so the
+    // game can create GPU resources during its own initialization.
+    if (!renderer_initialize(game_inst->app_config.name, &app_state.platform))
+    {
+        BS_LOG_FATAL("renderer_initialize failed !");
         return FALSE;
     }
 
@@ -98,9 +115,17 @@ b8 application_run(){
     
     BS_LOG_INFO(bs_memory_get_memory_usage_string());
 
+    app_state.last_time = platform_get_absolute_time();
+
     while (app_state.is_running){
 
         arena_reset(frame_arena);
+
+        // Compute real frame delta time.
+        real current_time = platform_get_absolute_time();
+        real delta = current_time - app_state.last_time;
+        app_state.last_time = current_time;
+        f32 dt = (f32)delta;
 
         if(!platform_pump_messages(&app_state.platform)){
             app_state.is_running = FALSE;
@@ -108,28 +133,36 @@ b8 application_run(){
 
         if (!app_state.is_suspended)
         {
-            // if (!app_state.game_inst->update(app_state.game_inst, (f32)0))
-            // {
-            //     BS_LOG_FATAL("Game update failed, shutting down.");
-            //     app_state.is_running = FALSE;
-            //     break;
-            // }
-            // 
-            // if (!app_state.game_inst->render(app_state.game_inst, (f32)0))
-            // {
-            //     BS_LOG_FATAL("Game render failed, shutting down.");
-            //     app_state.is_running = FALSE;
-            //     break;
-            // }
+            if (!app_state.game_inst->update(app_state.game_inst, dt))
+            {
+                BS_LOG_FATAL("Game update failed, shutting down.");
+                app_state.is_running = FALSE;
+                break;
+            }
 
-            input_update((real)0);
+            // Only render if the renderer accepted the frame. A skipped begin_frame
+            // (e.g. window minimized) means we must not call render or end_frame.
+            if (renderer_begin_frame(dt))
+            {
+                if (!app_state.game_inst->render(app_state.game_inst, dt))
+                {
+                    BS_LOG_FATAL("Game render failed, shutting down.");
+                    app_state.is_running = FALSE;
+                    break;
+                }
+
+                renderer_end_frame(dt);
+            }
+
+            input_update(delta);
         }
         
     }
 
     event_unregister(EVENT_CODE_APPLICATION_QUIT, 0, application_on_event);
     event_unregister(EVENT_CODE_KEY_PRESSED, 0, application_on_key);
-    event_unregister(EVENT_CODE_BUTTON_RELEASED, 0, application_on_key);
+    event_unregister(EVENT_CODE_KEY_RELEASED, 0, application_on_key);
+    event_unregister(EVENT_CODE_WINDOW_RESIZED, 0, application_on_resized);
 
     event_terminate();
 
@@ -138,6 +171,8 @@ b8 application_run(){
     arena_terminate(frame_arena);
     
     app_state.is_running = FALSE; 
+
+    renderer_shutdown();
 
     platform_terminate(&app_state.platform);
 
@@ -182,5 +217,42 @@ b8 application_on_key(u16 code, VOID_PTR sender, VOID_PTR listener_inst, event_c
             BS_LOG_DEBUG("'%c' key released in window. ", key_code);
         }
     }
+    return FALSE;
+}
+
+b8 application_on_resized(u16 code, VOID_PTR sender, VOID_PTR listener_inst, event_context_t context){
+    if (code == EVENT_CODE_WINDOW_RESIZED)
+    {
+        u16 width  = context.data.u16[0];
+        u16 height = context.data.u16[1];
+
+        // Only react to actual changes.
+        if (width != (u16)app_state.width || height != (u16)app_state.height)
+        {
+            app_state.width  = (i16)width;
+            app_state.height = (i16)height;
+
+            BS_LOG_DEBUG("Window resized: %u x %u", width, height);
+
+            // A zero-size window means it was minimized. Suspend the app until restored.
+            if (width == 0 || height == 0)
+            {
+                BS_LOG_INFO("Window minimized, suspending application.");
+                app_state.is_suspended = TRUE;
+                return TRUE;
+            }
+            else
+            {
+                if (app_state.is_suspended)
+                {
+                    BS_LOG_INFO("Window restored, resuming application.");
+                    app_state.is_suspended = FALSE;
+                }
+                app_state.game_inst->on_resize(app_state.game_inst, width, height);
+                renderer_on_resize(width, height);
+            }
+        }
+    }
+    // Allow other listeners (e.g. the renderer) to also handle this event.
     return FALSE;
 }

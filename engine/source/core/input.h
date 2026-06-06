@@ -162,6 +162,12 @@ bs__api__ b8 input_was_button_up(buttons button);
 bs__api__ void input_get_mouse_position(i32* x, i32* y);
 bs__api__ void input_get_previous_mouse_position(i32* x, i32* y);
 
+// Accumulated mouse-wheel scroll since the last input_update (one tick == +/-1 per
+// physical wheel notch). Positive = scroll up/away (zoom in), negative = scroll down
+// (zoom out). The accumulator is reset every frame in input_update, so poll it from the
+// game's update(); reading it twice in one frame yields the same value.
+bs__api__ i32 input_get_mouse_wheel();
+
 void input_process_key(keys key, b8 pressed);
 void input_process_button(buttons button, b8 pressed);
 void input_process_mouse_move(i16 x, i16 y);

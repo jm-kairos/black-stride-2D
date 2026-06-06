@@ -5,7 +5,7 @@
 #include <core/memory/bs_memory.h>
 
 // Define the function to create a game
-b8 game_create(game* out_game){
+b8 game_create(Game* out_game){
 
     // Application configuration
     out_game->app_config.name = "Black Stride Engine Sandbox";
