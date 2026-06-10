@@ -11,25 +11,26 @@
 
 #include <imgui.h>
 
-// Fixed HUD-panel window flags: no native title bar (panels draw their own styled header line, so
-// ImGui's title bar would just duplicate it), no move/resize/collapse, auto-fit to contents, and
-// don't persist position/size to imgui.ini (these are screen-anchored each frame, not user-arranged
-// tool windows). NoTitleBar keeps the title string as the window's ImGui id — it's hidden, not dropped.
-static const ImGuiWindowFlags BS_UI_PANEL_FLAGS =
-    ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
-    ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings |
-    ImGuiWindowFlags_NoNav;
-
-b8 bs_ui_begin_panel(const char* title, BsUiAnchor anchor, f32 margin)
+b8 bs_ui_begin_panel(const char* title, BsUiAnchor anchor, f32 margin, BsUiType ui_type)
 {
     const ImGuiViewport* vp = ImGui::GetMainViewport();
-    // work_pos/work_size exclude OS decorations; for our borderless window they equal the full
-    // framebuffer. Anchor by pinning a window-pivot corner to the matching screen corner.
-    ImVec2 base = vp->WorkPos;
-    ImVec2 size = vp->WorkSize;
-    ImVec2 pos, pivot;
-    switch (anchor)
+
+    ImGuiWindowFlags ui_panel_flags = ImGuiWindowFlags_None;
+
+    switch (ui_type)
     {
+    case BS_UI_TYPE_GAME:{
+        ui_panel_flags |= ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
+        ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings |
+        ImGuiWindowFlags_NoNav;
+
+        // work_pos/work_size exclude OS decorations; for our borderless window they equal the full
+        // framebuffer. Anchor by pinning a window-pivot corner to the matching screen corner.
+        ImVec2 base = vp->WorkPos;
+        ImVec2 size = vp->WorkSize;
+        ImVec2 pos, pivot;
+        switch (anchor)
+        {
         case BS_UI_ANCHOR_TOP_RIGHT:
             pos   = ImVec2(base.x + size.x - margin, base.y + margin);
             pivot = ImVec2(1.0f, 0.0f); // top-right corner of the window sits at pos
@@ -39,10 +40,15 @@ b8 bs_ui_begin_panel(const char* title, BsUiAnchor anchor, f32 margin)
             pos   = ImVec2(base.x + margin, base.y + margin);
             pivot = ImVec2(0.0f, 0.0f);
             break;
+        }
+        ImGui::SetNextWindowPos(pos, ImGuiCond_Always, pivot);
+        break;
     }
-    ImGui::SetNextWindowPos(pos, ImGuiCond_Always, pivot);
+    default:
+        break;
+    }
     // The title doubles as ImGui's window id; gameplay panels are singletons so this is fine.
-    return ImGui::Begin(title, NULL, BS_UI_PANEL_FLAGS) ? TRUE : FALSE;
+    return ImGui::Begin(title, NULL, ui_panel_flags) ? TRUE : FALSE;
 }
 
 void bs_ui_end_panel(void)
@@ -96,6 +102,10 @@ b8 bs_ui_button_sized(const char* label, f32 width, b8 enabled)
     if (ImGui::Button(label ? label : "", ImVec2(width, 0.0f))) clicked = TRUE;
     if (!enabled) ImGui::EndDisabled();
     return clicked;
+}
+
+void bs_ui_checkbox(const char* label, bool* enabled){
+    ImGui::Checkbox(label, enabled);
 }
 
 void bs_ui_same_line(void)

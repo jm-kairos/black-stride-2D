@@ -1,6 +1,7 @@
 #include "crew_jobs.h"
 #include "game.h"
 #include "nav.h"
+#include "crew_avoid.h"
 
 #include <core/logger.h>
 
@@ -131,102 +132,116 @@ static i32 pick_best_job(const Crew* c) {
 // crew keeps walking to / manning its station while you're zoomed out piloting. It ISSUES the
 // crew's A* path (which simulate_crew then steers along) and maintains is_active_pilot.
 // =====================================================================================
-void crew_update_jobs(game_state* s, Crew* c, f32 dt) {
+void crew_update_jobs(game_state* s, Vector(Crew)& crew, f32 dt) {
     (void)dt; // no time-based job logic this phase (seam for durations/cooldowns later)
-    if (!s || !c) return;
-    Ship* ship = &s->ship;
 
-    // ---- Idle & queue non-empty: pop the best job into `current` ----
-    if (!c->has_current) {
-        c->is_active_pilot = FALSE;
-        i32 idx = pick_best_job(c);
-        if (idx < 0) return;                 // nothing queued -> stay idle
-        c->current       = c->queue[idx];
-        c->current.state = JOB_QUEUED;
-        c->has_current   = TRUE;
-        crew_remove_job(c, idx);
-        // fall through and resolve the QUEUED job the same frame (responsive dispatch)
-    }
+    for(auto& c : crew){
+        // Stations/tiles are read from the hull THIS crew stands on (crew_ship). A boarded crew
+        // can take a job at a station on the enemy deck just as on its own ship.
+        Ship* ship = crew_ship(s, &c);
 
-    switch (c->current.state) {
-        // ---- QUEUED: resolve the station tile, run A* from the crew's tile to it ----
-        case JOB_QUEUED: {
-            c->is_active_pilot = FALSE;
+        // ---- Idle & queue non-empty: pop the best job into `current` ----
+        if (!c.has_current) {
+            c.is_active_pilot = FALSE;
+            i32 idx = pick_best_job(&c);
+            if (idx < 0) continue;               // nothing queued -> skip THIS crew, keep scanning
+                                                 // the rest. (Was `return`, a single-crew leftover:
+                                                 // an idle crew[0] with an empty queue aborted the
+                                                 // whole runner, starving every later crew's jobs —
+                                                 // e.g. a Piloting job assigned to crew[1] queued but
+                                                 // never dispatched.)
+            c.current       = c.queue[idx];
+            c.current.state = JOB_QUEUED;
+            c.has_current   = TRUE;
+            crew_remove_job(&c, idx);
+            // fall through and resolve the QUEUED job the same frame (responsive dispatch)
+        }
 
-            // Resolve the target station tile. A job assigned by Shift+Right-Click already carries
-            // the EXACT clicked tile (has_target); honor it so the crew goes where the player
-            // pointed. A target-less job (e.g. a panel "Assign" button) falls back to the first
-            // station of the job's type on the ship. Either way we end with (tcol,trow) + a
-            // validity check that the tile really offers this job (guards a stale/empty target).
-            i32 tcol = -1, trow = -1;
-            b8  have_target = FALSE;
-            if (c->current.has_target) {
-                tcol = c->current.target_col;
-                trow = c->current.target_row;
-                have_target = (job_for_tile(ship_tile_at(ship, tcol, trow)) == c->current.type);
-            } else {
-                TileType station = job_station_tile(c->current.type);
-                if (station != TILE_EMPTY)
-                    have_target = ship_find_first_tile(ship, station, &tcol, &trow);
-            }
+        switch (c.current.state) {
+            // ---- QUEUED: resolve the station tile, run A* from the crew's tile to it ----
+            case JOB_QUEUED: {
+                c.is_active_pilot = FALSE;
 
-            if (!have_target) {              // no such station on the ship / stale target
-                c->current.state = JOB_FAILED;
-                break;
-            }
-            c->current.has_target = TRUE;
-            c->current.target_col = tcol;
-            c->current.target_row = trow;
+                // Resolve the target station tile. A job assigned by Shift+Right-Click already carries
+                // the EXACT clicked tile (has_target); honor it so the crew goes where the player
+                // pointed. A target-less job (e.g. a panel "Assign" button) falls back to the first
+                // station of the job's type on the ship. Either way we end with (tcol,trow) + a
+                // validity check that the tile really offers this job (guards a stale/empty target).
+                i32 tcol = -1, trow = -1;
+                b8  have_target = FALSE;
+                if (c.current.has_target) {
+                    tcol = c.current.target_col;
+                    trow = c.current.target_row;
+                    have_target = (job_for_tile(ship_tile_at(ship, tcol, trow)) == c.current.type);
+                } else {
+                    TileType station = job_station_tile(c.current.type);
+                    if (station != TILE_EMPTY)
+                        have_target = ship_find_first_tile(ship, station, &tcol, &trow);
+                }
 
-            i32 scol, srow;
-            ship_local_to_tile(ship, c->position, &scol, &srow);
+                if (!have_target) {              // no such station on the ship / stale target
+                    c.current.state = JOB_FAILED;
+                    break;
+                }
+                c.current.has_target = TRUE;
+                c.current.target_col = tcol;
+                c.current.target_row = trow;
 
-            i32 len = 0;
-            if (nav_find_path(ship, scol, srow, tcol, trow, c->path, &len)) {
-                c->path_len      = len;
-                c->path_idx      = 0;        // path[0] is the crew's own tile; arrival advances at once
-                c->current.state = JOB_MOVING_TO_TARGET;
-            } else {                          // station unreachable (walled off)
-                c->current.state = JOB_FAILED;
-            }
-        } break;
+                i32 scol, srow;
+                ship_local_to_tile(ship, c.position, &scol, &srow);
+                (void)scol; (void)srow; // (crew_plan_path resolves the start tile itself)
 
-        // ---- MOVING_TO_TARGET: wait for simulate_crew to consume the path (path_len -> 0) ----
-        case JOB_MOVING_TO_TARGET: {
-            c->is_active_pilot = FALSE;
-            if (c->path_len == 0) {           // simulate_crew cleared it on reaching the last waypoint
-                i32 ccol, crow;
-                ship_local_to_tile(ship, c->position, &ccol, &crow);
-                if (ccol == c->current.target_col && crow == c->current.target_row)
-                    c->current.state = JOB_EXECUTING;
-                else
-                    c->current.state = JOB_FAILED; // path ended off-target (defensive; shouldn't happen)
-            }
-        } break;
+                // Dispatch the crew to its station with the SAME multi-agent avoidance the manual
+                // move order uses: crew_plan_path routes around peers' occupied/reserved tiles,
+                // reserves this station as the crew's destination, and resets the avoidance clocks
+                // (falling back to a static path, then the per-frame gate + deadlock resolver, when a
+                // crewmate momentarily blocks the only corridor). self_index is this crew's slot in
+                // the game_state vector (crew === s->crew here, so the pointer delta is its index).
+                i32 self_index = (i32)(&c - crew.data());
+                if (crew_plan_path(s, self_index, tcol, trow)) {
+                    c.current.state = JOB_MOVING_TO_TARGET;
+                } else {                          // station unreachable (walled off)
+                    c.current.state = JOB_FAILED;
+                }
+            } break;
 
-        // ---- EXECUTING: PILOTING persists here and holds the pilot flag. is_active_pilot is the
-        // Phase 4 flight gate: control_ship_global (game.cpp) only runs while it is TRUE, so global-
-        // mode flight is dead unless a crew member is actively manning the helm right here. ----
-        case JOB_EXECUTING: {
-            // A manual move order (right-click) repopulates the crew's path while parked at the
-            // station — treat it as walking the pilot away: interrupt the job and drop the flag.
-            if (c->path_len > 0) {
-                c->current.state   = JOB_INTERRUPTED;
-                c->is_active_pilot = FALSE;
-                break;
-            }
-            c->is_active_pilot = (c->current.type == JOB_PILOTING) ? TRUE : FALSE;
-        } break;
+            // ---- MOVING_TO_TARGET: wait for simulate_crew to consume the path (path_len -> 0) ----
+            case JOB_MOVING_TO_TARGET: {
+                c.is_active_pilot = FALSE;
+                if (c.path_len == 0) {           // simulate_crew cleared it on reaching the last waypoint
+                    i32 ccol, crow;
+                    ship_local_to_tile(ship, c.position, &ccol, &crow);
+                    if (ccol == c.current.target_col && crow == c.current.target_row)
+                        c.current.state = JOB_EXECUTING;
+                    else
+                        c.current.state = JOB_FAILED; // path ended off-target (defensive; shouldn't happen)
+                }
+            } break;
 
-        // ---- Terminal states: clear `current`; next frame the runner pops the next queued job ----
-        case JOB_COMPLETED:
-        case JOB_FAILED:
-        case JOB_INTERRUPTED:
-        default: {
-            c->is_active_pilot = FALSE;
-            c->has_current     = FALSE;
-            c->current         = Job{};
-            c->current.type    = JOB_NONE;
-        } break;
+            // ---- EXECUTING: PILOTING persists here and holds the pilot flag. is_active_pilot is the
+            // Phase 4 flight gate: control_ship_global (game.cpp) only runs while it is TRUE, so global-
+            // mode flight is dead unless a crew member is actively manning the helm right here. ----
+            case JOB_EXECUTING: {
+                // A manual move order (right-click) repopulates the crew's path while parked at the
+                // station — treat it as walking the pilot away: interrupt the job and drop the flag.
+                if (c.path_len > 0) {
+                    c.current.state   = JOB_INTERRUPTED;
+                    c.is_active_pilot = FALSE;
+                    break;
+                }
+                c.is_active_pilot = (c.current.type == JOB_PILOTING) ? TRUE : FALSE;
+            } break;
+
+            // ---- Terminal states: clear `current`; next frame the runner pops the next queued job ----
+            case JOB_COMPLETED:
+            case JOB_FAILED:
+            case JOB_INTERRUPTED:
+            default: {
+                c.is_active_pilot = FALSE;
+                c.has_current     = FALSE;
+                c.current         = Job{};
+                c.current.type    = JOB_NONE;
+            } break;
+        }
     }
 }

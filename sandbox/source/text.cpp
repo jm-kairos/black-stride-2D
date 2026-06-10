@@ -15,7 +15,7 @@ using namespace bs_math;
 // non-integer scale, sampling can land just outside the 8x8 footprint, and the guard makes that
 // neighbor a transparent texel instead of an adjacent glyph. UVs address only the 8x8 interior.
 // =====================================================================================
-static const i32 GLYPH      = 8;                       // glyph footprint (px)
+static const i32 GLYPH      = 8;                        // glyph footprint (px)
 static const i32 PAD        = 1;                        // transparent guard band per side (px)
 static const i32 CELL       = GLYPH + 2 * PAD;          // 10
 static const i32 ATLAS_COLS = 16;                       // cells per row

@@ -35,13 +35,18 @@ typedef enum BsUiAnchor {
     BS_UI_ANCHOR_TOP_RIGHT = 1,
 } BsUiAnchor;
 
+typedef enum BsUiType {
+    BS_UI_TYPE_EDITOR,
+    BS_UI_TYPE_GAME
+} BsUiType;
+
 // Begin a screen-anchored, auto-sized panel. Returns TRUE if the panel is visible and its body
 // should be built this frame. You MUST call bs_ui_end_panel() afterwards regardless of the return
 // value (ImGui's Begin/End pairing rule). `margin` is the gap in screen pixels from the anchored
 // edge(s). The window is fixed (no move/resize/collapse) and has NO native title bar — panels draw
 // their own styled header line, so a native bar would just duplicate it. `title` is still the
 // window's ImGui id (it must be unique per panel), it is simply not rendered as a caption.
-bs__api__ b8 bs_ui_begin_panel(const char* title, BsUiAnchor anchor, f32 margin);
+bs__api__ b8 bs_ui_begin_panel(const char* title, BsUiAnchor anchor, f32 margin, BsUiType ui_type);
 
 // Close the current panel. Pair with every bs_ui_begin_panel call.
 bs__api__ void bs_ui_end_panel(void);
@@ -70,3 +75,5 @@ bs__api__ void bs_ui_same_line(void);
 
 // A faint horizontal separator rule spanning the panel's content width.
 bs__api__ void bs_ui_separator(void);
+
+bs__api__ void bs_ui_checkbox(const char* label, bool* enabled);

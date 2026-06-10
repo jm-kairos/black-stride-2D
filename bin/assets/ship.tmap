@@ -1,24 +1,24 @@
 # Black Stride ship tilemap (prototype)
-# Legend: '.'=empty/space  '#'=hull wall (exterior)  'W'=interior wall  'F'=floor  'D'=door  'G'=hull window/glass (solid, translucent)  'J'=floor window/glass (solid, translucent)  'H'=helm/control station (walkable; crew mans it to pilot)
+# Legend: '.'=empty/space  '#'=hull wall (exterior)  'W'=interior wall  'F'=floor  'D'=door  'G'=hull window/glass (solid, translucent)  'J'=floor window/glass (solid, translucent)  'H'=helm/control station (walkable; crew mans it to pilot)  'A'=hull door / airlock (solid; the docking port two ships mate through)
 # Roof footprint in global mode = every non-empty tile.
 tile_size 32
-size 13 17
+size 11 17
 grid
-....#GGG#....
-...#FJJJF#...
-...#FFHFF#...
-..#WWWDWWW#..
-..#FFFFFFF#..
-.#FFWFFFWFF#.
-.#FFDFFFWFF#.
-.#FFWFFFDFF#.
-.#FFWFFFWFF#.
-.#FFWFFFWFF#.
-..#FFFFFFF#..
-..#WWWDWWW#..
-..#FFFFFFF#..
-...#WFFFW#...
-...#WFFFW#...
-...#FFFFF#...
-....#####....
+...#GGG#...
+..#FJJJF#..
+..#FFHFF#..
+.#WWWDWWW#.
+.#FFFFFFF#.
+#FFWFFFWFF#
+#FFDFFFWFF#
+AFFWFFFDFFA
+#FFWFFFWFF#
+#FFWFFFWFF#
+.#FFFFFFF#.
+.#WWWDWWW#.
+.#FFFFFFF#.
+..#WFFFW#..
+..#WFFFW#..
+..#FFFFF#..
+...#####...
 end

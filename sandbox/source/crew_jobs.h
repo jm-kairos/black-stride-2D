@@ -4,6 +4,8 @@
 #include "job.h"
 #include "ship.h"   // TileType — the tile<->job mapping below is declared in terms of it
 
+#include <containers/vector.h>
+
 // =====================================================================================
 // Crew Job System — queue operations + the per-frame job runner (Phase 3).
 //
@@ -72,4 +74,4 @@ void crew_clear_jobs(Crew* c);
 // queue non-empty -> pop best (priority then FIFO) -> A* to the station -> execute (persist).
 // Maintains c->is_active_pilot (TRUE only while a PILOTING job is EXECUTING on the helm tile).
 // `dt` is accepted for future time-based job logic; unused this phase.
-void crew_update_jobs(game_state* s, Crew* c, f32 dt);
+void crew_update_jobs(game_state* s, Vector(Crew)& crew, f32 dt);

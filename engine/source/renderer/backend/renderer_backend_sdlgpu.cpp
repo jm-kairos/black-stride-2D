@@ -50,8 +50,13 @@ typedef struct sprite_vertex
     f32 r, g, b, a; // tint
 } sprite_vertex;
 
-// Capacity limits for the per-frame dynamic batch. 16k sprites = 64k verts / 96k indices —
-// plenty for a Starsector-like sandbox frame; grows are a future optimization.
+// Capacity limits for the per-frame dynamic batch. HARD CEILING: the index buffer is u16
+// (see ibuffer below), and the index init computes base = (u16)(s*4), so the largest
+// addressable sprite is s where s*4 <= 65535  =>  s <= 16383, i.e. 16384 sprites max.
+// Raising this above 16384 does NOT add capacity — it silently allocates a huge vbuffer
+// and writes WRAPPED/aliased indices past s=16383 (corrupt geometry). To exceed 16384,
+// switch the index buffer + draw path to u32 first. The sandbox keeps frames well under
+// this via camera cull + greedy horizontal run-merge (draw_tile_span), so 16384 is ample.
 #define BS_MAX_SPRITES        16384
 #define BS_MAX_BATCH_VERTS    (BS_MAX_SPRITES * 4)
 #define BS_MAX_BATCH_INDICES  (BS_MAX_SPRITES * 6)
