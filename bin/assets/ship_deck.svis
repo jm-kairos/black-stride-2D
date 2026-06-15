@@ -1,0 +1,13 @@
+# Black Stride ship VISUAL layer (decoupled presentation).
+# First-class authored visual: renders the ship as high-res deck art instead of the legacy
+# 32px tileset. Nav (.nav / derived) and systems (.sys / derived) are independent of this file,
+# so collision/pathfinding still run on the tile-derived graph while the player SEES this art.
+#
+# size <w> <h>            -- ship-local footprint the art is drawn across (world units)
+# layer sprite <tex> <offx> <offy> <px_per_unit> <z> <roof_only>
+#
+# Drop the uploaded deck image at the path below (see chat instructions). Until it exists the
+# renderer logs a WARN and falls back to the tileset, so the game still runs.
+size 360 655
+layer sprite assets/textures/ship_deck.png  0 0 1 0 0
+layer sprite assets/textures/ship_ceiling.png 0 0 1 0 1

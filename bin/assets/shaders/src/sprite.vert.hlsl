@@ -23,16 +23,18 @@ struct VSInput
 
 struct VSOutput
 {
-    float4 position : SV_Position;
-    float2 uv       : TEXCOORD0;
-    float4 color    : TEXCOORD1;
+    float4 position  : SV_Position;
+    float2 uv        : TEXCOORD0;
+    float4 color     : TEXCOORD1;
+    float2 world_pos : TEXCOORD2; // world-space position, interpolated for per-pixel 2D lighting
 };
 
 VSOutput main(VSInput input)
 {
     VSOutput output;
-    output.position = mul(view_proj, float4(input.position, 0.0f, 1.0f));
-    output.uv       = input.uv;
-    output.color    = input.color;
+    output.position  = mul(view_proj, float4(input.position, 0.0f, 1.0f));
+    output.uv        = input.uv;
+    output.color     = input.color;
+    output.world_pos = input.position;
     return output;
 }
