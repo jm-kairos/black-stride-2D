@@ -45,6 +45,42 @@ typedef struct renderer_backend
     // in end_frame. Must be called only while a frame is active.
     void (*draw_sprite)(struct renderer_backend* backend, const bs_sprite* sprite);
 
+    // Append a 4-map mapped sprite to the current frame. Rendered inside the scene pass.
+    void (*draw_mapped_sprite)(struct renderer_backend* backend, const bs_mapped_sprite* sprite);
+
+    // Draw a procedural parallax starfield layer via custom GPU pipeline.
+    // Parameters are queued and rendered during end_frame.
+    void (*draw_starfield)(struct renderer_backend* backend, const bs_starfield_params* params);
+
+    // Draw a procedural sunburst star via custom GPU pipeline.
+    // Parameters are queued and rendered during end_frame.
+    void (*draw_sunburst)(struct renderer_backend* backend, const bs_sunburst_params* params);
+
+    // Store the editable list of 2D point lights (+ scene-global ambient and the unlit-layer
+    // threshold) used by the sprite fragment shader. The backend copies them and pushes the packed
+    // block as a fragment uniform per draw-run in end_frame. Lights beyond the backend cap are
+    // dropped. Passing count 0 renders the scene fullbright.
+    void (*set_lights)(struct renderer_backend* backend, const bs_light2d* lights, u32 count,
+                       bs_color ambient, u32 unlit_layer);
+
+    // Store tunable glow parameters for the sprite fragment shader. Pushed alongside lights
+    // as part of the per-draw-run fragment uniform. NULL resets to defaults.
+    void (*set_glow_params)(struct renderer_backend* backend, const bs_glow_params* params);
+
+    // Enable/disable the full-scene HDR bloom post-process.
+    void (*set_bloom_enabled)(struct renderer_backend* backend, b8 enabled);
+
+    // Tune bloom threshold and intensity.
+    void (*set_bloom_params)(struct renderer_backend* backend, f32 threshold, f32 intensity);
+
+    // Anamorphic streak post-process (aux-bloom path).
+    void (*set_streak_enabled)(struct renderer_backend* backend, b8 enabled);
+    void (*set_streak_params)(struct renderer_backend* backend, f32 angle, f32 length);
+    void (*set_streak_intensity)(struct renderer_backend* backend, f32 intensity);
+    void (*set_streak_source)(struct renderer_backend* backend, bs_math::Vec2 screen_pos);
+    void (*set_streak_flare_intensity)(struct renderer_backend* backend, f32 intensity);
+    void (*set_aux_bloom_mode)(struct renderer_backend* backend, b8 enabled);
+
     // ---- Phase 4: frame statistics ----
 
     // Write the most recently completed frame's stats (sprite/quad count, GPU draw calls) into

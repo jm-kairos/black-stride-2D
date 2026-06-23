@@ -67,6 +67,49 @@ bs__api__ void renderer_set_camera(Camera2D camera);
 // white texture (solid-color fill via the tint).
 bs__api__ void renderer_draw_sprite(const bs_sprite* sprite);
 
+// Append a 4-map mapped sprite to the current frame. Rendered inside the same scene pass as
+// regular sprites so it participates in bloom. MUST be called between begin_frame and end_frame.
+bs__api__ void renderer_draw_mapped_sprite(const bs_mapped_sprite* sprite);
+
+// Draw a procedural parallax starfield layer using a custom GPU pipeline.
+// `params` carries the per-layer virtual camera, seed, tile size, and density.
+// The backend queues the parameters and renders during end_frame (no render pass
+// is active when this is called from game_render).
+bs__api__ void renderer_draw_starfield(const bs_starfield_params* params);
+
+// Draw a procedural sunburst star using a custom GPU pipeline.
+// `params` carries the screen-space position, radii, colour, and time.
+// The backend queues the parameters and renders during end_frame.
+bs__api__ void renderer_draw_sunburst(const bs_sunburst_params* params);
+
+// Set the movable 2D point lights applied per-pixel by the sprite shader. The renderer copies the
+// list; re-submit each frame (or whenever it changes). `count == 0` renders the scene fullbright
+// (lighting is opt-in). `ambient` is the scene-global floor added before accumulating lights;
+// sprite layers >= `unlit_layer` render fullbright (keep HUD/UI readable). Lights beyond the
+// backend cap are dropped.
+bs__api__ void renderer_set_lights(const bs_light2d* lights, u32 count, bs_color ambient, u32 unlit_layer);
+
+// Set tunable glow parameters for the sprite fragment shader's procedural glow / heat effects.
+// The renderer copies the struct; re-submit each frame or when it changes. Passing NULL
+// resets to defaults. Affects all sprites that use `custom.x > 0` (bullets, thrusters, etc.).
+bs__api__ void renderer_set_glow_params(const bs_glow_params* params);
+
+// Enable or disable the full-scene HDR bloom post-process. When enabled, the renderer renders
+// the scene to an offscreen target, extracts bright pixels, blurs them, and composites back.
+bs__api__ void renderer_set_bloom_enabled(b8 enabled);
+
+// Tune the bloom threshold (luminance above which pixels contribute to bloom) and intensity
+// (multiplier on the blurred bloom when composited back). Both default to reasonable values.
+bs__api__ void renderer_set_bloom_params(f32 threshold, f32 intensity);
+
+// Anamorphic streak post-process (aux-bloom path).
+bs__api__ void renderer_set_streak_enabled(b8 enabled);
+bs__api__ void renderer_set_streak_params(f32 angle, f32 length);
+bs__api__ void renderer_set_streak_intensity(f32 intensity);
+bs__api__ void renderer_set_streak_source(bs_math::Vec2 screen_pos);
+bs__api__ void renderer_set_streak_flare_intensity(f32 intensity);
+bs__api__ void renderer_set_aux_bloom_mode(b8 enabled);
+
 // -------------------------------------------------------------------------------------
 // Phase 4 — debug / vector layer + frame stats.
 //

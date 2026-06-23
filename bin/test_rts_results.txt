@@ -1,0 +1,24 @@
+=== RTS Controls Box Selection Test Results ===
+
+--- Test 1: Ship inside box ---
+  RESULT: PASS
+
+--- Test 2: Ship outside box (positive side) ---
+  RESULT: PASS
+
+--- Test 3: Ship outside box (negative side) ---
+  RESULT: PASS
+
+--- Test 4: Ship on box edge ---
+  RESULT: PASS
+
+--- Test 5: Ship inside box with swapped min/max ---
+  RESULT: PASS
+
+--- Test 6: Null ship pointer ---
+  RESULT: PASS
+
+--- Test 7: Degenerate zero-area box ---
+  RESULT: PASS
+
+=== Summary: 7/7 tests passed ===

@@ -19,6 +19,7 @@ struct VSInput
     float2 position : TEXCOORD0; // 2D world-space position (already transformed)
     float2 uv       : TEXCOORD1; // atlas UV
     float4 color    : TEXCOORD2; // per-vertex RGBA tint
+    float4 custom   : TEXCOORD3; // per-vertex custom shader parameters
 };
 
 struct VSOutput
@@ -27,6 +28,7 @@ struct VSOutput
     float2 uv        : TEXCOORD0;
     float4 color     : TEXCOORD1;
     float2 world_pos : TEXCOORD2; // world-space position, interpolated for per-pixel 2D lighting
+    float4 custom    : TEXCOORD3; // per-vertex custom shader parameters
 };
 
 VSOutput main(VSInput input)
@@ -36,5 +38,6 @@ VSOutput main(VSInput input)
     output.uv        = input.uv;
     output.color     = input.color;
     output.world_pos = input.position;
+    output.custom    = input.custom;
     return output;
 }

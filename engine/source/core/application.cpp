@@ -144,14 +144,22 @@ b8 application_run(){
             // (e.g. window minimized) means we must not call render or end_frame.
             if (renderer_begin_frame(dt))
             {
+                f64 t0 = platform_get_absolute_time();
                 if (!app_state.game_inst->render(app_state.game_inst, dt))
                 {
                     BS_LOG_FATAL("Game render failed, shutting down.");
                     app_state.is_running = FALSE;
                     break;
                 }
-
+                f64 t1 = platform_get_absolute_time();
                 renderer_end_frame(dt);
+                f64 t2 = platform_get_absolute_time();
+                f32 render_ms = (f32)((t1 - t0) * 1000.0);
+                f32 present_ms = (f32)((t2 - t1) * 1000.0);
+                if (render_ms > 100.0f || present_ms > 100.0f)
+                {
+                    BS_LOG_WARN("SLOW FRAME: render=%.1fms present=%.1fms", render_ms, present_ms);
+                }
             }
 
             input_update(delta);

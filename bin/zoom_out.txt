@@ -1,0 +1,108 @@
+=== Seamless Zoom Transition Tests ===
+
+--- test_hierpos_roundtrip_origin ---
+  PASS
+
+--- test_hierpos_roundtrip_moderate_cells ---
+  PASS
+
+--- test_hierpos_to_vec2_far_precision ---
+  PASS
+
+--- test_compression_factor_ship_zoom ---
+  PASS
+
+--- test_compression_factor_galaxy_zoom ---
+  PASS
+
+--- test_zoom_ship_min_above_compression_threshold ---
+  PASS
+
+--- test_zoom_range_ordering ---
+  PASS
+
+--- test_camera_world_space_transform ---
+  PASS
+
+--- test_camera_pan_offset ---
+  PASS
+
+--- test_mouse_world_ship_view_center ---
+  PASS
+
+--- test_mouse_world_galaxy_view_relative ---
+  PASS
+
+--- test_recenter_target_zoom_above_ship_min ---
+  PASS
+
+--- test_m_snap_targets ---
+  PASS
+
+--- test_zoom_to_mouse_formula ---
+  PASS
+
+--- test_zoom_to_mouse_skipped_at_ship_zoom ---
+  PASS
+
+--- test_hierpos_diff_vs_to_vec2 ---
+  PASS
+
+--- test_ship_sprite_crossfade_alpha ---
+  PASS
+
+--- test_marker_crossfade_inverse ---
+  PASS
+
+--- test_snap_animation_log_interp ---
+  PASS
+
+--- test_smoothstep ---
+  PASS
+
+--- test_hierpos_roundtrip_ship_origin ---
+  PASS
+
+--- test_camera_position_matches_ship_origin ---
+  PASS
+
+--- test_ship_sprite_visible_at_zoom_start ---
+  PASS
+
+--- test_galaxy_marker_hidden_at_zoom_start ---
+  PASS
+
+--- test_map_entity_octagon_not_culled_at_ship_zoom ---
+  PASS
+
+--- test_map_entity_octagon_radius_at_ship_zoom ---
+  PASS
+
+--- test_hierpos_roundtrip_ship_positions ---
+  PASS
+
+--- test_camera_centers_on_ship_after_snap ---
+  PASS
+
+--- test_galaxy_and_ship_render_paths_both_center ---
+  PASS
+
+--- test_map_entity_octagon_should_hide_at_ship_zoom ---
+  PASS
+
+--- test_layer_ordering_octagon_above_ship ---
+  PASS
+
+--- test_camera_update_order_lag ---
+  PASS
+
+--- test_camera_lag_at_high_speed ---
+  PASS
+
+--- test_octagon_and_ship_both_at_screen_center_different_paths ---
+  PASS
+
+--- test_map_entity_octagon_no_crossfade ---
+  PASS
+
+=== Results: 35 passed, 0 failed, 35 total ===

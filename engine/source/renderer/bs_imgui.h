@@ -39,3 +39,7 @@ bs__api__ void bs_imgui_process_event(const void* sdl_event);
 // and keys consumed by the UI do not also act on the game.
 bs__api__ b8 bs_imgui_wants_mouse(void);
 bs__api__ b8 bs_imgui_wants_keyboard(void);
+
+// Opaque pointer to the HUD monospace font (ImFont*). NULL if loading failed.
+// Valid after bs_imgui_initialize returns TRUE.
+bs__api__ void* bs_imgui_get_hud_font(void);

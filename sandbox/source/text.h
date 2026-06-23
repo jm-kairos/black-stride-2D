@@ -1,8 +1,6 @@
 #pragma once
-
 #include <defines.h>
 #include <renderer/renderer_types.h>
-
 // =====================================================================================
 // text — a minimal screen-anchored bitmap-text layer for the prototype HUD.
 //
@@ -18,20 +16,15 @@
 //
 // Lifecycle: call text_init() once AFTER renderer_initialize(); text_shutdown() at teardown.
 // =====================================================================================
-
 // Bake the font atlas and upload it as a GPU texture. Safe to call once. Returns FALSE if the
 // renderer is down or the atlas upload fails (text_draw then becomes a no-op).
 b8 text_init(void);
-
 // Release the atlas texture. After this, text_draw is a no-op until text_init is called again.
 void text_shutdown(void);
-
 // Screen-space width (pixels) of the longest line in `str` at `scale` (scale 1 => 8px glyphs).
 f32 text_width(const char* str, f32 scale);
-
 // Screen-space height (pixels) of `str` at `scale`: line_count * 8 * scale.
 f32 text_height(const char* str, f32 scale);
-
 // Draw `str` with its top-left at screen pixel (x, y) — origin top-left, +y DOWN — tinted
 // `color`, on render `layer` (higher = on top). `cam` plus the framebuffer size are the LIVE
 // values for this frame; text_draw inverts them so the result is pinned to the screen

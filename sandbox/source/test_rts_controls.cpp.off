@@ -1,0 +1,107 @@
+#define _CRT_SECURE_NO_WARNINGS
+#include <stdio.h>
+#include <string.h>
+#include <stdarg.h>
+#include "rts_controls.h"
+#include "ship.h"
+
+using namespace bs_math;
+
+static FILE* g_out = nullptr;
+
+static void test_log(const char* fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    vfprintf(g_out, fmt, args);
+    va_end(args);
+    va_start(args, fmt);
+    vprintf(fmt, args);
+    va_end(args);
+}
+
+static Ship make_ship_at(f32 x, f32 y) {
+    Ship s;
+    memset(&s, 0, sizeof(s));
+    s.origin = Vec2{ x, y };
+    return s;
+}
+
+static b8 test_ship_inside_box() {
+    test_log("--- Test 1: Ship inside box ---\n");
+    Ship s = make_ship_at(0.0f, 0.0f);
+    b8 result = ship_inside_world_box(&s, Vec2{ -10.0f, -10.0f }, Vec2{ 10.0f, 10.0f });
+    test_log("  RESULT: %s\n\n", result ? "PASS" : "FAIL");
+    return result;
+}
+
+static b8 test_ship_outside_positive() {
+    test_log("--- Test 2: Ship outside box (positive side) ---\n");
+    Ship s = make_ship_at(20.0f, 0.0f);
+    b8 result = !ship_inside_world_box(&s, Vec2{ -10.0f, -10.0f }, Vec2{ 10.0f, 10.0f });
+    test_log("  RESULT: %s\n\n", result ? "PASS" : "FAIL");
+    return result;
+}
+
+static b8 test_ship_outside_negative() {
+    test_log("--- Test 3: Ship outside box (negative side) ---\n");
+    Ship s = make_ship_at(-20.0f, 0.0f);
+    b8 result = !ship_inside_world_box(&s, Vec2{ -10.0f, -10.0f }, Vec2{ 10.0f, 10.0f });
+    test_log("  RESULT: %s\n\n", result ? "PASS" : "FAIL");
+    return result;
+}
+
+static b8 test_ship_on_edge() {
+    test_log("--- Test 4: Ship on box edge ---\n");
+    Ship s0 = make_ship_at(10.0f, 0.0f);
+    Ship s1 = make_ship_at(0.0f, 10.0f);
+    b8 r0 = ship_inside_world_box(&s0, Vec2{ -10.0f, -10.0f }, Vec2{ 10.0f, 10.0f });
+    b8 r1 = ship_inside_world_box(&s1, Vec2{ -10.0f, -10.0f }, Vec2{ 10.0f, 10.0f });
+    b8 result = r0 && r1;
+    test_log("  RESULT: %s\n\n", result ? "PASS" : "FAIL");
+    return result;
+}
+
+static b8 test_ship_swapped_min_max() {
+    test_log("--- Test 5: Ship inside box with swapped min/max ---\n");
+    Ship s = make_ship_at(0.0f, 0.0f);
+    b8 result = ship_inside_world_box(&s, Vec2{ 10.0f, 10.0f }, Vec2{ -10.0f, -10.0f });
+    test_log("  RESULT: %s\n\n", result ? "PASS" : "FAIL");
+    return result;
+}
+
+static b8 test_null_ship() {
+    test_log("--- Test 6: Null ship pointer ---\n");
+    b8 result = !ship_inside_world_box(nullptr, Vec2{ -10.0f, -10.0f }, Vec2{ 10.0f, 10.0f });
+    test_log("  RESULT: %s\n\n", result ? "PASS" : "FAIL");
+    return result;
+}
+
+static b8 test_degenerate_box() {
+    test_log("--- Test 7: Degenerate zero-area box ---\n");
+    Ship s = make_ship_at(0.0f, 0.0f);
+    b8 result = ship_inside_world_box(&s, Vec2{ 0.0f, 0.0f }, Vec2{ 0.0f, 0.0f });
+    test_log("  RESULT: %s\n\n", result ? "PASS" : "FAIL");
+    return result;
+}
+
+int main(int argc, char** argv) {
+    (void)argc; (void)argv;
+    g_out = fopen("../bin/test_rts_results.txt", "w");
+    if (!g_out) g_out = stdout;
+
+    test_log("=== RTS Controls Box Selection Test Results ===\n\n");
+
+    b8 r1 = test_ship_inside_box();
+    b8 r2 = test_ship_outside_positive();
+    b8 r3 = test_ship_outside_negative();
+    b8 r4 = test_ship_on_edge();
+    b8 r5 = test_ship_swapped_min_max();
+    b8 r6 = test_null_ship();
+    b8 r7 = test_degenerate_box();
+
+    i32 passed = (i32)r1 + r2 + r3 + r4 + r5 + r6 + r7;
+    test_log("=== Summary: %d/7 tests passed ===\n", passed);
+
+    if (g_out && g_out != stdout) fclose(g_out);
+    return (passed == 7) ? 0 : 1;
+}

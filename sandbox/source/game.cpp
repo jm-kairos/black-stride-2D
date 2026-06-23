@@ -1,175 +1,189 @@
-#include "game.h"
-#include "nav.h"
-#include "crew_jobs.h"
-#include "crew_avoid.h"
+﻿#include "game.h"
 #include "text.h"
-
+#include "travel.h"
+#include "weapon.h"
+#include "projectile.h"
+#include "ss_generation.h"
+#include "voronoi_cell_hover_effect.h"
+#include "global_background.h"
+#include "mapped_system_layer.h"
 #include <core/logger.h>
 #include <core/input.h>
 #include <math/math_utils.h>
+#include <math/bs_hierpos.h>
 #include <renderer/renderer.h>
 #include <renderer/camera2d.h>
 #include <renderer/bs_imgui.h> // bs_imgui_wants_mouse: gate world input while ImGui owns the cursor
-#include <renderer/bs_ui.h>    // bs_ui_* immediate-mode panel facade (Crew Job Panel)
-
-#include <math.h>  // powf
-#include <stdio.h> // snprintf (Crew Job Panel label formatting)
-
+#include <renderer/bs_ui.h>
+#include <math.h>   // powf
+#include <stdio.h>  // snprintf, vsnprintf
+#include <stdarg.h> // va_list, va_start, va_end (action_log_push)
+#include <new>      // placement-new (construct game_state in place; see game_init)
 using namespace bs_math;
-
 // =====================================================================================
 // Tuning constants.
 // =====================================================================================
-
 // ---- Camera / zoom ----
-static const f32 ZOOM_MIN          = 0.04f;  // most zoomed-out (global)
-static const f32 ZOOM_MAX          = 3.00f;  // most zoomed-in (local)
-static const f32 ZOOM_START        = 1.40f;  // begins in local mode
+static const f32 ZOOM_MIN          = 0.08f;  // most zoomed-out (global)
+static const f32 ZOOM_MAX          = 12.00f; // most zoomed-in
+static const f32 ZOOM_START        = 0.50f;  // begins in global mode
 static const f32 ZOOM_STEP         = 1.12f;  // multiplicative per wheel notch
-
-// Hysteresis band: once in local we only flip to global when zoom drops BELOW
-// ZOOM_TO_GLOBAL; once in global we only return to local when zoom rises ABOVE
-// ZOOM_TO_LOCAL. The gap between them prevents flicker at the boundary.
-static const f32 ZOOM_TO_GLOBAL    = 0.80f;
-static const f32 ZOOM_TO_LOCAL     = 1.00f;
-
-static const f32 ROOF_FADE_SPEED   = 8.0f;   // cross-fade rate (1/seconds)
-
-// ---- Crew navigation (local mode command; simulated in BOTH modes) ----
-// The crew is commanded RTS-style (select + order); it then STEERS along an A* path of
-// ship-local waypoints. Steering reuses an accel/friction/clamp feel: constant thrust
-// toward the active waypoint, exponential friction, speed cap. Friction gives a terminal
-// speed ~= CREW_ACCEL/CREW_FRICTION, capped by CREW_MAX_SPEED.
-static const f32 CREW_ACCEL         = 2600.0f;
-static const f32 CREW_FRICTION      = 9.0f;
-static const f32 CREW_MAX_SPEED     = 260.0f;
-static const f32 CREW_RADIUS        = 10.0f;
-static const f32 CREW_ARRIVE_RADIUS = 6.0f;   // within this of a waypoint => arrived (advance)
-static const f32 CREW_SLOW_RADIUS   = 30.0f;  // ease-in distance for the FINAL waypoint (arrival)
-static const f32 CREW_PICK_RADIUS   = 22.0f;  // click within this (world units) of crew => select
-// Seam-crossing glide speed (world units/s). Matched to CREW_MAX_SPEED so the airlock traversal
-// reads as a continuation of the crew's walk — it strolls through the open doors instead of
-// snapping across the ~96px (3-tile) seam gap in one frame. The crossing takes ~gap/speed ≈ 1s.
-static const f32 CREW_SEAM_GLIDE_SPEED = 100.0f;
-
-// ---- Free-roam local camera ----
-static const f32 CAM_PAN_SPEED      = 420.0f; // WASD pan speed in local mode (units/s)
-
+static const f32 ZOOM_SYSTEM       = 0.06f;  // system-view zoom (wide enough for 3-planet orbits)
+// ---- Star zoom-distance scaling (MODE_SYSTEM) ----
+const f32 STAR_MIN_SCREEN_RADIUS = 3.0f;   // px: minimum screen-space radius when zoomed out
+static const f32 STAR_DIST_SCALE_FACTOR = 0.0003f;
+static const f32 STAR_MAX_DIST_SCALE    = 4.0f;
+static const f32 STAR_MAX_STREAK_LENGTH = 20.0f;
+static const f32 GALAXY_PLANET_SCALE      = 0.00006f; // visually shrink planet orbits for galaxy view (~5-30 px orbits at default zoom)
+static const f32 MIN_SYSTEM_SEPARATION    = 150000000.0f; // 150M: generous spacing so planets/orbits don't crowd neighbors
+// ---- Edit mode camera pan (WASD + middle-mouse drag) ----
+static const f32 EDIT_PAN_SPEED    = 2000.0f; // units/s, camera pan in edit mode
 // ---- Ship movement (global mode): Starsector-style inertial flight ----
 // Linear: W accelerates forward (along heading) toward SHIP_MAX_SPEED using SHIP_ACCEL.
 // S accelerates in reverse toward SHIP_MAX_SPEED using SHIP_DECEL. C brakes the current
-// velocity toward zero using SHIP_DECEL. Strafe (Q/E) thrusts sideways using a hull-class
-// fraction of SHIP_ACCEL. The ship coasts: no passive drag, only active thrust/brake.
-static const f32 SHIP_ACCEL        = 220.0f;  // forward / strafe thrust (units/s^2)
-static const f32 SHIP_DECEL        = 160.0f;  // reverse + brake thrust (units/s^2)
-static const f32 SHIP_MAX_SPEED    = 360.0f;  // linear speed cap (units/s)
+// velocity toward zero using SHIP_DECEL. Strafe (Q/E) thrusts sideways at SHIP_ACCEL.
+// The ship coasts: no passive drag, only active thrust/brake.
+const f32 SHIP_ACCEL        = 600.0f;  // forward / strafe thrust (units/s^2)
+const f32 SHIP_DECEL        = 400.0f;  // reverse + brake thrust (units/s^2)
+const f32 SHIP_MAX_SPEED    = 800.0f;  // linear speed cap (units/s)
 // Angular: A/D ramp angular velocity using SHIP_TURN_ACCEL toward +/- SHIP_MAX_TURN.
 // Releasing both lets SHIP_TURN_ACCEL bleed the spin back to zero (auto-stabilize).
-static const f32 SHIP_TURN_ACCEL   = 6.0f;    // rad/s^2
-static const f32 SHIP_MAX_TURN     = 1.8f;    // rad/s
-
-// Undock kick: on release (T while docked) the player is shoved off the enemy along the airlock
-// normal so the hulls cleanly part instead of resting in contact (which would immediately re-trip
-// the collision resolver). One firm nudge; the ship then coasts (no passive drag) until piloted.
-static const f32 UNDOCK_IMPULSE    = 90.0f;   // separation speed imparted to the player on undock (units/s)
-
-// Strafe thrust fraction of SHIP_ACCEL by hull class: frigate/destroyer/cruiser/capital.
-static const f32 STRAFE_FRACTION[4] = { 1.00f, 0.75f, 0.50f, 0.25f };
-
+const f32 SHIP_TURN_ACCEL   = 12.0f;   // rad/s^2
+const f32 SHIP_MAX_TURN     = 3.0f;    // rad/s
+// ---- Engine exhaust tuning -------------------------------------------------------------
+static const f32 EXHAUST_BASE_LENGTH = 16.0f;
+static const f32 EXHAUST_MAX_EXTRA   = 48.0f;
+static const f32 EXHAUST_FLICKER_HZ1 = 30.0f;
+static const f32 EXHAUST_FLICKER_HZ2 = 47.3f;
+static const f32 EXHAUST_JITTER_AMP  = 0.06f;
+// ---- Procedural generation PRNG (splitmix64) ----
+static u64 g_rng_state = 0x123456789ABCDEF0ull;
+static u64 rng_next() {
+    u64 z = (g_rng_state += 0x9e3779b97f4a7c15ull);
+    z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ull;
+    z = (z ^ (z >> 27)) * 0x94d049bb133111ebull;
+    return z ^ (z >> 31);
+}
+static f32 rng_f32() { return (f32)(rng_next() & 0xFFFFFF) / (f32)0xFFFFFF; }
+static f32 rng_range(f32 min, f32 max) { return min + rng_f32() * (max - min); }
+static i32 rng_int(i32 min, i32 max) { return min + (i32)(rng_next() % (u64)(max - min + 1)); }
+static const char* SYSTEM_NAMES[] = {
+    "Sol", "Alpha Centauri", "Proxima", "Vega", "Sirius",
+    "Betelgeuse", "Rigel", "Antares", "Deneb", "Altair",
+    "Fomalhaut", "Arcturus", "Aldebaran", "Spica", "Regulus", "Pollux",
+    "Castor", "Mizar", "Capella", "Procyon", "Achernar",
+    "Hadar", "Acrux", "Gacrux", "Mimosa", "Bellatrix",
+    "Elnath", "Alioth", "Dubhe", "Merak", "Phecda",
+    "Megrez", "Alkaid", "Alnitak", "Alnilam", "Mintaka",
+    "Saiph", "Wezen", "Adhara", "Aludra", "Sargas",
+    "Kaus Australis", "Nunki", "Ascella", "Shaula", "Girtab",
+    "Marfik", "Izar", "Muphrid", "Caph", "Ruchbah"
+};
+static const i32 SYSTEM_NAME_COUNT = sizeof(SYSTEM_NAMES) / sizeof(SYSTEM_NAMES[0]);
 // ---- Render layers (lower draws first) ----
-static const u32 LAYER_FLOOR  = 1;
-static const u32 LAYER_WALL   = 2;
-static const u32 LAYER_CREW   = 5;
-static const u32 LAYER_PATH   = 6;   // move-order path line + destination marker (over crew)
-static const u32 LAYER_SELECT = 7;   // selection ring (over the path)
-static const u32 LAYER_ROOF   = 10;
-static const u32 LAYER_HULL_OUTLINE = 11; // cosmetic smoothed silhouette stroke, over the roof fill
-static const u32 LAYER_HUD_TEXT = 100; // screen-space HUD/UI text — always on top
-
-static const u32 LAYER_DEBUG  = 0;
-
-// Hard roster cap. The crew vector is reserve()d to exactly this in game_init, so as long as the
-// crew count never exceeds it, push_back NEVER reallocates the backing store at runtime — which is
-// what keeps any cached Crew* / `auto& c` (held by a peer scan mid-update) from dangling. MUST stay
-// >= the design target (10-20 agents); 32 leaves headroom. Tie reserve() to THIS symbol so the
-// capacity and the cap can never drift apart.
-static const u32 MAX_CREW_MEMBERS = 32;
-
-// Single choke-point for crew creation. Enforces the no-reallocation invariant: refuses to grow the
-// roster past MAX_CREW_MEMBERS (the reserved capacity), so push_back here can never trigger a
-// reallocation that would invalidate pointers other crew may be holding this frame. Returns the new
-// crew's index, or -1 when the roster is full. ALL spawns must route through here.
-static i32 crew_add(game_state* s) {
-    if (s->crew.size() >= MAX_CREW_MEMBERS) {
-        BS_LOG_WARN("crew_add: roster full (%u) - spawn ignored", MAX_CREW_MEMBERS);
-        return -1;
-    }
-    s->crew.push_back(Crew{});
-    return (i32)(s->crew.size() - 1);
-}
-
-// ---- Tile colors (flat quads; no textures this phase) ----
-static bs_color color_for_tile(TileType t) {
-    switch (t) {
-        case TILE_FLOOR: return bs_color{ 0.42f, 0.28f, 0.20f, 1.0f }; // brown deck
-        case TILE_DOOR:  return bs_color{ 0.68f, 0.46f, 0.18f, 1.0f }; // lit doorway
-        case TILE_WALL:  return bs_color{ 0.38f, 0.40f, 0.45f, 1.0f }; // interior wall (grey)
-        case TILE_HULL:  return bs_color{ 0.56f, 0.61f, 0.70f, 1.0f }; // hull (lighter blue-grey)
-        case TILE_HULL_WINDOW: return bs_color{ 0.50f, 0.75f, 0.85f, 0.5f }; // glass (transparent)
-        case TILE_FLOOR_WINDOW: return bs_color{ 0.50f, 0.75f, 0.85f, 0.5f }; // transparent floor
-        case TILE_HELM:  return bs_color{ 0.18f, 0.62f, 0.66f, 1.0f }; // helm console (teal)
-        case TILE_HULL_DOOR: return bs_color{ 0.85f, 0.72f, 0.20f, 1.0f }; // airlock (caution yellow)
-        default:         return bs_color{ 0.0f, 0.0f, 0.0f, 0.0f };    // empty: nothing
-    }
-}
-static const bs_color ROOF_COLOR   = bs_color{ 0.30f, 0.33f, 0.39f, 1.0f };
-// Enemy roof silhouette: a hostile red-grey, distinct from the player's neutral blue-grey ROOF_COLOR
-// at a glance in global mode. (Interior tiles still use the shared color_for_tile palette for now.)
-static const bs_color ENEMY_ROOF_COLOR = bs_color{ 0.46f, 0.22f, 0.24f, 1.0f };
-static const bs_color CREW_COLOR   = bs_color{ 0.35f, 0.92f, 1.00f, 1.0f };
-static const bs_color SELECT_COLOR = bs_color{ 1.00f, 0.95f, 0.40f, 1.0f }; // yellow ring
-static const bs_color PATH_COLOR   = bs_color{ 0.40f, 0.95f, 0.55f, 0.9f }; // green path + marker
-// Docking CONNECTOR bridge tile: a man-made airlock-tube colour (brass/steel) distinct from either
-// ship's deck, drawn in the two-tile gap between the mated doors. Reads as the walkable tube the crew
-// crosses between hulls. Cross-fades to ROOF_COLOR like any other tile when you zoom out.
-static const bs_color CONNECTOR_COLOR = bs_color{ 0.74f, 0.70f, 0.42f, 1.0f };
-// Debug collider outline: a hot magenta loop traced over the exact tight OBB ships_collide tests, so
-// the player can SEE the hitbox sitting flush on each hull. Deliberately a non-deck, non-faction hue
-// (nothing else on screen is magenta) so it never reads as part of a ship.
+static const u32 LAYER_STARFIELD_FAR = 0;  // procedural far stars (custom GPU)
+static const u32 LAYER_STARFIELD_MID  = 2;  // procedural mid-distance stars (custom GPU)
+static const u32 LAYER_MAPPED_SYSTEM  = 3;  // current system star + planets
+static const u32 LAYER_SHIP           = 10; // ship sprite art
+static const u32 LAYER_CELESTIAL      = 11; // stars, planets, orbit rings (below bloom threshold)
+static const u32 LAYER_UI             = 50; // debug overlays above ship, below HUD text
+static const u32 LAYER_HUD_TEXT       = 100; // screen-space HUD/UI text -- always on top
+// Debug overlays bypass the bloom pipeline (drawn after composite).
+static const u32 LAYER_DEBUG = BS_LAYER_BLOOM_THRESHOLD;
+static const u32 LAYER_GIZMO = BS_LAYER_BLOOM_THRESHOLD + 1;
+// Debug collider outline: a hot magenta loop traced over the exact polygon ships_collide tests.
 static const bs_color COLLIDER_COLOR = bs_color{ 1.00f, 0.18f, 0.85f, 1.0f };
-// Cosmetic smoothed hull silhouette stroke. A bright rim line tracing the de-blocked (marching-squares)
-// outline of each hull, drawn just over the roof fill so the ship reads as a solid shape instead of a
-// staircase of tiles. Per-faction tints, brightened siblings of each roof colour so the rim still reads
-// as "this ship's edge" at a glance. Purely visual — see game_state::hull_outline.
-static const bs_color HULL_OUTLINE_COLOR       = bs_color{ 0.62f, 0.74f, 0.92f, 1.0f }; // player: cool steel-blue
-static const bs_color ENEMY_HULL_OUTLINE_COLOR = bs_color{ 0.92f, 0.50f, 0.52f, 1.0f }; // enemy: hot red-grey
-// Human-readable job state for the periodic stats log.
-static const char* job_state_name(JobState st) {
-    switch (st) {
-        case JOB_QUEUED:           return "queued";
-        case JOB_MOVING_TO_TARGET: return "moving";
-        case JOB_EXECUTING:        return "executing";
-        case JOB_COMPLETED:        return "completed";
-        case JOB_FAILED:           return "failed";
-        case JOB_INTERRUPTED:      return "interrupted";
-        default:                   return "?";
+// =====================================================================================
+// Action Log helpers -- push a formatted message into the rolling 30-entry HUD buffer.
+// =====================================================================================
+#define ACTION_LOG_MAX 30
+#define ACTION_LOG_FADE_AFTER 3.0f // seconds of inactivity before fading begins
+#define ACTION_LOG_FADE_OVER  2.0f // seconds to lerp from full opacity to idle
+void action_log_push(game_state* s, const char* fmt, ...) {
+    if (!s) return;
+    // Shift oldest out if at capacity
+    if (s->action_log.count == ACTION_LOG_MAX) {
+        for (i32 i = 0; i < ACTION_LOG_MAX - 1; ++i)
+            memcpy(s->action_log.entries[i], s->action_log.entries[i + 1], 128);
+        s->action_log.count = ACTION_LOG_MAX - 1;
     }
+    i32 slot = s->action_log.count;
+    if (slot < 0) slot = 0;
+    if (slot >= ACTION_LOG_MAX) slot = ACTION_LOG_MAX - 1;
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(s->action_log.entries[slot], 128, fmt, args);
+    va_end(args);
+    s->action_log.entries[slot][127] = '\0';
+    s->action_log.count = slot + 1;
+    s->action_log.inactivity_timer = 0.0f;
 }
-
 // =====================================================================================
-// Collision: AABB crew vs solid tiles.
+// Galaxy coordinate helpers.
 // =====================================================================================
-static b8 crew_blocked(const Ship* ship, Vec2 center, f32 r) {
-    // `center` is SHIP-LOCAL; the crew AABB is axis-aligned in this frame (y-up: top = larger Y).
-    i32 c0, r0, c1, r1;
-    ship_local_to_tile(ship, Vec2{ center.x - r, center.y + r }, &c0, &r0); // top-left
-    ship_local_to_tile(ship, Vec2{ center.x + r, center.y - r }, &c1, &r1); // bottom-right
-    for (i32 row = r0; row <= r1; ++row)
-        for (i32 col = c0; col <= c1; ++col)
-            if (ship_tile_is_solid(ship, col, row)) return TRUE;
-    return FALSE;
+// Nearest-system lookup: brute-force distance check over the small cluster.
+// Returns index of the closest system, or -1 if count == 0.
+i32 find_nearest_system(const HierPos2* ship_pos,
+                        const StarSystem* systems, i32 count)
+{
+    if (count <= 0) return -1;
+    i32 best = -1;
+    f64 best_dist = 1e300;
+    for (i32 i = 0; i < count; ++i) {
+        f64 sx, sy, cx, cy;
+        hierpos_to_f64(ship_pos, BS_HIERPOS_CELL_SIZE, &sx, &sy);
+        hierpos_to_f64(&systems[i].galaxy_center, BS_HIERPOS_CELL_SIZE, &cx, &cy);
+        f64 dx = sx - cx;
+        f64 dy = sy - cy;
+        f64 d = dx * dx + dy * dy;
+        if (d < best_dist) { best_dist = d; best = i; }
+    }
+    return best;
 }
-
+// Convert ship galaxy position to an offset within a specific system's local frame.
+// Result is the same Vec2 the current MODE_SYSTEM render code expects.
+Vec2 galaxy_to_system_local(const HierPos2* ship_galaxy,
+                            const HierPos2* system_center)
+{
+    f64 sx, sy, cx, cy;
+    hierpos_to_f64(ship_galaxy,   BS_HIERPOS_CELL_SIZE, &sx, &sy);
+    hierpos_to_f64(system_center, BS_HIERPOS_CELL_SIZE, &cx, &cy);
+    return Vec2{ (f32)(sx - cx), (f32)(sy - cy) };
+}
+// Convert a world-space Vec2 into the galaxy-map HierPos2 coordinate system.
+static bs_math::HierPos2 world_to_galaxy_pos(bs_math::Vec2 world) {
+    return hierpos_from_vec2(world, BS_HIERPOS_CELL_SIZE);
+}
+// Determine which zone the player ship occupies in a given star system.
+// Zones are concentric rings bounded by planet orbit radii, numbered from
+// outside in: Zone 0 = beyond outermost orbit, Zone 1 = between outermost
+// and middle orbit, ... Zone N = inside innermost orbit.
+static i32 get_system_zone(const game_state* s, i32 system_idx) {
+    const StarSystem& sys = s->systems[system_idx];
+    Vec2 diff = hierpos_diff(&s->map_entities[0].galaxy_pos, &sys.galaxy_center, BS_HIERPOS_CELL_SIZE);
+    f32 dist = vec2_length(diff);
+    // Collect valid orbit radii
+    f32 orbits[5];
+    i32 orbit_count = 0;
+    for (i32 i = 0; i < sys.planet_count; ++i) {
+        if (sys.planets[i].semi_major_axis > 0.0f) {
+            orbits[orbit_count++] = sys.planets[i].semi_major_axis;
+        }
+    }
+    // Sort ascending (bubble sort, N <= 5)
+    for (i32 i = 0; i < orbit_count; ++i) {
+        for (i32 j = i + 1; j < orbit_count; ++j) {
+            if (orbits[j] < orbits[i]) {
+                f32 tmp = orbits[i]; orbits[i] = orbits[j]; orbits[j] = tmp;
+            }
+        }
+    }
+    // Zones are 0-indexed from outside in
+    for (i32 i = orbit_count - 1; i >= 0; --i) {
+        if (dist > orbits[i]) return (orbit_count - 1 - i);
+    }
+    return orbit_count; // inside innermost orbit
+}
 // =====================================================================================
 // Lifecycle.
 // =====================================================================================
@@ -177,141 +191,330 @@ b8 game_init(Game* game_inst) {
     BS_LOG_DEBUG("game_init: tile-ship prototype starting.");
     game_state* s = (game_state*)game_inst->state;
     if (!s) return FALSE;
-
-    *s = game_state{};
+    // Construct game_state in place with placement-new: value-initializing the whole struct
+    // (including the two Ship members, each ~3 MB with embedded SysGraph arrays)
+    // as a STACK TEMPORARY would blow the ~1 MB Windows default stack. Placement-new calls
+    // the constructor on the already-heap-allocated memory from bs_memory_allocator.
+    new (s) game_state();
+    new (&s->rts_controls) RtsControls(s);
     s->fb_width  = 1280;
     s->fb_height = 720;
-
-    if (!ship_load(&s->ship, "assets/ship.tmap")) {
-        BS_LOG_FATAL("game_init: failed to load ship tilemap.");
+    // Editor lights start empty (scene fullbright). The player spawns them from the EDITOR PANEL.
+    s->lights           = {};
+    s->light_ambient    = bs_color{ 0.18f, 0.19f, 0.24f, 1.0f }; // dim cool floor
+    s->light_selected   = -1;
+    // Default glow params (match hardcoded shader defaults).
+    s->glow_params = bs_glow_params{
+        1.0f, 6.0f, 4.0f, 2.5f, 0.80f, 0.08f, 15.0f, 8.0f, 45.0f, 24.0f,
+        bs_color{ 1.0f, 0.85f, 0.5f, 1.0f },
+        bs_color{ 0.90f, 0.15f, 0.02f, 1.0f },
+        bs_color{ 1.0f, 0.45f, 0.05f, 1.0f },
+        bs_color{ 1.0f, 0.98f, 0.90f, 1.0f }
+    };
+    // Bloom defaults (disabled by default until user opts in).
+    s->bloom_enabled    = FALSE;
+    s->bloom_threshold  = 1.2f;
+    s->bloom_intensity  = 0.3f;
+    s->dynamic_bloom    = TRUE;
+    s->star_light_enabled     = TRUE;
+    s->bg_layer0_enabled      = TRUE;
+    s->bg_layer1_enabled      = TRUE;
+    s->bg_layer2_enabled      = TRUE;
+    s->starfield_lod_density    = 0.06f;
+    s->starfield_lod_size       = 1.0f;
+    s->starfield_lod_brightness = 1.0f;
+    s->star_pos = bs_math::Vec2{0,0};
+    s->star_dazzle_inner_radius = 5000.0f;
+    s->star_dazzle_outer_radius = 15000.0f;
+    s->star_dazzle_intensity    = 1.0f;
+    s->star_light_intensity_mul = 1.0f;
+    s->star_light_radius_mul    = 1.0f;
+    // Per-entity glow defaults (all start identical to global defaults).
+    s->exhaust_glow = s->glow_params;
+    s->bullet_glow  = s->glow_params;
+    s->edit_mode_active = FALSE;
+    s->edit_selection   = EditSelection{ EDIT_NONE, -1 };
+    s->edit_drag        = EditorDrag{ FALSE, EDIT_DRAG_NONE, Vec2{ 0.0f, 0.0f }, Vec2{ 0.0f, 0.0f }, 0.0f };
+    s->action_log.count = 0;
+    s->action_log.inactivity_timer = 0.0f;
+    s->alt_movement_active = FALSE;
+    // ---- Fleet: flagship (member 0) loaded from the player hull --------------------------
+    s->fleet.init();
+    {
+        FleetShip& fs = s->fleet.add();
+        if (!ship_load(&fs.ship, "assets/ships/mapped_ship.ship")) {
+            BS_LOG_FATAL("game_init: failed to load player ship.");
+            return FALSE;
+        }
+        fs.ship.origin = Vec2{ 25000.0f, 0.0f };
+        fs.ship.glow   = s->glow_params;
+        for (i32 i = 0; i < SHIP_MAX_WEAPONS; ++i) fs.ship.weapons[i] = nullptr;
+        fs.ship.weapons[0]       = weapon_create_ballistic_cannon(fs.ship.faction);
+        fs.ship.weapon_count     = 1;
+        fs.ship.active_weapon_idx = 0;
+    }
+    // ---- Fleet: demo escort ships (members 1..N) -----------------------------------------
+    {
+        const VesselFaction player_faction = s->fleet.flagship().ship.faction;
+        const Vec2 escort_offsets[4] = {
+            Vec2{ 24000.0f,  1500.0f },
+            Vec2{ 24000.0f, -1500.0f },
+            Vec2{ 22500.0f,  1500.0f },
+            Vec2{ 22500.0f, -1500.0f },
+        };
+        for (i32 i = 0; i < 4; ++i) {
+            FleetShip& fs = s->fleet.add();
+            if (!ship_load(&fs.ship, "assets/ships/mapped_ship.ship")) {
+                BS_LOG_ERROR("game_init: failed to load escort ship %d.", i);
+                continue;
+            }
+            fs.ship.origin      = escort_offsets[i];
+            fs.ship.faction     = player_faction;
+            fs.ship.vessel_name = "Escort";
+            fs.ship.glow        = s->glow_params;
+            for (i32 w = 0; w < SHIP_MAX_WEAPONS; ++w) fs.ship.weapons[w] = nullptr;
+            fs.ship.weapons[0]        = weapon_create_ballistic_cannon(fs.ship.faction);
+            fs.ship.weapon_count      = 1;
+            fs.ship.active_weapon_idx = 0;
+        }
+    }
+    if (!ship_load(&s->enemy_ship, "assets/enemy_ship.ship")) {
+        BS_LOG_FATAL("game_init: failed to load enemy ship.");
         return FALSE;
     }
-
-    // Enemy hull: load the same way, then place it NEAR the player so both are on screen together.
-    // ship_load sets origin={0,0}, so without this offset the two hulls would overlap at the world
-    // origin. Park it off the player's starboard bow (player spans ~416x544 world units centered on
-    // origin) and yaw it ~135 deg (CCW) so it reads as a distinct, separately-oriented contact, not
-    // a copy of the player ship. No crew/flight/AI yet — this is just geometry for the combat slice.
-    if (!ship_load(&s->enemy_ship, "assets/enemy_ship.tmap")) {
-        BS_LOG_FATAL("game_init: failed to load enemy ship tilemap.");
-        return FALSE;
+    s->enemy_ship.origin     = Vec2{ 1e4, 0 };
+    s->enemy_ship.angle      = 2.36f;
+    s->enemy_ship.faction    = VESSEL_PIRATE;
+    s->enemy_ship.vessel_name = "Raider-class Interceptor";
+    s->enemy_ship.glow = s->glow_params;
+    // ---- Enemy weapon inventory ----------------------------------------------------------
+    s->enemy_ship.weapon_count = 0;
+    s->enemy_ship.active_weapon_idx = -1;
+    for (i32 i = 0; i < SHIP_MAX_WEAPONS; ++i) s->enemy_ship.weapons[i] = nullptr;
+    s->enemy_ship.weapons[0] = weapon_create_ballistic_cannon(s->enemy_ship.faction);
+    s->enemy_ship.weapon_count = 1;
+    s->enemy_ship.active_weapon_idx = 0;
+    // ---- Projectile system -----------------------------------------------------------------
+    s->projectiles.init();
+    // ---- Combat entities -------------------------------------------------------------------
+    s->combat_entity_count = 0;
+    for (i32 i = 0; i < MAX_COMBAT_ENTITIES; ++i) {
+        s->combat_entities[i].active = FALSE;
+        s->combat_entities[i].velocity = Vec2{ 0.0f, 0.0f };
     }
-    // Park the derelict off the player's starboard bow (player spans ~416x544 world units centered on
-    // origin), yawed ~135 deg (CCW) so it reads as a distinct, separately-oriented contact. It starts
-    // UNDOCKED and at a distance, so by default its interior is hidden (you only see its roof
-    // silhouette) — the player must fly over and mate airlocks (HULL_DOOR) to dock and board it.
-    s->enemy_ship.origin = Vec2{ 1e4, 0 };
-    s->enemy_ship.angle  = 2.36f; // ~135 deg CCW; nose (angle 0 => +Y) swings toward the player
-
-    // Extract each hull's cosmetic smoothed silhouette ONCE (pose-independent ship-local loops;
-    // the tilemaps are immutable at runtime). game_render transforms them to world per-vertex and
-    // strokes them as line loops. Purely visual — failure (empty hull) just leaves an empty contour
-    // that draws nothing, so it's non-fatal.
-    ship_hull_contour(&s->ship,       &s->hull_outline);
-    ship_hull_contour(&s->enemy_ship, &s->enemy_hull_outline);
-
-    // Camera starts zoomed in (local mode), centered on the ship.
+    // Register enemy ship as a combat entity.
+    {
+        CombatEntity* ce = &s->combat_entities[0];
+        ce->active   = TRUE;
+        ce->position = s->enemy_ship.origin;
+        ce->velocity = Vec2{ 0.0f, 0.0f };
+        ce->radius   = ship_bounding_radius(&s->enemy_ship);
+        ce->faction  = s->enemy_ship.faction;
+        ce->hp       = 100.0f;
+        ce->ship     = &s->enemy_ship;
+        ce->tint     = bs_color{ 1.0f, 0.3f, 0.3f, 1.0f };
+        s->combat_entity_count = 1;
+    }
+    // Register every fleet ship as a combat entity so enemy fire can hit them.
+    for (i32 i = 0; i < s->fleet.count() && s->combat_entity_count < MAX_COMBAT_ENTITIES; ++i) {
+        FleetShip& fs = s->fleet.at(i);
+        CombatEntity* ce = &s->combat_entities[s->combat_entity_count++];
+        ce->active   = TRUE;
+        ce->position = fs.ship.origin;
+        ce->velocity = fs.flight.velocity;
+        ce->radius   = ship_bounding_radius(&fs.ship);
+        ce->faction  = fs.ship.faction;
+        ce->hp       = 100.0f;
+        ce->ship     = &fs.ship;
+        ce->tint     = bs_color{ 0.3f, 0.8f, 1.0f, 1.0f };
+    }
+    // Camera starts zoomed out (global mode), centered on the flagship.
     s->camera          = camera2d_default();
     s->camera.zoom     = ZOOM_START;
-    s->camera.position = s->ship.origin;
-    s->mode            = MODE_LOCAL;
-    s->roof_alpha      = 0.0f;
-
-    // Drop the crew on a known floor tile near the ship's center, in SHIP-LOCAL space.
-    s->crew = {};
-    s->crew.reserve(MAX_CREW_MEMBERS); // reserve to the cap => push_back never reallocates (invariant)
-    crew_add(s);                       // crew[0] (guarded spawn; can't exceed the reserved capacity)
-    s->crew[0].position = ship_tile_center_local(&s->ship, s->ship.cols / 2, s->ship.rows / 2);
-    s->crew[0].velocity = Vec2{ 0.0f, 0.0f };
-    s->crew[0].radius   = CREW_RADIUS;
-    s->crew[0].path_len = 0;   // idle: no move order
-    s->crew[0].path_idx = 0;
-    s->crew[0].crew_selected = FALSE;
-    crew_add(s);                       // crew[1]
-    s->crew[1].position = ship_tile_center_local(&s->ship, s->ship.cols / 2 + 1, s->ship.rows / 2 - 1);
-    s->crew[1].velocity = Vec2{ 0.0f, 0.0f };
-    s->crew[1].radius   = CREW_RADIUS;
-    s->crew[1].path_len = 0;   // idle: no move order
-    s->crew[1].path_idx = 0;
-    s->crew[1].crew_selected = FALSE;
-
-    // Crew job system: start IDLE. The player assigns work at runtime — select the crew, hover a
-    // station tile (e.g. the helm), and Shift+Right-Click to queue that tile's job; the runner then
-    // walks the crew there to perform it. (Phase 3 used to auto-enqueue a PILOTING job here as a
-    // runner demo; Phase 5 makes assignment player-driven, so the crew begins with an empty queue.)
-    for (auto& c : s->crew)
+    s->camera.position = s->player_ship().origin;
+    s->mode            = MODE_GLOBAL;
+    // Floating-origin camera starts at system 0's galaxy center.
+    s->camera_hierpos = s->systems[0].galaxy_center;
+    // Drag anchors zeroed so system-view middle-mouse panning starts clean.
+    s->system_drag_cam    = Vec2{ 0.0f, 0.0f };
+    s->system_drag_world  = Vec2{ 0.0f, 0.0f };
+    s->system_zoom        = ZOOM_SYSTEM;
+    s->galaxy_map_time    = 0.0f;
+    s->map_anim_scale     = true;
+    s->map_anim_rotate    = true;
+    s->map_anim_alpha     = true;
+    s->map_anim_thickness = true;
+    s->map_draw_jump_range = FALSE;
+    s->map_jump_range      = 5000000.0f;
+    s->map_draw_sensor_range = FALSE;
+    s->map_sensor_range      = 250000.0f;
+    s->map_draw_lanes        = TRUE;
+    s->show_metaball_ui       = FALSE;
+    s->metaball_radius_factor = 2.0f;
+    s->metaball_threshold     = 1.0f;
+    s->metaball_grid_w        = 50;
+    s->metaball_grid_h        = 40;
+    s->time_scale             = 1.0f;
+    s->elapsed_time           = 0.0f;
+    s->encounter_active       = FALSE;
+    s->encounter_was_active   = FALSE;
+    s->encounter_can_retrigger = TRUE;
+    s->map_recentering     = FALSE;
+    s->map_recenter_t      = 0.0f;
+    s->map_input_cooldown  = 0.0f;
+    s->map_drag_needs_fresh_press = FALSE;
+    // ---- Galaxy cluster (50 procedurally generated systems) ------------------------------
+    s->system_count = 50;
+    Vec2 cluster_center = Vec2{ 0.0f, 0.0f };
+    i32 placed = 0;
+    u64 seed_attempt = 0;
+    while (placed < s->system_count && seed_attempt < 10000)
     {
-        c.job_count      = 0;
-        c.has_current    = FALSE;
-        c.is_active_pilot = FALSE;
-        c.current        = Job{};
-        c.current.type   = JOB_NONE;
-        c.skills         = SkillSet{};
-
-        // Multi-agent avoidance state: no destination reserved, all avoidance clocks clear.
-        c.has_dest       = FALSE;
-        c.dest_col       = 0;
-        c.dest_row       = 0;
-        c.block_timer    = 0.0f;
-        c.wait_timer     = 0.0f;
-        c.stuck_timer    = 0.0f;
+        // Generate galaxy position candidate first, then check distance.
+        g_rng_state = 0x123456789ABCDEF0ull + seed_attempt;
+        f32 angle = rng_f32() * 2.0f * BS_PI;
+        f32 dist  = rng_range(100000000.0f, 2000000000.0f);
+        Vec2 world = vec2_add(cluster_center, Vec2{ cosf(angle) * dist, sinf(angle) * dist });
+        HierPos2 galaxy_pos = hierpos_from_vec2(world, BS_HIERPOS_CELL_SIZE);
+        // Check minimum separation from already-placed systems
+        b8 too_close = FALSE;
+        for (i32 j = 0; j < placed; ++j)
+        {
+            Vec2 diff = hierpos_diff(&galaxy_pos, &s->systems[j].galaxy_center, BS_HIERPOS_CELL_SIZE);
+            if (vec2_length(diff) < MIN_SYSTEM_SEPARATION) { too_close = TRUE; break; }
+        }
+        if (!too_close)
+        {
+            generate_star_system(&s->systems[placed], seed_attempt, world);
+            s->systems[placed].name = SYSTEM_NAMES[placed % SYSTEM_NAME_COUNT];
+            ++placed;
+        }
+        ++seed_attempt;
     }
-
-    // Free-roam local camera starts focused on the crew (ship-local), so the opening view is
-    // centered on it; WASD pans this focus from here.
-    s->cam_focus_local = s->crew[0].position;
-
-    // Global-mode flight starts at rest. Prototype hull is a frigate (full strafe thrust).
-    s->flight.velocity         = Vec2{ 0.0f, 0.0f };
-    s->flight.angular_velocity = 0.0f;
-    s->flight.hull             = HULL_FRIGATE;
-
+    if (placed < s->system_count) s->system_count = placed;
+    // Home system stays at the cluster center so the ship start position remains valid.
+    s->systems[0].galaxy_center = HierPos2{ GridCell{0, 0}, Vec2{0.0f, 0.0f} };
+    s->systems[0].name = "Sol";
+    // Generate Voronoi diagram for system territories and Delaunay lane connectivity.
+    generate_galaxy_voronoi(s->systems, s->system_count, &s->galaxy_voronoi);
+    s->current_system = 0;
+    s->map_entity_count = 0;
+    // Player ship starts in system 0; pre-seed map_entities[0] so the first-frame
+    // M-key toggle and find_system_by_cell have valid data. Rebuilt each frame in game_update.
+    s->map_entities[0] = MapEntity{ world_to_galaxy_pos(s->player_ship().origin),
+                                    bs_color{ 1.0f, 1.0f, 1.0f, 1.0f }, 12.0f, TRUE, "Player Ship" };
+    s->map_entity_count = 1;
+    // Global-mode flight starts at rest (flagship).
+    s->player_flight().velocity         = Vec2{ 0.0f, 0.0f };
+    s->player_flight().angular_velocity = 0.0f;
+    // Travel system: disabled by default; zero-init so the first frame is idle.
+    s->travel_enabled = FALSE;
+    s->travel_paused  = FALSE;
+    s->travel = {};
+#if BS_DEBUG
+    if (!bs_hierpos_selftest()) {
+        BS_LOG_FATAL("game_init: bs_hierpos_selftest failed; hierarchical coordinates are broken.");
+        return FALSE;
+    }
+#endif
     renderer_set_clear_color(bs_color{ 0.03f, 0.03f, 0.06f, 1.0f });
-
     // Bake the bitmap-font atlas now that the renderer is live (it backs the HUD/UI text).
     if (!text_init()) {
         BS_LOG_ERROR("game_init: text_init failed; HUD text will be disabled.");
     }
-
-    s->ship.curr_wall_texture = renderer_load_texture("assets/textures/wall_texture.png");
-    s->ship.curr_hull_texture = renderer_load_texture("assets/textures/hull_texture.png");
-    s->ship.curr_window_texture = renderer_load_texture("assets/textures/window_texture.png");
-    s->ship.curr_door_texture = renderer_load_texture("assets/textures/door_texture.png");
-
-    if (!s->ship.curr_wall_texture.id || 
-        !s->ship.curr_hull_texture.id || 
-        !s->ship.curr_window_texture.id || 
-        !s->ship.curr_door_texture.id) {
-        BS_LOG_ERROR("game_init: failed to load one or more ship textures; demo texture will be missing.");
+    // Generate a soft radial-gradient texture for engine exhaust plumes.
+    // White center with smooth alpha falloff — when tinted and additively blended,
+    // it produces a natural tapered jet shape instead of a hard rectangle.
+    {
+        const u32 EX_SIZE = 64;
+        const u32 EX_HALF = EX_SIZE / 2;
+        u8 ex_pixels[EX_SIZE * EX_SIZE * 4];
+        for (u32 y = 0; y < EX_SIZE; ++y) {
+            for (u32 x = 0; x < EX_SIZE; ++x) {
+                f32 dx = (f32)x - EX_HALF + 0.5f;
+                f32 dy = (f32)y - EX_HALF + 0.5f;
+                f32 dist = sqrtf(dx * dx + dy * dy) / (f32)EX_HALF;
+                f32 t = clampf(dist, 0.0f, 1.0f);
+                f32 alpha = 1.0f - t * t * t;  // cubic falloff for smooth plume shape
+                u32 i = (y * EX_SIZE + x) * 4;
+                ex_pixels[i + 0] = 255;
+                ex_pixels[i + 1] = 255;
+                ex_pixels[i + 2] = 255;
+                ex_pixels[i + 3] = (u8)(alpha * 255.0f);
+            }
+        }
+        s->exhaust_texture = renderer_create_texture(ex_pixels, EX_SIZE, EX_SIZE);
     }
-
+    // Initialize star visual effect system (generates procedural textures).
+    s->star_fx.init();
+    // Initialize global-mode parallax background (layers + mapped system).
+    s->global_background.init(s, &s->star_fx);
+    // Resolve sprite textures now that the renderer is live.
+    for (i32 i = 0; i < s->fleet.count(); ++i)
+        ship_visual_resolve_textures(&s->fleet.at(i).ship.visual);
+    ship_visual_resolve_textures(&s->enemy_ship.visual);
     return TRUE;
 }
-
 // =====================================================================================
 // Update.
 // =====================================================================================
+static f32 compression_factor(f32 zoom); // defined near game_render
 static void update_zoom_and_mode(game_state* s, f32 dt) {
+    // In system view zoom is driven by mouse wheel (scroller), zooming toward the mouse cursor.
+    if (s->mode == MODE_SYSTEM) {
+        i32 wheel = input_get_mouse_wheel();
+        if (wheel != 0) {
+            f32 old_zoom = s->camera.zoom;
+            s->camera.zoom *= powf(ZOOM_STEP, (f32)wheel);
+            s->camera.zoom = clampf(s->camera.zoom, 0.000001f, 1.20f);
+            // Zoom-to-mouse: shift camera so the world point under the cursor stays under it.
+            // Because we apply cosmetic_compression to rendered positions, the visual point
+            // under the mouse is compressed. The camera shift must account for the change in
+            // compression factor so the same true galaxy point stays under the cursor.
+            i32 mx, my;
+            input_get_mouse_position(&mx, &my);
+            f32 hw = (f32)s->fb_width  * 0.5f;
+            f32 hh = (f32)s->fb_height * 0.5f;
+            Vec2 mouse_off = Vec2{ (f32)mx - hw, hh - (f32)my };
+            f32 k_old = compression_factor(old_zoom);
+            f32 k_new = compression_factor(s->camera.zoom);
+            // Derived from: screen = (k * true_world - camera.position) * zoom
+            // We want the same true_world before and after zoom.
+            // C_new = k_new * (C_old + mouse_off/old_zoom) / k_old - mouse_off / new_zoom
+            Vec2 C_old = s->camera.position;
+            Vec2 C_new = vec2_sub(
+                vec2_scale(vec2_add(C_old, vec2_scale(mouse_off, 1.0f / old_zoom)), k_new / k_old),
+                vec2_scale(mouse_off, 1.0f / s->camera.zoom));
+            s->camera.position = C_new;
+        }
+        return;
+    }
     // Mouse wheel -> multiplicative zoom.
     i32 wheel = input_get_mouse_wheel();
     if (wheel != 0) {
         s->camera.zoom *= powf(ZOOM_STEP, (f32)wheel);
         s->camera.zoom = clampf(s->camera.zoom, ZOOM_MIN, ZOOM_MAX);
     }
-
-    // Hysteresis-latched mode switch.
-    if (s->mode == MODE_LOCAL && s->camera.zoom < ZOOM_TO_GLOBAL)
-        s->mode = MODE_GLOBAL;
-    else if (s->mode == MODE_GLOBAL && s->camera.zoom > ZOOM_TO_LOCAL)
-        s->mode = MODE_LOCAL;
-
-    // Cross-fade roof_alpha toward the target for the current mode.
-    f32 target = (s->mode == MODE_GLOBAL) ? 1.0f : 0.0f;
-    f32 k = ROOF_FADE_SPEED * dt;
-    if (k > 1.0f) k = 1.0f;
-    s->roof_alpha += (target - s->roof_alpha) * k;
 }
-
+// Draw a rotated rectangle outline by computing 4 corner points and connecting them.
+static void draw_rotated_rect_outline(Vec2 center, Vec2 half_size, f32 angle,
+                                      f32 thickness, bs_color color, u32 layer)
+{
+    Vec2 corners[4] = {
+        Vec2{ -half_size.x, -half_size.y },
+        Vec2{  half_size.x, -half_size.y },
+        Vec2{  half_size.x,  half_size.y },
+        Vec2{ -half_size.x,  half_size.y }
+    };
+    for (i32 i = 0; i < 4; ++i) {
+        corners[i] = vec2_rotate(corners[i], angle);
+        corners[i] = vec2_add(corners[i], center);
+    }
+    for (i32 i = 0; i < 4; ++i) {
+        i32 j = (i + 1) % 4;
+        renderer_draw_line(corners[i], corners[j], thickness, color, layer);
+    }
+}
 static Vec2 read_wasd_dir() {
     Vec2 d{ 0.0f, 0.0f };
     if (input_is_key_down(KEY_W)) d.y += 1.0f;
@@ -320,283 +523,237 @@ static Vec2 read_wasd_dir() {
     if (input_is_key_down(KEY_A)) d.x -= 1.0f;
     return d;
 }
-
-// Map the current mouse position to the ship tile under the cursor. Returns the world-space
-// click point via out_world, and the tile via out_col/out_row (may be out of range -> empty).
-// Uses the SAME transform chain the renderer uses (camera2d_screen_to_world accounts for the
-// camera rotation, which in local mode cancels the ship heading), so the pick lands on the
-// tile actually drawn under the cursor even after the ship has translated/rotated.
-static void pick_tile_under_mouse(const game_state* s, Vec2* out_world, i32* out_col, i32* out_row) {
-    i32 mx = 0, my = 0;
+// World-space position under the mouse cursor.
+static Vec2 mouse_world(const game_state* s) {
+    i32 mx, my;
     input_get_mouse_position(&mx, &my);
-    Vec2 screen{ (f32)mx, (f32)my };
-    Vec2 world = camera2d_screen_to_world(&s->camera, s->fb_width, s->fb_height, screen);
-    if (out_world) *out_world = world;
-    ship_world_to_tile(&s->ship, world, out_col, out_row);
+    return camera2d_screen_to_world(&s->camera, s->fb_width, s->fb_height, Vec2{ (f32)mx, (f32)my });
 }
-
-// ---- Cross-ship boarding command (Phase 3) -------------------------------------------------
-// Issue a move order from crew `idx` to a world-space click, choosing same-hull vs cross-ship board.
-// When the hulls are DOCKED and the click lands on a walkable tile of the OTHER hull, this is a
-// BOARD order: leg A is planned across the crew's CURRENT hull to that hull's airlock-interior tile,
-// and the destination (other hull + goal tile) is recorded so the handoff pass can fire leg B after
-// the seam hop. Otherwise it's a plain same-hull move on whichever hull the crew currently stands on
-// (and the click must be walkable there). Returns TRUE if any order was issued. The crew's existing
-// path is left untouched on failure (bad click = no-op), matching crew_plan_path's contract.
-static b8 command_crew_to_world(game_state* s, i32 idx, Vec2 world) {
-    Crew* c = &s->crew[idx];
-    const Ship* cur = crew_ship(s, c);              // hull the crew stands on right now
-    const i32   other_id = (c->ship_id == 0) ? 1 : 0;
-    Ship*       other = (other_id == 0) ? &s->ship : &s->enemy_ship;
-
-    // Cross-ship board: only when mechanically docked, and only if the click hit walkable DECK on the
-    // OTHER hull. (When docked the player sees the enemy interior, so they can click a tile there.)
-    if (s->enemy_docked) {
-        i32 oc, orow;
-        ship_world_to_tile(other, world, &oc, &orow);
-        if (ship_tile_is_walkable(other, oc, orow)) {
-            // Plan leg A: route across the CURRENT hull to ITS airlock-interior tile (the seam exit).
-            // ship_seam_landfall(from=other, to=cur) returns cur's own interior landfall — pass the
-            // hulls so `to` is the crew's current hull (where leg A must end).
-            i32 ec, er;
-            if (ship_seam_landfall(other, cur, ship_dock_tolerance(&s->ship), &ec, &er, nullptr)) {
-                if (crew_plan_path(s, idx, ec, er)) {
-                    c->boarding          = TRUE;
-                    c->board_target_ship = other_id;
-                    c->board_goal_col    = oc;
-                    c->board_goal_row    = orow;
-                    BS_LOG_INFO("board: crew %d -> hull %d tile (%d,%d) via airlock-interior (%d,%d)",
-                                idx, other_id, oc, orow, ec, er);
-                    return TRUE;
-                }
-            }
-            return FALSE; // couldn't stage the board (no seam / unreachable airlock): leave path as-is
-        }
+// ---- Edit mode picking -----------------------------------------------------------------
+// Even-odd ray-cast point-in-polygon test. `verts` is a closed polygon in world space.
+static b8 point_in_polygon(Vec2 p, const Vec2* verts, i32 n) {
+    b8 inside = FALSE;
+    for (i32 i = 0, j = n - 1; i < n; j = i++) {
+        b8 crosses = ((verts[i].y > p.y) != (verts[j].y > p.y)) &&
+                     (p.x < (verts[j].x - verts[i].x) * (p.y - verts[i].y) /
+                            (verts[j].y - verts[i].y) + verts[i].x);
+        if (crosses) inside = !inside;
     }
-
-    // Plain same-hull move on the crew's current deck.
-    i32 gc, gr;
-    ship_world_to_tile(cur, world, &gc, &gr);
-    if (ship_tile_is_walkable(cur, gc, gr)) {
-        if (crew_plan_path(s, idx, gc, gr)) {
-            c->boarding = FALSE; // a fresh same-hull order cancels any in-flight board intent
-            return TRUE;
-        }
-    }
-    return FALSE;
+    return inside;
 }
-
-// ---- Crew COMMAND: RTS-style select + move-order + camera pan. LOCAL-mode only (this is
-// control, not simulation). Left-click selects/deselects the crew; right-click orders the
-// selected crew to walk to the clicked walkable tile (runs A*); WASD pans the free camera.
-static void update_crew_command(game_state* s, f32 dt) {
-    // ---- Left-click: select the crew if the click landed on/near it, else deselect ----
-    // Skip when the cursor is over the UI: a click on a panel/button must not also
-    // select/deselect the crew (the ImGui panel takes mouse precedence over the world).
-    // Selection is MUTUALLY EXCLUSIVE: a click selects the SINGLE nearest crew within the pick
-    // radius and clears everyone else (or clears all if the click missed). The old per-crew loop
-    // tested each crew's radius INDEPENDENTLY, so a click landing within CREW_PICK_RADIUS of two
-    // neighbours (tiles are only 32 apart; the radius is 22) selected BOTH — which then built the
-    // fixed-title "CREW - JOB CONTROL" panel twice (ImGui id clash) and dispatched a button action
-    // to both crew. One nearest-wins pass guarantees at most one selected.
-    if (!bs_imgui_wants_mouse() &&
-        input_is_button_down(BUTTON_LEFT) &&
-        !input_was_button_down(BUTTON_LEFT)) {
-        Vec2 world;
-        i32 col, row;
-        pick_tile_under_mouse(s, &world, &col, &row);
-
-        // Find the nearest crew whose center is within the pick radius (strict `<` so an exact
-        // distance tie deterministically keeps the LOWER index instead of flickering).
-        i32 best   = -1;
-        f32 best_d = (f32)CREW_PICK_RADIUS;
-        for (size_t i = 0; i < s->crew.size(); ++i) {
-            Vec2 crew_world = ship_local_to_world(crew_ship(s, &s->crew[i]), s->crew[i].position);
-            f32  d = vec2_length(vec2_sub(world, crew_world));
-            if (d <= best_d && (best < 0 || d < best_d)) { best_d = d; best = (i32)i; }
-        }
-
-        // Apply: exactly the nearest crew (if any) is selected; all others cleared.
-        for (size_t i = 0; i < s->crew.size(); ++i)
-            s->crew[i].crew_selected = ((i32)i == best) ? TRUE : FALSE;
+// Return the world position of an edit selection, or {0,0} for EDIT_NONE.
+static Vec2 edit_entity_position(const game_state* s, EditSelection sel) {
+    switch (sel.kind) {
+        case EDIT_LIGHT:
+            if (sel.index >= 0 && sel.index < (i32)s->lights.size())
+                return s->lights[sel.index].position;
+            break;
+        case EDIT_SHIP:
+            return (sel.index == 0) ? s->player_ship().origin : s->enemy_ship.origin;
+        default: break;
     }
-
-    // ---- Right-click: assign a job (Shift held) or order a move (plain). UI yields first ----
-    // Shift + Right-Click on a tile that offers a job (e.g. TILE_HELM -> Piloting) ASSIGNS that
-    // job to the selected crew, targeting that exact tile: the job is queued and the runner walks
-    // the crew there to perform it. Plain Right-Click is the existing move order. Both yield to the
-    // UI so a click on a panel never reaches the world.
-    for (auto& c : s->crew) {
-        if (c.crew_selected && 
-            !bs_imgui_wants_mouse() &&
-            input_is_button_down(BUTTON_RIGHT) && 
-            !input_was_button_down(BUTTON_RIGHT)){
-                Vec2 world;
-                i32 goal_col, goal_row;
-                pick_tile_under_mouse(s, &world, &goal_col, &goal_row);
-
-                b8 shift = input_is_key_down(KEY_LSHIFT) || input_is_key_down(KEY_RSHIFT);
-                TileType hovered = ship_tile_at(&s->ship, goal_col, goal_row);
-                JobType  offered = job_for_tile(hovered);
-
-                if (shift && offered != JOB_NONE) {
-                    // ---- ASSIGN: enqueue the tile's job, targeted at the hovered station tile ----
-                    // The runner (crew_update_jobs) pops it, A*-paths the crew to (goal_col,goal_row), and
-                    // performs it there. If the crew is idle the dispatch happens the SAME frame, so it
-                    // starts moving immediately; otherwise it queues in execution order behind current work.
-                    Job job = job_make_for_tile(hovered, goal_col, goal_row);
-                    if (crew_enqueue_job(&c, job)) {
-                        BS_LOG_INFO("assign: %s job at tile (%d,%d) -> crew queue (%d queued)",
-                                    job_type_name(job.type), goal_col, goal_row, c.job_count);
-                    } else {
-                        BS_LOG_WARN("assign: crew job queue full (%d); ignored", CREW_MAX_JOBS);
-                    }
-                } else if (!shift) {
-                    // ---- MOVE / BOARD ORDER: walk the selected crew to the clicked world point.
-                    // command_crew_to_world decides same-hull move vs cross-ship BOARD: when the
-                    // hulls are docked and the click landed on the OTHER hull's walkable deck, it
-                    // stages leg A (A* to this hull's airlock-interior tile) and records the board
-                    // destination so the handoff pass fires leg B after the seam hop; otherwise it's
-                    // a plain same-hull move. Either way it routes avoidance-aware and leaves the
-                    // path untouched on a bad click (the per-frame peer gate guarantees no overlap).
-                    i32 idx = (i32)(&c - s->crew.data());
-                    command_crew_to_world(s, idx, world);
-                }
-            }
-        }
-    
-
-    // ---- WASD: pan the free-roam camera (screen-aligned; local view is heading-cancelled) ----
-    Vec2 pan = read_wasd_dir();
-    if (pan.x != 0.0f || pan.y != 0.0f) {
-        s->cam_focus_local = vec2_add(s->cam_focus_local, vec2_scale(pan, CAM_PAN_SPEED * dt));
+    return Vec2{ 0.0f, 0.0f };
+}
+// Return the world angle (radians) of an edit selection, or 0 for non-ships.
+static f32 edit_entity_angle(const game_state* s, EditSelection sel) {
+    if (sel.kind == EDIT_SHIP)
+        return (sel.index == 0) ? s->player_ship().angle : s->enemy_ship.angle;
+    return 0.0f;
+}
+// Write a new world position back to the selected entity.
+static void edit_entity_set_position(game_state* s, EditSelection sel, Vec2 pos) {
+    switch (sel.kind) {
+        case EDIT_LIGHT:
+            if (sel.index >= 0 && sel.index < (i32)s->lights.size())
+                s->lights[sel.index].position = pos;
+            break;
+        case EDIT_SHIP:
+            if (sel.index == 0) s->player_ship().origin = pos;
+            else                s->enemy_ship.origin     = pos;
+            break;
+        default: break;
     }
 }
-
-// ---- Crew SIMULATION: steer along the active path. Runs EVERY frame in BOTH modes, so a
-// crew that was ordered to move keeps walking its route even after you zoom out to pilot —
-// across the decks of the moving, rotating hull (the crew lives in ship-local space and rides
-// the rigid-body pose, so the ship-local path stays valid for free). Mirrors simulate_ship.
-static void simulate_crew(game_state* s, f32 dt) {
-    for (size_t i = 0; i < s->crew.size(); ++i)
-    {   
-        Crew* c = &s->crew[i];
-
-        // Mid-seam glide: a board crossing is scripting this crew's position frame-by-frame
-        // (update_crew_handoff). Don't let steering/friction/collision touch it — just hold velocity
-        // at zero and skip. The handoff pass owns position until the crew lands on the boarded hull.
-        if (c->transiting) {
-            c->velocity = Vec2{ 0.0f, 0.0f };
-            continue;
+// Write a new angle (radians) back to the selected ship.
+static void edit_entity_set_angle(game_state* s, EditSelection sel, f32 a) {
+    if (sel.kind == EDIT_SHIP) {
+        if (sel.index == 0) s->player_ship().angle = a;
+        else                s->enemy_ship.angle     = a;
+    }
+}
+// Hit-test the cursor against editable entities (lights first, then ships). Returns the
+// selection under the cursor, or {EDIT_NONE, -1} if nothing was hit.
+// Lights are picked by their CENTER only (small screen-space tolerance), not by radius.
+static EditSelection edit_pick(const game_state* s, Vec2 cursor) {
+    // Lights: nearest within a small screen-space tolerance around the center point.
+    f32 tol = 20.0f / ((s->camera.zoom > 0.0001f) ? s->camera.zoom : 1.0f);
+    f32 tol2 = tol * tol;
+    i32 best_light = -1;
+    f32 best_d2 = 0.0f;
+    for (i32 i = 0; i < (i32)s->lights.size(); ++i) {
+        Vec2 d = vec2_sub(cursor, s->lights[i].position);
+        f32  d2 = d.x * d.x + d.y * d.y;
+        if (d2 <= tol2 && (best_light < 0 || d2 < best_d2)) {
+            best_light = i; best_d2 = d2;
         }
-
-        // Tier-3 YIELD hold: a crew told to wait (crew_resolve_deadlocks) freezes in place this
-        // frame so a higher-priority peer can clear the pinch. Zero velocity and skip steering
-        // entirely; the resolver counts the timer down. This is what breaks a head-to-head standoff.
-        if (c->wait_timer > 0.0f) {
-            c->velocity = Vec2{ 0.0f, 0.0f };
-            continue;
-        }
-
-        // Desired acceleration toward the current waypoint (zero when idle / between waypoints).
-        Vec2 desired{ 0.0f, 0.0f };
-        if (c->path_len > 0 && c->path_idx < c->path_len) {
-            Vec2 to = vec2_sub(c->path[c->path_idx], c->position);
-            f32  d  = vec2_length(to);
-        
-            if (d <= CREW_ARRIVE_RADIUS) {
-                // Arrived at this waypoint; advance. Reaching the last one clears the order.
-                c->path_idx++;
-                if (c->path_idx >= c->path_len) {
-                    c->path_len = 0;
-                    c->path_idx = 0;
-                }
+    }
+    if (best_light >= 0) return EditSelection{ EDIT_LIGHT, best_light };
+    // Ships: point-in-polygon against the world-space collider.
+    Vec2 corners[SHIP_MAX_COLLIDER_VERTS];
+    if (ship_collider_corners(&s->player_ship(), corners) &&
+        point_in_polygon(cursor, corners, s->player_ship().collider_count)) {
+        return EditSelection{ EDIT_SHIP, 0 };
+    }
+    if (ship_collider_corners(&s->enemy_ship, corners) &&
+        point_in_polygon(cursor, corners, s->enemy_ship.collider_count)) {
+        return EditSelection{ EDIT_SHIP, 1 };
+    }
+    return EditSelection{ EDIT_NONE, -1 };
+}
+// Gizmo geometry helpers (all in world space).
+// All sizes are expressed as target screen pixels, then converted to world units via zoom_inv.
+// This keeps gizmos visible at every zoom level.
+static f32 gizmo_axis_len(f32 zoom_inv) { return 40.0f * zoom_inv; }
+static f32 gizmo_ring_radius_ship(const Ship* ship, f32 zoom_inv) {
+    f32 visual_half = vec2_length(vec2_scale(ship->visual.size_local, 0.5f));
+    return visual_half + 30.0f * zoom_inv;  // entity bounds + 30 px screen padding
+}
+static f32 gizmo_ring_radius_light(f32 zoom_inv) { return 40.0f * zoom_inv; }
+static f32 gizmo_arrow_size(f32 zoom_inv) { return 8.0f * zoom_inv; }
+// Distance from a point to a line segment.
+static f32 point_to_segment(Vec2 p, Vec2 a, Vec2 b) {
+    Vec2 ab = vec2_sub(b, a);
+    Vec2 ap = vec2_sub(p, a);
+    f32 ab2 = ab.x * ab.x + ab.y * ab.y;
+    if (ab2 < 0.0001f) return sqrtf(ap.x * ap.x + ap.y * ap.y);
+    f32 t = clampf((ap.x * ab.x + ap.y * ab.y) / ab2, 0.0f, 1.0f);
+    Vec2 closest = vec2_add(a, vec2_scale(ab, t));
+    Vec2 d = vec2_sub(p, closest);
+    return sqrtf(d.x * d.x + d.y * d.y);
+}
+// Test which gizmo part (if any) is under the cursor for the current selection.
+// Returns the drag mode that should be used, or EDIT_DRAG_FREE for the entity body.
+static EditDragMode edit_pick_gizmo(const game_state* s, Vec2 cursor) {
+    if (s->edit_selection.kind == EDIT_NONE) return EDIT_DRAG_NONE;
+    Vec2 origin = edit_entity_position(s, s->edit_selection);
+    f32 zoom_inv = 1.0f / ((s->camera.zoom > 0.0001f) ? s->camera.zoom : 1.0f);
+    f32 axis_len = gizmo_axis_len(zoom_inv);
+    f32 tol = 12.0f * zoom_inv;  // world-space tolerance around gizmo lines
+    // Rotation ring: narrow band around the ring.
+    f32 ring_r = 0.0f;
+    if (s->edit_selection.kind == EDIT_SHIP) {
+        const Ship* sh = (s->edit_selection.index == 0) ? &s->player_ship() : &s->enemy_ship;
+        ring_r = gizmo_ring_radius_ship(sh, zoom_inv);
+    } else {
+        ring_r = gizmo_ring_radius_light(zoom_inv);
+    }
+    f32 d_ring = fabsf(vec2_length(vec2_sub(cursor, origin)) - ring_r);
+    if (d_ring <= tol * 1.5f) return EDIT_DRAG_ROTATE;
+    // Axis arrows.
+    Vec2 x_end = vec2_add(origin, Vec2{ axis_len, 0.0f });
+    Vec2 y_end = vec2_add(origin, Vec2{ 0.0f, axis_len });
+    if (point_to_segment(cursor, origin, x_end) <= tol) return EDIT_DRAG_AXIS_X;
+    if (point_to_segment(cursor, origin, y_end) <= tol) return EDIT_DRAG_AXIS_Y;
+    return EDIT_DRAG_FREE;
+}
+// Edit-mode input: left-click selects an entity under the cursor and begins a drag; holding
+// the button repositions it; releasing ends the drag. Clicking empty space deselects. Gated
+// on bs_imgui_wants_mouse so clicks on the EDITOR PANEL never pick world entities.
+static void update_edit_mode(game_state* s) {
+    if (!s->edit_mode_active) {
+        s->edit_drag.active = FALSE;
+        s->edit_drag.mode   = EDIT_DRAG_NONE;
+        return;
+    }
+    if (bs_imgui_wants_mouse()) return; // cursor over a panel; ignore world picks
+    Vec2 cursor = mouse_world(s);
+    b8 down     = input_is_button_down(BUTTON_LEFT);
+    b8 was_down = input_was_button_down(BUTTON_LEFT);
+    if (down && !was_down) {
+        // Edge: mouse just pressed.
+        // If we already have a selection, test gizmos first; otherwise pick a new entity.
+        EditDragMode gizmo = EDIT_DRAG_NONE;
+        if (s->edit_selection.kind != EDIT_NONE)
+            gizmo = edit_pick_gizmo(s, cursor);
+        if (gizmo != EDIT_DRAG_NONE) {
+            // Gizmo drag started on the currently selected entity.
+            s->edit_drag.active        = TRUE;
+            s->edit_drag.mode          = gizmo;
+            s->edit_drag.drag_anchor   = cursor;
+            s->edit_drag.entity_anchor = edit_entity_position(s, s->edit_selection);
+            s->edit_drag.entity_angle  = edit_entity_angle(s, s->edit_selection);
+        } else {
+            // No gizmo hit -> try picking a new entity (or deselect on empty space).
+            EditSelection hit = edit_pick(s, cursor);
+            s->edit_selection = hit;
+            if (hit.kind != EDIT_NONE) {
+                s->edit_drag.active        = TRUE;
+                s->edit_drag.mode          = EDIT_DRAG_FREE;
+                s->edit_drag.drag_anchor   = cursor;
+                s->edit_drag.entity_anchor = edit_entity_position(s, hit);
+                s->edit_drag.entity_angle  = edit_entity_angle(s, hit);
+                if (hit.kind == EDIT_LIGHT) s->light_selected = hit.index;
             } else {
-                Vec2 dir = vec2_scale(to, 1.0f / d);
-                // Ease in on the FINAL waypoint so the crew settles instead of overshooting.
-                f32 scale = 1.0f;
-                b8  is_final = (c->path_idx == c->path_len - 1);
-                if (is_final && d < CREW_SLOW_RADIUS) scale = d / CREW_SLOW_RADIUS;
-                desired = vec2_scale(dir, CREW_ACCEL * scale);
+                s->edit_drag.active = FALSE;
+                s->edit_drag.mode   = EDIT_DRAG_NONE;
             }
         }
-
-        // Accelerate toward the waypoint, apply exponential friction (also brakes an idle crew),
-        // clamp to top speed.
-        c->velocity = vec2_add(c->velocity, vec2_scale(desired, dt));
-        f32 damp = 1.0f - CREW_FRICTION * dt;
-        if (damp < 0.0f) damp = 0.0f;
-        c->velocity = vec2_scale(c->velocity, damp);
-        f32 spd = vec2_length(c->velocity);
-        if (spd > CREW_MAX_SPEED) c->velocity = vec2_scale(c->velocity, CREW_MAX_SPEED / spd);
-
-        // Integrate with per-axis collision (move X, then Y; cancel the blocked axis). Each axis
-        // is gated by BOTH a solid-tile test (walls/hull/glass — the original safety net) AND the
-        // peer gate (crew_peer_blocks — Tier 2), so a step is taken only if it hits neither a wall
-        // nor another crew member. The peer gate is per-axis and only vetoes motion that REDUCES
-        // separation, so crew slide along each other in open space instead of jamming. This is the
-        // hard guarantee that two crew can never overlap or pass through each other, for ANY count.
-        Vec2 p = c->position;
-        b8   peer_vetoed = FALSE; // did a CREWMATE (not a wall) stop us this frame? -> feeds Tier 3
-
-        // Collision tiles come from the hull THIS crew is bound to (crew_ship), not a hardcoded
-        // player ship — a crew that boarded the enemy walks the enemy's decks/walls.
-        const Ship* hull = crew_ship(s, c);
-
-        Vec2 nx = Vec2{ p.x + c->velocity.x * dt, p.y };
-        if (crew_blocked(hull, nx, c->radius)) {
-            c->velocity.x = 0.0f;                          // wall on X
-        } else if (crew_peer_blocks(s, (i32)i, p, nx, c->radius)) {
-            c->velocity.x = 0.0f;                          // crewmate on X
-            peer_vetoed = TRUE;
-        } else {
-            p.x = nx.x;
+    } else if (down && s->edit_drag.active) {
+        // Hold: update position or angle based on the drag mode.
+        switch (s->edit_drag.mode) {
+            case EDIT_DRAG_FREE: {
+                Vec2 delta = vec2_sub(cursor, s->edit_drag.drag_anchor);
+                edit_entity_set_position(s, s->edit_selection,
+                                         vec2_add(s->edit_drag.entity_anchor, delta));
+                break;
+            }
+            case EDIT_DRAG_AXIS_X: {
+                Vec2 pos = s->edit_drag.entity_anchor;
+                pos.x += (cursor.x - s->edit_drag.drag_anchor.x);
+                edit_entity_set_position(s, s->edit_selection, pos);
+                break;
+            }
+            case EDIT_DRAG_AXIS_Y: {
+                Vec2 pos = s->edit_drag.entity_anchor;
+                pos.y += (cursor.y - s->edit_drag.drag_anchor.y);
+                edit_entity_set_position(s, s->edit_selection, pos);
+                break;
+            }
+            case EDIT_DRAG_ROTATE: {
+                Vec2 origin = edit_entity_position(s, s->edit_selection);
+                f32 start_a = atan2f(s->edit_drag.drag_anchor.y - origin.y,
+                                     s->edit_drag.drag_anchor.x - origin.x);
+                f32 cur_a   = atan2f(cursor.y - origin.y,
+                                     cursor.x - origin.x);
+                f32 new_a   = s->edit_drag.entity_angle + (cur_a - start_a);
+                edit_entity_set_angle(s, s->edit_selection, new_a);
+                break;
+            }
+            default: break;
         }
-
-        Vec2 ny = Vec2{ p.x, p.y + c->velocity.y * dt };
-        if (crew_blocked(hull, ny, c->radius)) {
-            c->velocity.y = 0.0f;                          // wall on Y
-        } else if (crew_peer_blocks(s, (i32)i, p, ny, c->radius)) {
-            c->velocity.y = 0.0f;                          // crewmate on Y
-            peer_vetoed = TRUE;
-        } else {
-            p.y = ny.y;
-        }
-
-        c->position = p;
-
-        // Maintain the Tier-3 block clock: accrue while a PEER is actively stopping a crew that
-        // still wants to move; clear the instant it's moving freely (or isn't trying to). Only a
-        // peer veto counts — being stopped by a wall is normal arrival/steering, not a deadlock.
-        b8 wants_to_move = (c->path_len > 0 && c->path_idx < c->path_len) ? TRUE : FALSE;
-        if (wants_to_move && peer_vetoed) {
-            c->block_timer += dt;
-        } else {
-            c->block_timer = 0.0f;
-        }
+    } else if (!down) {
+        s->edit_drag.active = FALSE;
+        s->edit_drag.mode   = EDIT_DRAG_NONE;
     }
 }
-
-// ---- Ship CONTROL: pilot input -> forces. The CALLER gates this to global mode AND an
-// actively-manned helm (crew.is_active_pilot), so it runs ONLY while a pilot is at the helm;
-// an unmanned helm has no flight authority at all (see the gate in game_update).
+// ---- Ship CONTROL: pilot input -> forces.
 // WASD here are NOT screen-relative; thrust is applied along the ship's heading
 // (Starsector-style). The ship coasts (no passive drag); speed only changes via thrust
-// (W/S/Q/E) or the brake (C). This function mutates only flight velocities, never the pose —
+// (W/S/Q/E) or the brake (C). This function mutates only flight velocities, never the pose --
 // integration is simulate_ship's job, so the ship keeps moving even when nobody is piloting.
 // Returns TRUE if a turn is actively commanded this frame (A/D held) so simulate_ship knows to
-// skip auto-stabilizing the spin; FALSE otherwise. In local mode this fn isn't called at all,
-// so the simulator always stabilizes — that is what finally settles spin carried over from a turn.
-static b8 control_ship_global(game_state* s, f32 dt) {
-    Ship*       ship = &s->ship;
-    ShipFlight* fl   = &s->flight;
-
+// skip auto-stabilizing the spin; FALSE otherwise.
+static b8 control_ship_global(game_state* s, FleetShip* pf, f32 dt) {
+    if (!pf) return FALSE;
+    Ship*       ship = &pf->ship;
+    ShipFlight* fl   = &pf->flight;
+    // Free camera mode: ship coasts; no pilot input this frame.
+    if (s->free_camera_active)
+        return FALSE;
     // Heading basis: angle 0 => nose points +Y (up), matching the tilemap's nose-at-top.
     Vec2 fwd   = vec2_rotate(Vec2{ 0.0f, 1.0f }, ship->angle); // forward (nose)
     Vec2 right = vec2_rotate(Vec2{ 1.0f, 0.0f }, ship->angle); // starboard
-
-    f32 strafe = SHIP_ACCEL * STRAFE_FRACTION[(i32)fl->hull];
-
+    f32 strafe = SHIP_ACCEL; // full strafe thrust
     // ---- Linear thrust (accumulate this frame's acceleration along the heading) ----
     Vec2 acc{ 0.0f, 0.0f };
     if (input_is_key_down(KEY_W)) acc = vec2_add(acc, vec2_scale(fwd,   SHIP_ACCEL)); // forward
@@ -604,7 +761,6 @@ static b8 control_ship_global(game_state* s, f32 dt) {
     if (input_is_key_down(KEY_E)) acc = vec2_add(acc, vec2_scale(right, strafe));     // strafe right
     if (input_is_key_down(KEY_Q)) acc = vec2_add(acc, vec2_scale(right,-strafe));     // strafe left
     fl->velocity = vec2_add(fl->velocity, vec2_scale(acc, dt));
-
     // ---- Brake (C): bleed the current velocity toward zero at the decel rate ----
     if (input_is_key_down(KEY_C)) {
         f32 spd = vec2_length(fl->velocity);
@@ -614,7 +770,6 @@ static b8 control_ship_global(game_state* s, f32 dt) {
             fl->velocity = vec2_scale(fl->velocity, ns / spd);
         }
     }
-
     // ---- Angular: A/D ramp angular velocity toward +/- max. The COMPLEMENTARY auto-stabilize
     // (no turn input -> bleed spin to zero) is deliberately NOT done here; it lives in
     // simulate_ship so it runs in BOTH modes. Reason: simulate_ship integrates angular_velocity
@@ -624,1026 +779,1610 @@ static b8 control_ship_global(game_state* s, f32 dt) {
     // Here we only ADD the commanded turn and report whether one was issued so the simulator
     // knows to skip stabilizing the spin this frame.
     f32 turn_in = 0.0f;
-    if (input_is_key_down(KEY_A)) turn_in += 1.0f; // turn left (CCW)
-    if (input_is_key_down(KEY_D)) turn_in -= 1.0f; // turn right (CW)
+    if (s->alt_movement_active) {
+        // ---- Mouse-follow mode: smoothly rotate toward the mouse cursor ----
+        Vec2 mw = mouse_world(s);
+        Vec2 to = vec2_sub(mw, ship->origin);
+        if (vec2_length(to) > 0.001f) {
+            f32 desired = atan2f(-to.x, to.y); // ship angle 0 = nose points +Y
+            f32 diff  = atan2f(sinf(desired - ship->angle), cosf(desired - ship->angle));
+            if (fabsf(diff) > 0.01f) {
+                // PD controller: proportional pulls toward target;
+                // derivative term (current spin) damps overshoot.
+                turn_in = clampf(diff * 3.0f - fl->angular_velocity * 1.5f, -1.0f, 1.0f);
+            } // else: no turn -> simulate_ship stabilizer bleeds residual spin smoothly
+        }
+    } else {
+        if (input_is_key_down(KEY_A)) turn_in += 1.0f; // turn left (CCW)
+        if (input_is_key_down(KEY_D)) turn_in -= 1.0f; // turn right (CW)
+    }
     if (turn_in != 0.0f) {
         fl->angular_velocity += turn_in * SHIP_TURN_ACCEL * dt;
         return TRUE;  // a turn is actively commanded this frame
     }
     return FALSE;     // no turn commanded -> simulate_ship will auto-stabilize the spin
 }
-
-// ---- Ship SIMULATION: momentum -> motion. Runs EVERY frame in BOTH modes. The ship is a
-// physical body coasting through space; zooming the camera inside (local mode) must not
-// freeze it. Integrates the pose from the flight velocities; the crew lives in ship-local
-// space, so it rides this translation AND rotation automatically — no manual carry.
-//
-// `turn_commanded` is TRUE only while a pilot is actively turning (global mode, A/D held). When
-// FALSE — every frame in local mode, and in global mode whenever A/D is released — the flight
-// computer auto-stabilizes residual spin back to zero. This stabilization MUST live here (the
-// simulator), not in the control fn, because angular_velocity is integrated into ship->angle
-// every frame in BOTH modes: if it were only damped while piloting, spin built up in global mode
-// and carried into local mode would integrate forever and the ship would rotate without end.
-// (Linear velocity is intentionally NOT damped — the ship coasts by design, identically in both
-// modes; only the commanded turn auto-settles.)
-static void simulate_ship(game_state* s, f32 dt, b8 turn_commanded) {
-    Ship*       ship = &s->ship;
-    ShipFlight* fl   = &s->flight;
-
-    // Auto-stabilize spin toward zero whenever no turn is commanded (always so in local mode).
-    // Bleeds at the turn-accel rate, mirroring the A/D ramp, so a released turn coasts down the
-    // same way it spun up — and a turn interrupted by a zoom-to-local still settles to rest
-    // instead of integrating forever.
-    if (!turn_commanded) {
-        f32 drop = SHIP_TURN_ACCEL * dt;
-        if (fl->angular_velocity > 0.0f)      fl->angular_velocity = (fl->angular_velocity > drop) ? fl->angular_velocity - drop : 0.0f;
-        else if (fl->angular_velocity < 0.0f) fl->angular_velocity = (fl->angular_velocity < -drop) ? fl->angular_velocity + drop : 0.0f;
-    }
-
-    // Clamp linear + angular speed to their caps (guards against runaway thrust input).
-    f32 spd = vec2_length(fl->velocity);
-    if (spd > SHIP_MAX_SPEED) fl->velocity = vec2_scale(fl->velocity, SHIP_MAX_SPEED / spd);
-    fl->angular_velocity = clampf(fl->angular_velocity, -SHIP_MAX_TURN, SHIP_MAX_TURN);
-
-    // Integrate the rigid-body pose.
-    ship->origin = vec2_add(ship->origin, vec2_scale(fl->velocity, dt));
-    ship->angle += fl->angular_velocity * dt;
-}
-
+// ---- Ship SIMULATION: momentum -> motion. Now owned by Fleet::simulate_all (per-ship
+// FleetShip::simulate). Every fleet member integrates its own pose every frame; the piloted
+// ship uses the pilot's turn_commanded flag while the rest auto-stabilize residual spin.
 // =====================================================================================
-// Ship-ship collision response (combat). The enemy hull is an inoperative derelict — an
-// IMMOVABLE obstacle — so the player can never shove it; the player is pushed OUT of any
-// penetration instead. Called AFTER simulate_ship has integrated the player's pose: test the two
-// hulls' oriented bounding boxes (ships_collide -> SAT minimum-translation vector). On overlap,
-// translate the player clear by the FULL MTV (the shortest separating displacement) and cancel
-// the INWARD component of linear velocity, so the ship slides along the hull instead of sticking
-// to it or phasing through. The tangential component survives, so a grazing impact still glides.
-//
-// Skipped while docked: a mated ship is rigidly joined at the airlock (Phase 2), so that
-// deliberate hull contact must NOT read as a collision to repel — and docking takes no collision
-// damage. At the clean mated pose the tight OBBs touch at ~0 penetration anyway (verified
-// headless), so even the frame before the dock latches, there is no spurious shove.
+// Ship-ship collision response (combat). The enemy hull is an inoperative derelict -- an
+// IMMOVABLE obstacle -- so no fleet ship can shove it; each fleet ship is pushed OUT of any
+// penetration instead. Called AFTER the fleet has integrated its poses: test each fleet hull's
+// oriented bounding box against the enemy (ships_collide -> SAT minimum-translation vector).
+// On overlap, translate the ship clear by the FULL MTV and cancel the INWARD component of its
+// linear velocity, so the ship slides along the hull instead of sticking or phasing through.
 static void resolve_ship_collision(game_state* s) {
-    if (s->enemy_docked) return; // joined at the airlock: no repulsion, no docking damage
-
-    Vec2 mtv{ 0.0f, 0.0f };
-    if (!ships_collide(&s->ship, &s->enemy_ship, &mtv)) return; // hulls clear -> nothing to resolve
-
-    // Push the player fully out of the enemy hull (enemy immovable: it absorbs none of the move).
-    s->ship.origin = vec2_add(s->ship.origin, mtv);
-
-    // Cancel only the velocity INTO the surface. The MTV points from the enemy toward the player,
-    // i.e. along the outward contact normal n. Velocity with a negative projection on n is heading
-    // into the hull; remove exactly that component so the ship stops penetrating but keeps its
-    // sideways glide (slide, don't stick or phase). Velocity already pointing away is left alone.
-    f32 mlen = vec2_length(mtv);
-    if (mlen > 1.0e-6f) {
-        Vec2 n  = vec2_scale(mtv, 1.0f / mlen);     // unit outward normal (enemy -> player)
-        f32  vn = vec2_dot(s->flight.velocity, n);  // signed speed along that normal
-        if (vn < 0.0f)                               // moving INTO the hull
-            s->flight.velocity = vec2_sub(s->flight.velocity, vec2_scale(n, vn)); // kill inward part only
+    for (i32 i = 0; i < s->fleet.count(); ++i) {
+        FleetShip& fs = s->fleet.at(i);
+        Vec2 mtv{ 0.0f, 0.0f };
+        if (!ships_collide(&fs.ship, &s->enemy_ship, &mtv)) continue; // hulls clear
+        // Push this ship fully out of the enemy hull (enemy immovable).
+        fs.ship.origin = vec2_add(fs.ship.origin, mtv);
+        f32 mlen = vec2_length(mtv);
+        if (mlen > 1.0e-6f) {
+            Vec2 n  = vec2_scale(mtv, 1.0f / mlen);       // unit outward normal (enemy -> ship)
+            f32  vn = vec2_dot(fs.flight.velocity, n);    // signed speed along that normal
+            if (vn < 0.0f)                                 // moving INTO the hull
+                fs.flight.velocity = vec2_sub(fs.flight.velocity, vec2_scale(n, vn)); // kill inward part
+        }
     }
 }
-
+// World-space origin of the ship the player is currently controlling (the manually-piloted
+// ship, defaulting to the flagship). Used for camera follow.
+static Vec2 piloted_ship_origin(game_state* s) {
+    i32 idx = s->rts_controls.piloted_index();
+    if (idx < 0 || idx >= s->fleet.count()) idx = 0;
+    return s->fleet.at(idx).ship.origin;
+}
 // =====================================================================================
-// Cross-ship crew handoff (Phase 3). Drives the SMOOTH airlock crossing for any crew mid-board.
-// A board order is three stages: leg A (A* across the crew's CURRENT hull to that hull's airlock-
-// interior tile), the SEAM GLIDE (this pass), then leg B (A* across the boarded hull to the goal).
-//
-// The glide replaces the old single-frame teleport. Leg A leaves the crew on its own interior tile,
-// ~3 tiles (one door + the mated gap + one door) from the destination landfall tile in world space.
-// Snapping ship_id+position across that gap in one frame rendered as a visible JUMP between ships.
-// Instead, once leg A arrives we start a constant-speed glide of the crew's WORLD position straight
-// from its own interior tile to the destination interior tile. Those two tiles are collinear through
-// both mated door centers (doors parallel, TWO tiles apart with the connector bridge tile spanning
-// the gap at their midpoint), so the straight glide threads both open doorways AND the connector —
-// the crew strolls through the airlocks across the bridge. ship_id stays on the ORIGIN hull during the
-// glide (local position rewritten each frame to track the lerped world point) and flips to the
-// destination hull only at arrival, where leg B is planned. Endpoints are recomputed from the live
-// poses every frame so the glide rides the rigid mated pair if it drifts.
-//
-// Runs AFTER simulate_crew + crew_resolve_deadlocks (so it reads settled end-of-frame arrival state)
-// and BEFORE simulate_ship (so the crossing lands before the pose integrates). simulate_crew skips
-// any `transiting` crew, so the scripted glide isn't fought by steering/collision.
-//
-// SAFETY GATES:
-//   * START the glide only on a CLEAN leg-A arrival: boarding && path_len==0 && the crew is AT its
-//     airlock-interior tile (its current tile == the seam-exit tile). A crew whose order was aborted
-//     mid-deck (path cleared by the deadlock resolver) is NOT on that tile -> it drops the board
-//     intent without gliding (no teleport).
-//   * The hulls must STILL be docked (re-query ship_seam_landfall) both to START and DURING the
-//     glide. If they undock mid-transit the seam is gone: end the crossing, leave the crew on the
-//     hull it started from at its interior tile, drop the order (you can't cross a broken seam).
-static void update_crew_handoff(game_state* s, f32 dt) {
-    for (size_t i = 0; i < s->crew.size(); ++i) {
-        Crew* c = &s->crew[i];
-
-        // ---- PHASE B: a seam glide is already in flight -> advance it ---------------------------
-        if (c->transiting) {
-            const Ship* cur   = crew_ship(s, c); // still bound to the ORIGIN hull until arrival
-            Ship*       board = (c->board_target_ship == 0) ? &s->ship : &s->enemy_ship;
-
-            // The hulls must stay mated for the seam to exist. If they parted mid-glide, abort: drop
-            // the crew back onto its origin hull at the interior tile it launched from, clear transit.
-            i32 echk, rchk;
-            if (!ship_seam_landfall(board, cur, ship_dock_tolerance(&s->ship), &echk, &rchk, nullptr)) {
-                c->position   = c->transit_from_local; // back on the origin interior tile (its frame)
-                c->velocity   = Vec2{ 0.0f, 0.0f };
-                c->transiting = FALSE;
-                BS_LOG_WARN("board: crew %zu seam glide aborted (hulls undocked mid-transit)", i);
-                continue;
-            }
-
-            // Live world endpoints (recomputed each frame so the glide rides the mated pair's pose):
-            // from = own interior tile in the origin frame; to = landfall tile in the boarded frame.
-            Vec2 w_from = ship_local_to_world(cur,   c->transit_from_local);
-            Vec2 w_to   = ship_local_to_world(board, c->transit_to_local);
-            f32  span   = vec2_length(vec2_sub(w_to, w_from));
-
-            // Advance the normalized progress at a constant world speed (units/s). A near-zero span
-            // (degenerate geometry) just completes immediately rather than dividing by ~0.
-            if (span > 1.0e-3f) c->transit_t += (CREW_SEAM_GLIDE_SPEED * dt) / span;
-            else                c->transit_t  = 1.0f;
-
-            if (c->transit_t < 1.0f) {
-                // Mid-glide: place the crew at the lerped world point, expressed in the ORIGIN frame
-                // (ship_id unchanged) so the renderer draws it exactly there. Velocity stays zero —
-                // this is a scripted slide, not steered motion.
-                Vec2 wp       = vec2_add(w_from, vec2_scale(vec2_sub(w_to, w_from), c->transit_t));
-                c->position   = ship_world_to_local(cur, wp);
-                c->velocity   = Vec2{ 0.0f, 0.0f };
-                continue;
-            }
-
-            // ---- ARRIVAL: bind to the boarded hull and plan leg B ---------------------------------
-            c->ship_id    = c->board_target_ship;  // now a crew of the boarded hull
-            c->position   = c->transit_to_local;   // landfall tile center, already in the board frame
-            c->velocity   = Vec2{ 0.0f, 0.0f };
-            c->transiting = FALSE;
-            c->transit_t  = 0.0f;
-
-            i32 idx = (i32)i;
-            if (!crew_plan_path(s, idx, c->board_goal_col, c->board_goal_row)) {
-                BS_LOG_WARN("board: crew %zu crossed seam onto hull %d but leg-B path to (%d,%d) failed; idle",
-                            i, c->ship_id, c->board_goal_col, c->board_goal_row);
-            } else {
-                BS_LOG_INFO("board: crew %zu crossed seam onto hull %d; leg B -> (%d,%d)",
-                            i, c->ship_id, c->board_goal_col, c->board_goal_row);
-            }
-            continue;
-        }
-
-        // ---- PHASE A: leg A in flight -> detect a clean arrival and KICK OFF the glide -----------
-        if (!c->boarding) continue;
-        if (c->path_len != 0) continue; // leg A still walking
-
-        const Ship* cur   = crew_ship(s, c);
-        Ship*       board = (c->board_target_ship == 0) ? &s->ship : &s->enemy_ship;
-
-        // Where leg A was supposed to END: this hull's airlock-interior tile (seam exit). Recompute
-        // from live geometry; FALSE => the hulls undocked mid-transit, so abort the board cleanly.
-        i32 exit_col, exit_row;
-        if (!ship_seam_landfall(board, cur, ship_dock_tolerance(&s->ship), &exit_col, &exit_row, nullptr)) {
-            c->boarding = FALSE;                 // seam gone (undocked) -> stay put, drop the order
-            continue;
-        }
-
-        // Did leg A actually ARRIVE at that tile (vs. a deadlock-abort mid-deck)? Compare the crew's
-        // current tile to the seam-exit tile; only an on-tile crew crosses.
-        i32 here_col, here_row;
-        ship_local_to_tile(cur, c->position, &here_col, &here_row);
-        if (here_col != exit_col || here_row != exit_row) {
-            c->boarding = FALSE;                 // order ended somewhere else -> not a board arrival
-            continue;
-        }
-
-        // Landfall tile + local center ON THE BOARDED HULL (from=cur leaving, to=board boarding).
-        i32  land_col, land_row;
-        Vec2 land_local;
-        if (!ship_seam_landfall(cur, board, ship_dock_tolerance(&s->ship), &land_col, &land_row, &land_local)) {
-            c->boarding = FALSE;                 // shouldn't happen (symmetric with the exit query)
-            continue;
-        }
-
-        // ---- BEGIN THE GLIDE -------------------------------------------------------------------
-        // Stay on the ORIGIN hull (don't flip ship_id yet); record both interior tiles (each in its
-        // own hull's frame) and start the constant-speed world-space slide. The crew is currently
-        // sitting ON exit tile (exit_col,exit_row); use that tile's center as the glide start so the
-        // slide begins exactly where the crew stands (no snap into the glide).
-        c->boarding           = FALSE;                 // leg A done; the glide owns the crossing now
-        c->transiting         = TRUE;
-        c->transit_t          = 0.0f;
-        c->transit_from_local = ship_tile_center_local(cur,   exit_col, exit_row);
-        c->transit_to_local   = land_local;            // already board-frame (from ship_seam_landfall)
-        c->velocity           = Vec2{ 0.0f, 0.0f };
-        BS_LOG_INFO("board: crew %zu reached airlock; gliding seam -> hull %d landfall (%d,%d)",
-                    i, c->board_target_ship, land_col, land_row);
-    }
-}
-
+// Action Log Panel -- bottom-right HUD. Shows the last 3 messages when idle (fading to
+// 15% opacity after 3s inactivity), expands to full 30-entry scrollable history on hover.
+// Uses the Consola font via bs_ui_begin_hud_panel.
 // =====================================================================================
-// Docking state machine (Phase 2). Turns the per-frame proximity readout into a latched mechanical
-// join toggled by the T key. Runs once per frame BEFORE simulate_ship so a dock latched this frame
-// zeroes velocity before the integrator can carry the ship off the mating pose.
+static void build_action_log_panel(game_state* s, f32 dt) {
+    // Update timer even if panel isn't hovered; fade is a global state.
+    s->action_log.inactivity_timer += dt;
+    f32 alpha = 1.0f;
+    if (s->action_log.inactivity_timer > ACTION_LOG_FADE_AFTER) {
+        f32 t = (s->action_log.inactivity_timer - ACTION_LOG_FADE_AFTER) / ACTION_LOG_FADE_OVER;
+        if (t > 1.0f) t = 1.0f;
+        alpha = 1.0f - t * 0.85f; // fade to 0.15 (15%)
+    }
+    b8 hovered = FALSE;
+    // Set background alpha before opening the panel so the whole window fades together.
+    bs_ui_push_alpha(alpha);
+    if (bs_ui_begin_hud_panel("ACTION LOG", BS_UI_ANCHOR_BOTTOM_RIGHT, 12.0f)) {
+        hovered = bs_ui_is_window_hovered();
+        if (hovered) {
+            alpha = 1.0f;
+            s->action_log.inactivity_timer = 0.0f;
+        }
+        i32 visible = 3; // collapsed: show only newest 3
+        if (hovered)
+            visible = s->action_log.count; // expanded: show all
+        const f32 TEXT_COL[4] = { 0.86f, 0.90f, 0.96f, 1.00f };
+        // Draw newest entries at the bottom (natural log order: chronological).
+        i32 start = s->action_log.count - visible;
+        if (start < 0) start = 0;
+        for (i32 i = start; i < s->action_log.count; ++i) {
+            bs_ui_text_colored(TEXT_COL[0], TEXT_COL[1], TEXT_COL[2],
+                               TEXT_COL[3] * alpha, s->action_log.entries[i]);
+        }
+    }
+    bs_ui_end_hud_panel();
+    bs_ui_pop_alpha(); // Alpha
+}
+// ---- Floating-origin re-centering (big_space-style) -----------------------------------------
+// Fold the galaxy-map camera's accumulated pan (camera.position, a small f32 Vec2) back into the
+// hierarchical reference cell (camera_hierpos) each frame, then reset the residual to zero. This
+// keeps every on-screen star/orbit rendered near the origin in f32 (hierpos_diff stays small), so
+// circle tessellation never quantizes into dashed outlines for systems far from Sol.
 //
-//   dock_eligible (per frame) = airlocks aligned + within tolerance right now (ships_docked).
-//   enemy_docked  (latched)   = the hulls are mechanically mated; flips only on a T edge.
-//
-// T is edge-triggered (down this frame, up last) so a held key toggles exactly once:
-//   * UNDOCKED + eligible + T  -> DOCK:   snap the player so its airlock sits one tile off the
-//       enemy's (dock_snap_delta — verified geometry), zero linear+angular velocity, latch docked.
-//       The snap guarantees the clean ~0-penetration mated pose; the velocity zero + the
-//       collision skip (resolve_ship_collision early-outs while docked) hold it there rigidly.
-//   * DOCKED + T              -> UNDOCK:  unlatch, then kick the player off along the outward
-//       airlock normal (UNDOCK_IMPULSE) so the hulls part cleanly instead of resting in contact and
-//       immediately re-tripping the collision push. Normal collision resumes next frame.
-// A dock takes no collision damage (we never call the collision resolver while docked).
-static void update_docking(game_state* s) {
-    // Live geometry: are the airlocks mated right now? Tolerance from ship_dock_tolerance (sized to
-    // the two-tile mated gap; same constant the snap, the render gate, and the harness use). This
-    // drives the HUD prompt AND gates a fresh dock.
-    const f32 dock_tol = ship_dock_tolerance(&s->ship);
-    s->dock_eligible = ships_docked(&s->ship, &s->enemy_ship, dock_tol,
-                                    nullptr, nullptr, nullptr, nullptr);
-
-    // Edge-trigger T: TRUE only on the frame the key transitions up -> down (matches the click idiom
-    // used for crew orders), so holding T can't oscillate the latch.
-    b8 toggle = input_is_key_down(KEY_T) && !input_was_key_down(KEY_T);
-    if (!toggle) return;
-
-    if (!s->enemy_docked) {
-        // ---- DOCK ----: only if the airlocks are actually aligned this frame.
-        if (!s->dock_eligible) return; // not lined up -> T does nothing (prompt isn't showing either)
-
-        Vec2 delta{ 0.0f, 0.0f };
-        f32  dtheta = 0.0f;
-        if (dock_snap_delta(&s->ship, &s->enemy_ship, dock_tol, &delta, &dtheta)) {
-            // Mate rigidly: rotate the player so its airlock door ends PARALLEL to (and facing) the
-            // enemy's, THEN translate so the doors sit TWO tiles apart (room for the connector) with no
-            // hull overlap. Order matters — dock_snap_delta solved the translation AT the post-rotation
-            // pose, so apply the rotation first. (Rotating about origin then translating == the rigid
-            // motion it computed.)
-            s->ship.angle  = s->ship.angle + dtheta;
-            s->ship.origin = vec2_add(s->ship.origin, delta);
-        }
-        // Rigidly mate: kill all motion so the integrator can't drift the joint, then latch. The
-        // collision resolver early-outs on enemy_docked, so the touching hulls won't self-repel.
-        s->flight.velocity         = Vec2{ 0.0f, 0.0f };
-        s->flight.angular_velocity = 0.0f;
-        s->enemy_docked            = TRUE;
-
-        // Spawn the CONNECTOR bridge in the now-two-tile gap between the mated doors. Computed from the
-        // settled post-snap pose (dock_connector_tile = midpoint of the mated door centers), so it sits
-        // exactly on the seam the crew glide threads and the merged navmesh bridges. The hulls are
-        // rigidly joined while docked, so this pose stays valid until undock without recompute.
-        Vec2 cworld{ 0.0f, 0.0f };
-        f32  cangle = s->ship.angle;
-        if (dock_connector_tile(&s->ship, &s->enemy_ship, dock_tol, &cworld, &cangle)) {
-            s->connector_world  = cworld;
-            s->connector_angle  = cangle;
-            s->connector_active = TRUE;
-            BS_LOG_INFO("Docked to enemy hull (airlocks mated; connector bridge spawned).");
-        } else {
-            // Shouldn't happen (we just confirmed dock-eligibility), but never leave a stale bridge.
-            s->connector_active = FALSE;
-            BS_LOG_INFO("Docked to enemy hull (airlocks mated).");
-        }
-    } else {
-        // ---- UNDOCK ----: unlatch, tear down the connector, and shove the player off along the
-        // outward airlock normal so the hulls separate cleanly. Normal is enemy-door -> player-door
-        // (points away from the enemy).
-        s->enemy_docked     = FALSE;
-        s->connector_active = FALSE; // remove the bridge tile: the seam is broken, no cross-ship route
-
-        i32 ca, ra, cb, rb;
-        Vec2 kick{ 0.0f, 0.0f };
-        if (ships_docked(&s->enemy_ship, &s->ship, dock_tol, &ca, &ra, &cb, &rb)) {
-            Vec2 enemy_door  = ship_tile_center_world(&s->enemy_ship, ca, ra);
-            Vec2 player_door = ship_tile_center_world(&s->ship,       cb, rb);
-            Vec2 out         = vec2_sub(player_door, enemy_door);
-            f32  ol          = vec2_length(out);
-            if (ol > 1.0e-3f) kick = vec2_scale(out, UNDOCK_IMPULSE / ol);
-        }
-        if (vec2_length(kick) < 1.0e-3f) kick = Vec2{ 0.0f, -UNDOCK_IMPULSE }; // fallback: shove -Y
-        s->flight.velocity = kick;
-        BS_LOG_INFO("Undocked from enemy hull (connector removed, separation impulse applied).");
-    }
+// Seamlessness: when compression_factor == 1 the rendered position is hierpos_diff(entity,
+// camera_hierpos) and the view subtracts camera.position. Folding `delta` shifts both by -delta,
+// which cancels exactly -> no visible pop. Below the compression threshold cosmetic_compress
+// scales hierpos_diff but not camera.position, so folding would not cancel; we skip the rebase
+// there (stars are sub-pixel at that zoom, so large coordinates are invisible anyway).
+static void galaxy_camera_rebase(game_state* s) {
+    if (compression_factor(s->camera.zoom) < 1.0f) return; // extreme zoom-out: skip (see note)
+    Vec2 delta = s->camera.position;
+    if (delta.x == 0.0f && delta.y == 0.0f) return; // nothing accumulated this frame
+    // Absorb the pan into the hierarchical reference (re-canonicalizes cell + local internally).
+    s->camera_hierpos  = hierpos_add_f64(&s->camera_hierpos, (f64)delta.x, (f64)delta.y,
+                                         BS_HIERPOS_CELL_SIZE);
+    s->camera.position = Vec2{ 0.0f, 0.0f };
+    // Persistent camera-space anchors must shift by the same -delta to stay valid across the
+    // rebase. (system_drag_world is screen-space pixels and is intentionally left untouched.)
+    s->system_drag_cam         = vec2_sub(s->system_drag_cam,         delta);
+    s->map_recenter_from_pos   = vec2_sub(s->map_recenter_from_pos,   delta);
+    s->map_recenter_target_pos = vec2_sub(s->map_recenter_target_pos, delta);
 }
-
-// =====================================================================================
-// Crew Job Panel HUD. A Dear ImGui panel (via the bs_ui_* facade) surfacing the SELECTED crew's
-// job management: the current job + its state + target station + a progress bar, then the queued
-// jobs in execution order each with reorder (^/v) and remove (X) controls, plus Assign/Cancel
-// actions. Immediate-mode: this BUILDS AND PAINTS in one pass, so it runs from game_render
-// (between renderer_begin_frame/end_frame). Shown only while a crew member is selected. Button
-// clicks are collected and applied AFTER the panel closes so a remove/reorder never mutates the
-// queue mid-build. Input gating uses bs_imgui_wants_mouse() — an ImGui window grabs the cursor.
-// =====================================================================================
-// Forward declaration: the panel collects a clicked action and dispatches it through this, which
-// is defined just below the panel (it applies the intent to the crew's job queue).
-static void apply_crew_job_action(game_state* s, UiAction action, i32 param);
-static void build_crew_job_panel(game_state* s) {
-    for (size_t i = 0; i < s->crew.size(); ++i)
-    {
-        const Crew* c = &s->crew[i];
-        // Build the panel for WHICHEVER crew is selected. Use `continue`, not `return`: with the
-        // crew now a vector, an unselected crew earlier in the list (e.g. crew[0]) must be SKIPPED,
-        // not treated as a reason to abort — `return` here meant selecting crew[1+] showed no panel
-        // because crew[0] (unselected) bailed the whole function. At most one crew is selected at a
-        // time (the left-click selector deselects all others), so this builds exactly one panel.
-        if (!c->crew_selected)
-        {
-            continue;
-        }
-
-        // ---- palette (RGBA, matches the retired ui.cpp panel) ----
-        const f32 TITLE[4] = { 0.55f, 0.85f, 1.00f, 1.00f };
-        const f32 TEXT [4] = { 0.86f, 0.90f, 0.96f, 1.00f };
-        const f32 DIM  [4] = { 0.60f, 0.64f, 0.72f, 1.00f };
-
-        // Collect at most one clicked action; dispatch AFTER the panel closes so a remove/reorder
-        // never mutates c->queue while we are still iterating it to build rows.
-        UiAction fired = UI_ACTION_NONE;
-        i32      fired_param = 0;
-
-        // Pinned top-right (the helm HUD owns top-left), auto-sized, 12px margin.
-        if (bs_ui_begin_panel("CREW - JOB CONTROL", BS_UI_ANCHOR_TOP_RIGHT, 12.0f, BsUiType::BS_UI_TYPE_GAME)) {
-            char buf[64];
-
-            // ---- Title ----
-            bs_ui_text_colored(TITLE[0], TITLE[1], TITLE[2], TITLE[3], "CREW - JOB CONTROL");
-            bs_ui_separator();
-
-            // ---- Current active job (the state rides on the progress bar below) ----
-            if (c->has_current)
-                snprintf(buf, sizeof(buf), "Job: %s", job_type_name(c->current.type));
-            else
-                snprintf(buf, sizeof(buf), "Job: Idle");
-            bs_ui_text_colored(TEXT[0], TEXT[1], TEXT[2], TEXT[3], buf);
-
-            // ---- Progress bar for the current job (state + percent centered on the fill) ----
-            f32  prog = crew_job_progress(c);
-            char pbuf[32];
-            if (c->has_current)
-                snprintf(pbuf, sizeof(pbuf), "%s %.0f%%", job_state_label(c->current.state), prog * 100.0f);
-            else
-                snprintf(pbuf, sizeof(pbuf), "--");
-            bs_ui_progress(prog, pbuf);
-
-            // ---- Target station for the current job ----
-            if (c->has_current && c->current.has_target)
-                snprintf(buf, sizeof(buf), "Target: %s (%d,%d)",
-                         job_station_name(c->current.type), c->current.target_col, c->current.target_row);
-            else
-                snprintf(buf, sizeof(buf), "Target: -");
-            bs_ui_text_colored(DIM[0], DIM[1], DIM[2], DIM[3], buf);
-
-            bs_ui_separator();
-
-            // ---- Queue header ----
-            const i32 qn = c->job_count;
-            snprintf(buf, sizeof(buf), "Queue (%d):", qn);
-            bs_ui_text_colored(TITLE[0], TITLE[1], TITLE[2], TITLE[3], buf);
-
-            // ---- Queue rows in EXECUTION order: "i. Job"  [^][v][X] ----
-            // ^ moves the job earlier (disabled on the first), v later (disabled on the last), X removes.
-            // param carries the slot index. Button ids are suffixed "##<i>" so the repeated ^/v/X glyphs
-            // get unique ImGui ids per row (the suffix is hidden from the visible label).
-            const f32 bw = 26.0f;
-            for (i32 i = 0; i < qn; ++i) {
-                char qbuf[48];
-                snprintf(qbuf, sizeof(qbuf), "%d. %s", i + 1, job_type_name(c->queue[i].type));
-                bs_ui_text_colored(TEXT[0], TEXT[1], TEXT[2], TEXT[3], qbuf);
-                bs_ui_same_line();
-
-                char id[8];
-                snprintf(id, sizeof(id), "^##%d", i);
-                if (bs_ui_button_sized(id, bw, (i > 0) ? TRUE : FALSE))      { fired = UI_ACTION_REORDER_UP;   fired_param = i; }
-                bs_ui_same_line();
-                snprintf(id, sizeof(id), "v##%d", i);
-                if (bs_ui_button_sized(id, bw, (i < qn - 1) ? TRUE : FALSE)) { fired = UI_ACTION_REORDER_DOWN; fired_param = i; }
-                bs_ui_same_line();
-                snprintf(id, sizeof(id), "X##%d", i);
-                if (bs_ui_button_sized(id, bw, TRUE))                       { fired = UI_ACTION_REMOVE_JOB;   fired_param = i; }
-            }
-
-            bs_ui_separator();
-
-            // ---- Action buttons (full width, stacked): assign-to-first-helm + cancel current ----
-            if (bs_ui_button("Assign Piloting", TRUE))                       { fired = UI_ACTION_ASSIGN_PILOTING; fired_param = 0; }
-            if (bs_ui_button("Cancel Current Job", c->has_current ? TRUE : FALSE)) { fired = UI_ACTION_CANCEL_CURRENT; fired_param = 0; }
-        }
-
-        bs_ui_end_panel(); // ALWAYS paired with begin_panel, even when it returned FALSE
-
-        // Dispatch the collected click now that the panel is closed and queue iteration is done.
-        if (fired != UI_ACTION_NONE)
-            apply_crew_job_action(s, fired, fired_param);
-        
-    }
-}
-
-// Apply a Crew Job Panel button click to the selected crew. `param` is the queue slot (for the
-// per-row reorder/remove buttons) or 0 (for the global Assign/Cancel actions). This is the bridge
-// from UI intents to crew_jobs.* queue operations — the mirror of the Shift+Right-Click assign path.
-static void apply_crew_job_action(game_state* s, UiAction action, i32 param) {
-
-    for (size_t i = 0; i < s->crew.size(); ++i)
-    {
-        Crew* c = &s->crew[i];
-        // Apply the panel action ONLY to the selected crew. The panel is built for the selected
-        // crew, so its button clicks must target that same crew — without this guard the action
-        // (assign/cancel/reorder/remove) would be applied to EVERY crew in the vector.
-        if (!c->crew_selected)
-            continue;
-
-        switch (action) {
-            case UI_ACTION_ASSIGN_PILOTING: {
-                // Convenience: enqueue a TARGET-LESS Piloting job; the runner resolves it to the ship's
-                // first helm (job_station_tile). The primary flow is Shift+Right-Click on a helm tile.
-                Job job{};
-                job.type     = JOB_PILOTING;
-                job.priority = 0;
-                // Brace both branches: BS_LOG_* macros carry a trailing ';', so a bare if/else here
-                // would expand to a double-semicolon empty statement and orphan the else.
-                if (crew_enqueue_job(c, job)) {
-                    BS_LOG_INFO("panel: assigned Piloting (first helm) -> %d queued", c->job_count);
-                } else {
-                    BS_LOG_WARN("panel: crew job queue full; assign ignored");
-                }
-            } break;
-            case UI_ACTION_REMOVE_JOB:     crew_remove_job(c, param);       break;
-            case UI_ACTION_REORDER_UP:     crew_reorder_job(c, param, -1);  break;
-            case UI_ACTION_REORDER_DOWN:   crew_reorder_job(c, param, +1);  break;
-            case UI_ACTION_CANCEL_CURRENT: {
-                // Interrupt the in-flight job: drop it, halt movement, and clear the pilot flag. The
-                // runner then dispatches the next queued job (or stays idle if the queue is empty).
-                if (c->has_current) {
-                    c->has_current     = FALSE;
-                    c->current         = Job{};
-                    c->current.type    = JOB_NONE;
-                    c->is_active_pilot = FALSE;
-                    c->path_len        = 0; // stop walking toward the cancelled job's station
-                    c->path_idx        = 0;
-                    BS_LOG_INFO("panel: cancelled current job");
-                }
-            } break;
-            default: break;
-        }
-    }
-}
-
-static b8 crew_is_piloting(const game_state* s){
-    for (const auto& c : s->crew)
-        if (c.is_active_pilot) return TRUE;
-    return FALSE;
-}
-
-// Wrap an angle (radians) into (-PI, PI] — the shortest signed rotation equivalent to `a`.
-// ship->angle is integrated unbounded (simulate_ship never reduces it mod 2*PI), so after the
-// pilot spins the hull a few revolutions it can be many multiples of 2*PI. Rotations are
-// 2*PI-periodic, so R(wrap(a)) == R(a) — wrapping changes nothing the renderer or mouse-pick
-// sees in a SETTLED frame. It only matters when the value is INTERPOLATED: the local<->global
-// camera lerps rotation from 0 toward this heading across the zoom cross-fade, and an unwrapped
-// multi-turn angle makes that lerp unwind every accumulated revolution (a ~360*N spin) instead
-// of righting the view by the shortest arc. Wrap at the interpolation seam to kill that.
-static f32 wrap_angle(f32 a) {
-    a = fmodf(a + BS_PI, 2.0f * BS_PI);   // shift origin to PI so fmod lands in (-2PI, 2PI)
-    if (a < 0.0f) a += 2.0f * BS_PI;      // fmodf keeps the sign of the dividend -> fold negatives up
-    return a - BS_PI;                     // shift back: result in (-PI, PI]
-}
-
 b8 game_update(Game* game_inst, f32 dt) {
     game_state* s = (game_state*)game_inst->state;
     if (!s) return TRUE;
-
     if (dt > 0.05f) dt = 0.05f; // clamp hitches
-
-    update_zoom_and_mode(s, dt);
-
-    // Docking state machine (Phase 2): refresh the per-frame eligibility readout (airlocks aligned?)
-    // and process a T-key edge to latch/unlatch the mechanical join. Runs BEFORE simulate_ship so a
-    // dock latched this frame zeroes the player's velocity before the integrator moves the hull off
-    // the mating pose. enemy_docked (the latch) then gates enemy-interior visibility (game_render)
-    // and the collision skip (resolve_ship_collision); dock_eligible drives the HUD prompt.
-    update_docking(s);
-
-    // The Crew Job Panel is now immediate-mode ImGui: it is BUILT, resolved, and dispatched in one
-    // pass from game_render (build_crew_job_panel). Input gating reads bs_imgui_wants_mouse()
-    // directly (live ImGui focus state), so no UI pre-pass is needed here in update.
-
-    // CONTROL is mode-gated AND, in global mode, PILOT-gated. Local mode commands the crew. Global
-    // mode pilots the ship's thrusters — but ONLY when a crew member is actively manning the helm
-    // (crew.is_active_pilot). With the helm UNMANNED — no pilot assigned, or the pilot was ordered
-    // away / demoted off the helm — the flight controls are dead: WASD/Q/E/C have no authority.
-    // This is the Phase 4 flight gate. Note SIMULATION still runs unconditionally below
-    // (simulate_ship), so an unmanned ship keeps COASTING on its existing momentum and any residual
-    // spin auto-stabilizes — losing the pilot removes thrust authority, it does not slam the brakes.
-    // Piloting reports whether a turn is actively commanded this frame; whenever control_ship_global
-    // is skipped (local mode, or global with no pilot) turn_commanded stays FALSE and the simulator
-    // auto-stabilizes any carried-over spin.
-    b8 turn_commanded = FALSE;
-    if (s->mode == MODE_LOCAL) {
-        update_crew_command(s, dt);
-    } else if (crew_is_piloting(s) && !s->enemy_docked) {
-        // Flight authority requires a manned helm AND an unmated ship. While DOCKED the hulls are
-        // rigidly joined at the airlock, so thrust is locked out — otherwise a manned helm could
-        // drive the ship off the mating pose (collision is disabled while docked, so nothing would
-        // stop it drifting free). Press T to undock first; that restores thrust + normal collision.
-        turn_commanded = control_ship_global(s, dt);
+    f32 sim_dt = dt * s->time_scale;
+    if (sim_dt > 0.05f) sim_dt = 0.05f; // still clamp scaled hitches
+    // ---- Encounter detection: blob merge ------------------------------------------------
+    {
+        f32 threshold = s->metaball_threshold;
+        if (threshold < 1.0e-4f) threshold = 1.0e-4f;
+        f32 radius_factor = s->metaball_radius_factor;
+        f32 r_player = ship_bounding_radius(&s->player_ship()) * radius_factor;
+        f32 r_enemy  = ship_bounding_radius(&s->enemy_ship) * radius_factor;
+        f32 reach_p = r_player / sqrtf(threshold);
+        f32 reach_e = r_enemy  / sqrtf(threshold);
+        Vec2 delta = vec2_sub(s->player_ship().origin, s->enemy_ship.origin);
+        f32 dist   = vec2_length(delta);
+        b8 blobs_merged = (dist < reach_p + reach_e);
+        if (blobs_merged && !s->encounter_active && s->encounter_can_retrigger) {
+            s->encounter_active = TRUE;
+            s->encounter_can_retrigger = FALSE;
+            s->time_scale = 0.0f; // pause on encounter
+            action_log_push(s, "Encounter detected! Enemy ship nearby.");
+        }
+        if (!blobs_merged && !s->encounter_active) {
+            // Ships separated far enough -- allow re-trigger next approach.
+            s->encounter_can_retrigger = TRUE;
+        }
+        s->encounter_was_active = s->encounter_active;
     }
-
-    // SIMULATION runs EVERY frame in BOTH modes. The crew keeps walking its ordered path and
-    // the ship keeps coasting through space regardless of which one you're currently driving,
-    // so an ordered crew member traverses the decks while you zoom out and fly. Looking
-    // inside (or piloting) doesn't stop the world. The spin stabilizer lives in simulate_ship
-    // (gated by turn_commanded) so a turn started in global mode still settles after a zoom-in.
-    //
-    // The job runner advances the crew's autonomous work BEFORE the motion sim: it issues the
-    // crew's A* path (which simulate_crew then steers along) and maintains is_active_pilot. It
-    // also runs in both modes, so a crew keeps heading to / manning its station while you fly.
-    crew_update_jobs(s, s->crew, dt);
-    simulate_crew(s, dt);
-
-    // TIER 3 — deadlock resolution. Runs AFTER simulate_crew, which has just refreshed every
-    // crew's block_timer (how long a PEER has been physically vetoing its motion). For anyone
-    // stuck too long this replans a detour around the blockers, else makes the lower-priority
-    // agent briefly yield so the higher-priority one passes, else aborts a hopeless order — so
-    // the per-frame gate (which guarantees no overlap) can never harden into a permanent freeze.
-    crew_resolve_deadlocks(s, dt);
-
-    // Cross-ship seam handoff (Phase 3): any crew that just finished leg A of a board order AT its
-    // airlock-interior tile hops the mated seam onto the boarded hull (flips ship_id, re-roots local
-    // position to the landfall tile, plans leg B). Runs AFTER simulate_crew + the deadlock resolver
-    // so it reads the settled end-of-frame arrival state, and BEFORE simulate_ship so the hop lands
-    // before the pose integrates. No-op for any crew not mid-board.
-    update_crew_handoff(s, dt);
-
-    simulate_ship(s, dt, turn_commanded);
-
-    // Ship-ship collision response runs immediately AFTER the pose is integrated, so any
-    // penetration introduced by this frame's motion is corrected before anything else (camera,
-    // render, next-frame docking handshake) reads the pose. Pushes the player out of the immovable
-    // enemy hull and cancels inward velocity — precise, no phasing. No-op while docked.
-    resolve_ship_collision(s);
-
-    // Camera follows the free-roam local FOCUS (local) or the whole ship (global); lerp
-    // position by the cross-fade factor so the view glides as the mode flips. The focus lives
-    // in ship-local space, so it rides the ship's full pose; on zoom-out the target eases to
-    // the ship origin (global view) and the hand-off still glides.
-    Vec2 cam_local  = ship_local_to_world(&s->ship, s->cam_focus_local);
-    Vec2 cam_global = s->ship.origin;
-    s->camera.position = vec2_add(cam_local,
-                                  vec2_scale(vec2_sub(cam_global, cam_local), s->roof_alpha));
-
-    // Camera heading: in local mode cancel the ship's heading so the interior reads upright
-    // (the view is screen-aligned, like looking down at a fixed room); in global mode hold
-    // world-up so the ship rotates within a fixed world (Starsector campaign view). Interpolate
-    // across the cross-fade so the scene smoothly rights itself as you zoom. Interior and roof
-    // are drawn at the SAME world pose, so they stay perfectly aligned at every blend fraction.
-    // (The mouse pick uses this exact rotation, so clicks track the drawn tiles.)
-    //
-    // wrap_angle is ESSENTIAL here: ship.angle accumulates unbounded, so after a full revolution
-    // (>=360 deg) the raw value is ~2*PI+. Interpolating camera.rotation from 0 (global) toward an
-    // unwrapped multi-turn angle on zoom-in unwinds every accumulated turn — the abrupt ~360 deg
-    // camera spin near a full rotation. Wrapping to (-PI, PI] feeds the SHORTEST-arc equivalent,
-    // so the view rights itself the short way. R() is 2*PI-periodic, so the settled local
-    // orientation and the mouse-pick transform are bit-identical to the unwrapped value.
-    s->camera.rotation = wrap_angle(s->ship.angle) * (1.0f - s->roof_alpha);
+    s->galaxy_map_time += sim_dt;
+    // ---- SHIFT key: toggle alternative mouse-follow movement system in global mode -----------
+    if (input_is_key_down(KEY_LSHIFT) && !input_was_key_down(KEY_LSHIFT) && s->mode == MODE_GLOBAL && !s->free_camera_active) {
+        s->alt_movement_active = !s->alt_movement_active;
+        if (s->alt_movement_active)
+            action_log_push(s, "Alternative movement system activated.");
+        else
+            action_log_push(s, "Alternative movement system deactivated.");
+    }
+    // ---- M key: toggle between global mode and system view (Slice 1 prototype) ---------------
+    if (input_is_key_down(KEY_M) && !input_was_key_down(KEY_M)) {
+        if (s->mode != MODE_SYSTEM) {
+            s->mode = MODE_SYSTEM;
+            s->current_system = find_system_by_cell(&s->map_entities[0].galaxy_pos, &s->galaxy_voronoi, s->systems);
+            // Floating-origin camera: anchor to the ship's galaxy position so the map starts centered on the player.
+            s->camera_hierpos = s->map_entities[0].galaxy_pos;
+            s->camera.position = Vec2{ 0.0f, 0.0f }; // ship at exact render-local center
+            // Start at the same zoom the P-key recenter animation targets (0.20f).
+            s->camera.zoom = 0.20f;
+            action_log_push(s, "'M' key pressed - system mode entered, this is your map !");
+        } else {
+            s->mode = MODE_GLOBAL;
+            s->camera.zoom     = ZOOM_START;
+            s->camera.position = piloted_ship_origin(s);
+            // Parallax layer tracks current system.
+            {
+                ParallaxLayer* pl = s->global_background.layers[2];
+                if (pl) {
+                    MappedSystemLayer* msl = (MappedSystemLayer*)pl;
+                    msl->on_system_changed(s->current_system);
+                }
+            }
+            action_log_push(s, "'M' key pressed - global mode entered");
+        }
+    }
+    // ---- P key: free camera toggle in global mode ----------------------------------------
+    if (input_is_key_down(KEY_P) && !input_was_key_down(KEY_P) && s->mode == MODE_GLOBAL) {
+        if (!s->free_camera_active) {
+            s->free_camera_active = TRUE;
+            s->free_camera_pos    = s->camera.position;
+            action_log_push(s, "Free camera active.");
+        } else {
+            s->free_camera_active = FALSE;
+            s->camera.position    = piloted_ship_origin(s);
+            action_log_push(s, "Free camera disabled.");
+        }
+    }
+    // ---- P key: recenter camera on player ship in system view ----------------------------
+    if (input_is_key_down(KEY_P) && !input_was_key_down(KEY_P) && s->mode == MODE_SYSTEM) {
+        s->map_recentering        = TRUE;
+        s->map_recenter_t           = 0.0f;
+        action_log_push(s, "'P' key pressed - camera recentering on player ship");
+        s->map_recenter_from_pos    = s->camera.position;
+        s->map_recenter_from_zoom   = s->camera.zoom;
+        Vec2 ship_rel = hierpos_diff(&s->map_entities[0].galaxy_pos, &s->camera_hierpos, BS_HIERPOS_CELL_SIZE);
+        s->map_recenter_target_pos  = ship_rel; // camera.position == ship_rel puts ship at screen center
+    }
+    // Cache which system the ship is in (always updated for gameplay logic).
+    s->current_system = find_system_by_cell(&s->map_entities[0].galaxy_pos, &s->galaxy_voronoi, s->systems);
+    update_zoom_and_mode(s, dt);
+    // EDIT MODE: click-to-select, drag-to-reposition ships and lights. While active, the flight
+    // simulation is suspended so dragging the player ship doesn't fight the integrator.
+    update_edit_mode(s);
+    // CONTROL: in global mode, WASD/Q/E pilot the ship directly. In system mode, no ship control.
+    // turn_commanded reports whether a turn is actively commanded this frame; when FALSE the
+    // simulator auto-stabilizes any carried-over spin.
+    b8 turn_commanded = FALSE;
+    // The manually-piloted fleet member (defaults to the flagship). Clamped to a valid index.
+    i32 piloted_idx = s->rts_controls.piloted_index();
+    if (piloted_idx < 0 || piloted_idx >= s->fleet.count()) piloted_idx = 0;
+    if (s->edit_mode_active) {
+        // Editing: freeze ALL fleet flight so dragged poses stay put. Kill residual velocity so
+        // ships don't drift the instant edit mode is switched off.
+        for (i32 i = 0; i < s->fleet.count(); ++i) {
+            s->fleet.at(i).flight.velocity = Vec2{ 0.0f, 0.0f };
+            s->fleet.at(i).flight.angular_velocity = 0.0f;
+        }
+        // ---- Edit-mode camera panning --------------------------------------------------------
+        // WASD pans the camera so the user can navigate around while placing/moving entities.
+        // Middle-mouse drag also pans (same screen-space logic as system view).
+        f32 pan_speed = EDIT_PAN_SPEED * dt;
+        Vec2 pan = Vec2{ 0.0f, 0.0f };
+        if (input_is_key_down(KEY_W)) pan.y += pan_speed;
+        if (input_is_key_down(KEY_S)) pan.y -= pan_speed;
+        if (input_is_key_down(KEY_A)) pan.x -= pan_speed;
+        if (input_is_key_down(KEY_D)) pan.x += pan_speed;
+        s->camera.position = vec2_add(s->camera.position, pan);
+        // Middle-mouse drag: screen-space delta -> world delta (no live-camera feedback loop).
+        if (!input_is_button_down(BUTTON_MIDDLE)) {
+            s->map_drag_needs_fresh_press = FALSE;
+        }
+        if (!s->map_drag_needs_fresh_press && input_is_button_down(BUTTON_MIDDLE)) {
+            if (!input_was_button_down(BUTTON_MIDDLE)) {
+                s->system_drag_cam = s->camera.position;
+                i32 mx, my;
+                input_get_mouse_position(&mx, &my);
+                s->system_drag_world = Vec2{ (f32)mx, (f32)my };
+            } else {
+                i32 mx, my;
+                input_get_mouse_position(&mx, &my);
+                Vec2 screen_delta = Vec2{ (f32)mx - s->system_drag_world.x,
+                                          (f32)my - s->system_drag_world.y };
+                Vec2 world_delta = Vec2{ screen_delta.x / s->camera.zoom,
+                                        -screen_delta.y / s->camera.zoom };
+                s->camera.position = vec2_sub(s->system_drag_cam, world_delta);
+            }
+        }
+    } else if (s->travel_enabled && s->travel.active) {
+        // Travel mode: flagship is on rails. Flight controls are overridden.
+        if (!s->travel_paused)
+            travel_update(&s->travel, sim_dt);
+        s->player_ship().origin    = hierpos_to_vec2(&s->travel.current, BS_HIERPOS_CELL_SIZE);
+        s->player_flight().velocity = Vec2{ 0.0f, 0.0f };
+    } else if (s->mode == MODE_GLOBAL) {
+        // Pilot the manually-controlled fleet member directly.
+        FleetShip* pf = &s->fleet.at(piloted_idx);
+        Ship* psh = &pf->ship;
+        turn_commanded = control_ship_global(s, pf, sim_dt);
+        // ---- Weapon firing (left click, gated on ImGui not owning the cursor) ------------
+        if (!s->edit_mode_active && !s->free_camera_active && !bs_imgui_wants_mouse()) {
+            // weapon slot switching: 1-4
+            if (input_is_key_down(KEY_NUM1) && !input_was_key_down(KEY_NUM1)) {
+                if (psh->weapon_count > 0) psh->active_weapon_idx = 0;
+            }
+            if (input_is_key_down(KEY_NUM2) && !input_was_key_down(KEY_NUM2)) {
+                if (psh->weapon_count > 1) psh->active_weapon_idx = 1;
+            }
+            if (input_is_key_down(KEY_NUM3) && !input_was_key_down(KEY_NUM3)) {
+                if (psh->weapon_count > 2) psh->active_weapon_idx = 2;
+            }
+            if (input_is_key_down(KEY_NUM4) && !input_was_key_down(KEY_NUM4)) {
+                if (psh->weapon_count > 3) psh->active_weapon_idx = 3;
+            }
+            // left click -> fire active weapon toward mouse cursor
+            if (input_is_button_down(BUTTON_LEFT) && !input_was_button_down(BUTTON_LEFT)) {
+                if (psh->active_weapon_idx >= 0 && psh->active_weapon_idx < psh->weapon_count) {
+                    Weapon* w = psh->weapons[psh->active_weapon_idx];
+                    if (w) {
+                        Vec2 mw = mouse_world(s);
+                        Vec2 dir = vec2_sub(mw, psh->origin);
+                        w->fire(psh->origin, dir, pf->flight.velocity, &s->projectiles);
+                    }
+                }
+            }
+        }
+    }
+    // ---- Update weapons (cooldowns) -----------------------------------------------------
+    for (i32 i = 0; i < s->fleet.count(); ++i) {
+        Ship& sh = s->fleet.at(i).ship;
+        for (i32 w = 0; w < sh.weapon_count; ++w)
+            if (sh.weapons[w]) sh.weapons[w]->update(sim_dt);
+    }
+    for (i32 i = 0; i < s->enemy_ship.weapon_count; ++i) {
+        if (s->enemy_ship.weapons[i]) s->enemy_ship.weapons[i]->update(sim_dt);
+    }
+    // ---- RTS controls update (orders, selection, hover) --------------------------------
+    s->rts_controls.update(sim_dt);
+    if (!s->edit_mode_active) {
+        // AUTOPILOT: drive ordered ships toward their targets. Skip the manually-piloted ship
+        // unless the camera is detached (free camera), in which case every ship obeys orders.
+        i32 auto_skip = s->free_camera_active ? -1 : piloted_idx;
+        s->fleet.update_autopilot(s, sim_dt, auto_skip);
+        // SIMULATION: integrate every fleet ship's pose. The piloted ship uses turn_commanded;
+        // the rest auto-stabilize residual spin.
+        s->fleet.simulate_all(sim_dt, turn_commanded, piloted_idx);
+        // Ship-ship collision response runs immediately AFTER the poses are integrated.
+        resolve_ship_collision(s);
+    }
+    // ---- Sync combat entity positions / velocities from their ships --------------------
+    for (i32 i = 0; i < s->combat_entity_count; ++i) {
+        CombatEntity* ce = &s->combat_entities[i];
+        if (!ce->active || !ce->ship) continue;
+        Vec2 prev_pos = ce->position;
+        ce->position = ce->ship->origin;
+        ShipFlight* fl = s->fleet.flight_for_ship(ce->ship);
+        if (fl) {
+            ce->velocity = fl->velocity;
+        } else if (sim_dt > 0.0001f) {
+            // Derive velocity from position change for ships that don't have a flight state.
+            ce->velocity = vec2_scale(vec2_sub(ce->position, prev_pos), 1.0f / sim_dt);
+        }
+    }
+    // ---- Update projectiles -------------------------------------------------------------
+    s->projectiles.update(sim_dt);
+    // ---- Projectile vs combat entity collision ------------------------------------------
+    for (i32 pi = 0; pi < MAX_PROJECTILES; ++pi) {
+        Projectile* p = &s->projectiles.pool[pi];
+        if (!p->active) continue;
+        for (i32 ci = 0; ci < s->combat_entity_count; ++ci) {
+            CombatEntity* ce = &s->combat_entities[ci];
+            if (!ce->active) continue;
+            if (ce->faction == p->owner) continue; // don't hit own faction
+            f32 dx = ce->position.x - p->position.x;
+            f32 dy = ce->position.y - p->position.y;
+            f32 dist2 = dx * dx + dy * dy;
+            f32 rr = ce->radius + p->radius;
+            if (dist2 < rr * rr) {
+                b8 hit = TRUE;
+                if (ce->ship) {
+                    Vec2 corners[SHIP_MAX_COLLIDER_VERTS];
+                    if (ship_collider_corners(ce->ship, corners)) {
+                        hit = point_in_polygon(p->position, corners, ce->ship->collider_count);
+                    }
+                }
+                if (hit) {
+                    p->active = FALSE;
+                    --s->projectiles.count;
+                    break; // projectile can only hit one entity
+                }
+            }
+        }
+    }
+    // ---- Sync world entities to galaxy map --------------------------------------------
+    // Rebuild the generic map entity list every frame so any world object with a Vec2 position
+    // can appear on the galaxy map. Future entities (stations, asteroids, resources) add here.
+    s->map_entity_count = 0;
+    // Player ship (index 0 -- animated quad is drawn around this entry)
+    if (s->map_entity_count < MAX_MAP_ENTITIES) {
+        s->map_entities[s->map_entity_count++] = MapEntity{
+            world_to_galaxy_pos(s->player_ship().origin),
+            bs_color{ 1.0f, 1.0f, 1.0f, 1.0f }, 12.0f, TRUE, "Player Ship" };
+    }
+    // Enemy ship
+    if (s->map_entity_count < MAX_MAP_ENTITIES) {
+        s->map_entities[s->map_entity_count++] = MapEntity{
+            world_to_galaxy_pos(s->enemy_ship.origin),
+            bs_color{ 1.0f, 0.3f, 0.3f, 1.0f }, 10.0f, FALSE, "Enemy Ship" };
+    }
+    // Camera follows the ship origin (global) or the galaxy map (system).
+    if (s->mode == MODE_SYSTEM) {
+        // ---- Recenter animation (P key) --------------------------------------------------
+        if (s->map_recentering) {
+            s->map_recenter_t += dt / 0.80f; // ~0.8 second duration
+            if (s->map_recenter_t > 1.0f) s->map_recenter_t = 1.0f;
+            f32 t = s->map_recenter_t;
+            f32 eased = t * t * (3.0f - 2.0f * t); // smoothstep
+            s->camera.position = vec2_add(s->map_recenter_from_pos,
+                                           vec2_scale(vec2_sub(s->map_recenter_target_pos, s->map_recenter_from_pos), eased));
+            s->camera.zoom = s->map_recenter_from_zoom + (0.20f - s->map_recenter_from_zoom) * eased;
+            if (t >= 1.0f) {
+                s->camera_hierpos  = s->map_entities[0].galaxy_pos;
+                s->camera.position = Vec2{ 0.0f, 0.0f };
+                s->map_recentering = FALSE;
+                s->map_input_cooldown = 1.5f; // freeze pan/drag for 1.5s after re-anchor
+                s->map_drag_needs_fresh_press = TRUE; // require fresh middle-mouse press before next drag
+            }
+        } else {
+            // Decrement input cooldown each frame.
+            if (s->map_input_cooldown > 0.0f) {
+                s->map_input_cooldown -= dt;
+                if (s->map_input_cooldown < 0.0f) s->map_input_cooldown = 0.0f;
+            }
+            // System view: WASD pans the camera in world space (no ship tracking).
+            if (s->map_input_cooldown <= 0.0f) {
+                Vec2 pan = read_wasd_dir();
+                if (pan.x != 0.0f || pan.y != 0.0f) {
+                    s->camera.position = vec2_add(s->camera.position, vec2_scale(pan, 1200.0f * dt));
+                }
+            }
+            // Middle-mouse drag panning: click-hold scroll button and move mouse to pan.
+            // Uses SCREEN-SPACE delta (constant zoom) to avoid the feedback loop that
+            // mouse_world(s) creates: it reads the live camera, which changes every frame.
+            //
+            // After a recenter (P key), the user must release and re-press middle mouse
+            // before a new drag starts; this prevents stale drag anchors from snapping the
+            // camera after the floating-origin re-anchors to the ship.
+            if (!input_is_button_down(BUTTON_MIDDLE)) {
+                s->map_drag_needs_fresh_press = FALSE; // user released -- next press is fresh
+            }
+            if (s->map_input_cooldown <= 0.0f &&
+                !s->map_drag_needs_fresh_press &&
+                input_is_button_down(BUTTON_MIDDLE)) {
+                if (!input_was_button_down(BUTTON_MIDDLE)) {
+                    // Start drag: record camera position and the screen pixel position.
+                    s->system_drag_cam = s->camera.position;
+                    i32 mx, my;
+                    input_get_mouse_position(&mx, &my);
+                    s->system_drag_world = Vec2{ (f32)mx, (f32)my }; // screen anchor
+                } else {
+                    // Continue drag: screen delta -> world delta (zoom only, no live camera).
+                    i32 mx, my;
+                    input_get_mouse_position(&mx, &my);
+                    Vec2 screen_delta = Vec2{ (f32)mx - s->system_drag_world.x,
+                                              (f32)my - s->system_drag_world.y };
+                    Vec2 world_delta = Vec2{ screen_delta.x / s->camera.zoom,
+                                            -screen_delta.y / s->camera.zoom };
+                    s->camera.position = vec2_sub(s->system_drag_cam, world_delta);
+                }
+            }
+        }
+        // Floating-origin: fold this frame's pan into the hierarchical reference so on-screen
+        // geometry is always rendered near the origin in f32 (prevents dashed far-system circles).
+        galaxy_camera_rebase(s);
+        s->camera.rotation = 0.0f;
+    } else {
+        // Global mode: camera tracks the ship origin, world-up orientation.
+        // While edit mode is active, the camera stays fixed so the user can freely
+        // reposition the ship by dragging it across the screen.
+        if (!s->free_camera_active && !s->edit_mode_active) {
+            s->camera.position = piloted_ship_origin(s);
+        }
+        s->camera.rotation = 0.0f;
+    }
+    // ---- Orbital motion (always simulated, only visible in system view) --------------------
+    for (i32 sys = 0; sys < s->system_count; ++sys) {
+        update_planet_positions(&s->systems[sys], sim_dt);
+    }
     return TRUE;
 }
-
 // =====================================================================================
 // Render.
 // =====================================================================================
-// Draw a single ship tile at its true WORLD pose. ship_tile_center_world applies the full
-// pose (origin AND angle), and the quad itself is spun by `ship->angle`, so the whole tilemap
-// renders as one rigid body. Interior tiles and roof tiles use the SAME pose, so they overlap
-// exactly during the zoom cross-fade. In local mode the camera counter-rotates by the heading,
-// which cancels this spin and presents the interior upright on screen. Mirrors
-// renderer_draw_quad's conventions (white texture, alpha blend when translucent).
-// Draw a contiguous horizontal RUN of tiles [col0..col1] on `row` as ONE stretched quad. This is the
-// sprite-count optimization: a 73-wide roof row becomes 1 sprite instead of 73. It is PIXEL-EXACT vs.
-// drawing each tile separately — every tile in the run shares the ship's one rigid pose, so the run's
-// world quad is just a single tile quad widened to the run length and re-centered on the run midpoint
-// (same rotation, same edges). Mirrors draw_world_tile's conventions (white texture, alpha blend when
-// translucent). Pass col0==col1 to draw a single tile.
-static void draw_tile_span(const Ship* ship, i32 col0, i32 col1, i32 row, bs_color col_color, u32 layer, TileType t) {
-    i32  n        = col1 - col0 + 1;
-    Vec2 c0       = ship_tile_center_local(ship, col0, row);
-    Vec2 c1       = ship_tile_center_local(ship, col1, row);
-    Vec2 mid_loc  = Vec2{ (c0.x + c1.x) * 0.5f, c0.y }; // run center in ship-local space
-    bs_sprite s{};
-    s.position = ship_local_to_world(ship, mid_loc);
-    s.size     = Vec2{ ship->tile_size * (f32)n, ship->tile_size };
-    s.origin   = Vec2{ 0.5f, 0.5f };
-    s.rotation = ship->angle;
-    s.uv       = bs_rect{ 0.0f, 0.0f, 1.0f, 1.0f };
-    s.tint     = col_color;
-    s.texture  = bs_texture{ };
-    switch (t)
-    {
-    case TILE_WALL: {
-        s.texture = ship->curr_wall_texture; 
-        break;
-    }
-    case TILE_HULL:{
-        s.texture = ship->curr_hull_texture; 
-        break;
-    }
-    case TILE_HULL_WINDOW:{
-        s.texture = ship->curr_window_texture; 
-        break;
-    }
-    case TILE_HULL_DOOR:
-        s.texture = ship->curr_door_texture;
-        break;
-
-    default:
-        break;
-    }
-    s.blend    = (col_color.a < 0.999f) ? BLEND_ALPHA : BLEND_NONE;
-    s.layer    = layer;
-    renderer_draw_sprite(&s);
-}
-
-// Draw one ship's TILES for the current cross-fade — interior (floors/walls) at `interior_a` and/or
-// the solid roof silhouette at `roof_a`. Pulled out of game_render so EVERY hull (player + enemy)
-// renders through the exact same pose-aware, cross-faded path: interior tiles via color_for_tile,
-// roof as one `roof_tint` silhouette over every structure tile. Crew/path/selection overlays are
-// NOT here — those are player-only and stay in game_render. `roof_tint` lets each faction get a
-// distinct roof color later (the combat seam); pass ROOF_COLOR for the neutral grey today.
-//
-// SPRITE-COUNT OPTIMIZATION (so a 73x151 = 9165-tile hull fits the 16384 sprite cap): instead of one
-// quad per tile, two cheap reductions, BOTH pixel-exact (a hull rides one rigid pose, so a row of
-// tiles is collinear and a merged quad covers the same pixels as the per-tile quads):
-//   1. CULL — `cam_center`/`vis_r` describe the camera's world-space visible circle (half-screen
-//      diagonal in world units, rotation-invariant). A whole hull whose bounding circle misses it is
-//      skipped outright (the default off-screen enemy costs 0 sprites); individual off-screen tiles
-//      are skipped too, so zoomed-in framing only pays for the visible band.
-//   2. RUN-MERGE — each row's contiguous same-key tiles collapse to ONE stretched quad (draw_tile_span):
-//      the roof merges runs of structure tiles; the interior merges runs of identical TileType (same
-//      type => same color+layer+blend => merge is exact). A full 73-wide roof row: 73 quads -> 1.
-static void draw_ship_tiles(const Ship* ship, f32 interior_a, f32 roof_a, bs_color roof_tint,
-                            Vec2 cam_center, f32 vis_r) {
-    // --- Broad phase: skip the whole hull if its bounding circle can't reach the visible circle. ---
-    f32  reach = vis_r + ship_bounding_radius(ship);
-    Vec2 d     = vec2_sub(ship->origin, cam_center);
-    if (d.x * d.x + d.y * d.y > reach * reach) return;
-    f32 vis_r2 = vis_r * vis_r;
-
-    if (interior_a > 0.001f) {
-        for (i32 row = 0; row < ship->rows; ++row) {
-            i32 col = 0;
-            while (col < ship->cols) {
-                TileType t = ship_tile_at(ship, col, row);
-                // Skip empty tiles and tiles whose center falls outside the visible circle.
-                Vec2 wc = ship_tile_center_world(ship, col, row);
-                f32  dx = wc.x - cam_center.x, dy = wc.y - cam_center.y;
-                if (t == TILE_EMPTY || dx * dx + dy * dy > vis_r2) { ++col; continue; }
-                // Greedy run of identical, on-screen tiles -> one stretched quad.
-                i32 start = col;
-                ++col;
-                while (col < ship->cols && ship_tile_at(ship, col, row) == t) {
-                    Vec2 wc2 = ship_tile_center_world(ship, col, row);
-                    f32  ex = wc2.x - cam_center.x, ey = wc2.y - cam_center.y;
-                    if (ex * ex + ey * ey > vis_r2) break;
-                    ++col;
-                }
-                bs_color cc = color_for_tile(t);
-                cc.a *= interior_a;
-                u32 layer = (t == TILE_WALL || t == TILE_HULL || t == TILE_HULL_WINDOW || t == TILE_HULL_DOOR) ? LAYER_WALL : LAYER_FLOOR;
-                draw_tile_span(ship, start, col - 1, row, cc, layer, t);
-            }
-        }
-    }
-    if (roof_a > 0.001f) {
-        bs_color rc = roof_tint;
-        rc.a *= roof_a;
-        for (i32 row = 0; row < ship->rows; ++row) {
-            i32 col = 0;
-            while (col < ship->cols) {
-                Vec2 wc = ship_tile_center_world(ship, col, row);
-                f32  dx = wc.x - cam_center.x, dy = wc.y - cam_center.y;
-                if (!ship_tile_is_structure(ship, col, row) || dx * dx + dy * dy > vis_r2) { ++col; continue; }
-                // Greedy run of contiguous, on-screen structure tiles -> one silhouette quad.
-                i32 start = col;
-                ++col;
-                while (col < ship->cols && ship_tile_is_structure(ship, col, row)) {
-                    Vec2 wc2 = ship_tile_center_world(ship, col, row);
-                    f32  ex = wc2.x - cam_center.x, ey = wc2.y - cam_center.y;
-                    if (ex * ex + ey * ey > vis_r2) break;
-                    ++col;
-                }
-                draw_tile_span(ship, start, col - 1, row, rc, LAYER_ROOF, TileType::TILE_EMPTY); // roof_tint silhouette over structure tiles
-            }
+static void draw_ship_visual(const Ship* ship, f32 alpha, bs_math::Vec3 light_dir) {
+    if (!ship || alpha <= 0.001f) return;
+    for (i32 i = 0; i < ship->visual.layer_count; ++i) {
+        const VisualLayer& vl = ship->visual.layers[i];
+        if (vl.kind == VIS_LAYER_SPRITE) {
+            if (!vl.texture.id) continue;
+            bs_sprite sp{};
+            sp.position = ship_local_to_world(ship, vl.offset_local);
+            sp.size     = ship->visual.size_local;
+            sp.origin   = Vec2{ 0.5f, 0.5f };
+            sp.rotation = ship->angle;
+            sp.uv       = bs_rect{ 0.0f, 0.0f, 1.0f, 1.0f };
+            sp.tint          = bs_color{ 1.0f, 1.0f, 1.0f, alpha };
+            sp.texture       = vl.texture;
+            sp.blend         = BLEND_ALPHA;
+            sp.layer         = LAYER_SHIP + vl.z;
+            sp.custom        = bs_color{ 1.0f, 0.0f, 0.0f, 0.0f };
+            sp.glow_override = &ship->glow;
+            renderer_draw_sprite(&sp);
+        } else if (vl.kind == VIS_LAYER_MAPPED) {
+            if (!vl.texture.id || !vl.normal_map.id || !vl.depth_map.id || !vl.position_map.id) continue;
+            bs_mapped_sprite mp{};
+            mp.position = ship_local_to_world(ship, vl.offset_local);
+            mp.size     = ship->visual.size_local;
+            mp.origin   = Vec2{ 0.5f, 0.5f };
+            mp.rotation = ship->angle;
+            mp.uv       = bs_rect{ 0.0f, 0.0f, 1.0f, 1.0f };
+            mp.tint     = bs_color{ 1.0f, 1.0f, 1.0f, alpha };
+            mp.diffuse_map  = vl.texture;
+            mp.normal_map   = vl.normal_map;
+            mp.depth_map    = vl.depth_map;
+            mp.position_map = vl.position_map;
+            mp.light_dir = light_dir;
+            mp.layer    = LAYER_SHIP + vl.z;
+            renderer_draw_mapped_sprite(&mp);
         }
     }
 }
-
-// Draw a single tile-sized quad at an explicit WORLD pose (center + angle), for tiles that live in
-// NO ship grid — specifically the docking CONNECTOR bridge that spans the gap between the two hulls.
-// Same conventions as draw_tile (white texture, alpha blend when translucent), but the placement is a
-// raw world transform instead of a (ship,col,row) lookup, so it rides the rigid mated pair directly.
-static void draw_world_tile(Vec2 world_center, f32 angle, f32 tile_size, bs_color col_color, u32 layer) {
-    bs_sprite s{};
-    s.position = world_center;
-    s.size     = Vec2{ tile_size, tile_size };
-    s.origin   = Vec2{ 0.5f, 0.5f };
-    s.rotation = angle;
-    s.uv       = bs_rect{ 0.0f, 0.0f, 1.0f, 1.0f };
-    s.tint     = col_color;
-    s.texture  = bs_texture{ BS_INVALID_HANDLE };
-    s.blend    = (col_color.a < 0.999f) ? BLEND_ALPHA : BLEND_NONE;
-    s.layer    = layer;
-    renderer_draw_sprite(&s);
+// Draw a multi-layer additive engine-exhaust jet behind the ship.
+// Layers: white-hot core, orange body, red halo.  Per-frame flicker makes it feel turbulent.
+// custom.x gates heat distortion, colour temp, and radial glow in sprite.frag.hlsl.
+static void draw_engine_exhaust(const Ship* ship, bs_texture exhaust_tex,
+                                const bs_glow_params* glow,
+                                f32 speed_ratio, f32 alpha, f32 time) {
+    if (!ship || alpha <= 0.001f) return;
+    // Flicker: two out-of-phase sines for organic turbulence.
+    f32 flicker = sinf(time * EXHAUST_FLICKER_HZ1) * 0.5f
+                + sinf(time * EXHAUST_FLICKER_HZ2) * 0.25f;
+    f32 jitter = 1.0f + flicker * EXHAUST_JITTER_AMP;
+    Vec2 fwd = vec2_rotate(Vec2{ 0.0f, 1.0f }, ship->angle);
+    f32 rear_offset = ship->visual.size_local.y * 0.5f + 2.0f;
+    Vec2 rear = vec2_sub(ship->origin, vec2_scale(fwd, rear_offset * jitter));
+    f32 base_h = EXHAUST_BASE_LENGTH + speed_ratio * EXHAUST_MAX_EXTRA;
+    f32 base_w = ship->visual.size_local.x * 0.35f;
+    // Three layers: core (white, smallest, highest glow), body (orange), halo (red, largest).
+    // The soft radial-gradient texture (exhaust_tex) provides natural tapered falloff.
+    struct ExhaustLayer { f32 size_mul; f32 glow_mul; bs_color tint; };
+    static const ExhaustLayer layers[3] = {
+        { 0.35f, 1.5f, bs_color{ 1.00f, 0.95f, 0.85f, 0.90f } }, // core
+        { 0.60f, 1.0f, bs_color{ 1.00f, 0.55f, 0.15f, 0.80f } }, // body
+        { 0.90f, 0.6f, bs_color{ 1.00f, 0.25f, 0.05f, 0.60f } }, // halo
+    };
+    for (i32 i = 0; i < 3; ++i) {
+        const ExhaustLayer& L = layers[i];
+        bs_sprite sp{};
+        sp.position = rear;
+        sp.size     = Vec2{
+            base_w * L.size_mul * jitter * 0.6f,  // taller-than-wide jet
+            base_h * L.size_mul * jitter
+        };
+        sp.origin   = Vec2{ 0.5f, 0.5f };
+        sp.rotation = ship->angle;
+        sp.uv       = bs_rect{ 0.0f, 0.0f, 1.0f, 1.0f };
+        sp.tint     = L.tint;
+        sp.tint.a  *= alpha * speed_ratio;      // invisible when stationary
+        sp.custom   = bs_color{ speed_ratio * L.glow_mul, 0.0f, 0.0f, 0.0f };
+        sp.texture  = exhaust_tex;
+        sp.blend         = BLEND_ADDITIVE;
+        sp.layer           = LAYER_SHIP;
+        sp.glow_override   = glow;
+        renderer_draw_sprite(&sp);
+    }
 }
-
-// Draw the DEBUG collider outline for one ship: the exact tight OBB that ships_collide tests, as a
-// closed 4-segment loop over the world-space corners from ship_collider_corners. This is the SAT box
-// hugging the ship's OCCUPIED tiles (so it sits flush with the hull, not the empty .tmap border), and
-// because it pulls the very same geometry the collision code does, what you see is what actually
-// collides. No-op for an empty ship (no box). Drawn on LAYER_ROOF so it stays legible over the decks.
 static void draw_collider_outline(const Ship* ship, bs_color color, f32 thickness) {
-    Vec2 k[4];
-    if (!ship_collider_corners(ship, k)) return; // empty hull -> nothing to outline
-    for (i32 i = 0; i < 4; ++i)
-        renderer_draw_line(k[i], k[(i + 1) & 3], thickness, color, LAYER_ROOF);
-}
-
-// Stroke one ship's cosmetic smoothed silhouette: every loop of its cached HullContour as a closed
-// line loop. The contour verts are ship-LOCAL and pose-independent (extracted once in game_init), so
-// here we apply the ship's live pose per vertex via ship_local_to_world (origin + angle) — exactly the
-// transform draw_tile_span uses — and the outline rides the hull rigidly at any position/heading. Each
-// loop is implicitly closed, so the last vertex strokes back to the first (the `j+1==len ? 0` wrap).
-// Drawn on LAYER_HULL_OUTLINE (just above the roof fill) so the rim reads as the ship's edge. No-op for
-// an empty contour (no loops). thickness is screen-space (renderer_draw_line divides by zoom), so the
-// rim keeps a constant on-screen width as you zoom the camera.
-static void draw_hull_outline(const Ship* ship, const HullContour* hc, bs_color color, f32 thickness) {
-    i32 nloops = (i32)hc->loop_start.size();
-    for (i32 i = 0; i < nloops; ++i) {
-        i32 start = hc->loop_start[i];
-        i32 len   = hc->loop_len[i];
-        if (len < 2) continue; // a degenerate loop has no segment to draw
-        for (i32 j = 0; j < len; ++j) {
-            Vec2 a = ship_local_to_world(ship, hc->verts[start + j]);
-            Vec2 b = ship_local_to_world(ship, hc->verts[start + (j + 1 == len ? 0 : j + 1)]);
-            renderer_draw_line(a, b, thickness, color, LAYER_HULL_OUTLINE);
-        }
+    if (!ship || ship->collider_count <= 0) return;
+    Vec2 k[SHIP_MAX_COLLIDER_VERTS];
+    ship_collider_corners(ship, k);
+    for (i32 i = 0; i < ship->collider_count; ++i) {
+        Vec2 a = k[i];
+        Vec2 b = k[(i + 1) % ship->collider_count];
+        renderer_draw_line(a, b, thickness, color, LAYER_DEBUG);
     }
 }
-
-static bool EDITOR_DRAW_HULL_BOUNDARY = false;
-
+static void draw_glow_editor(bs_glow_params* gp, const char* id_suffix) {
+    char lbl[64];
+    auto mk = [&](const char* base) { snprintf(lbl, sizeof(lbl), "%s##%s", base, id_suffix); return lbl; };
+    bs_ui_slider_float(mk("Intensity"), &gp->intensity, 0.0f, 3.0f);
+    bs_ui_slider_float(mk("Falloff"),   &gp->falloff,   1.0f, 20.0f);
+    f32 gt[3] = { gp->glow_tint.r, gp->glow_tint.g, gp->glow_tint.b };
+    if (bs_ui_color_edit3(mk("Glow Tint"), gt)) {
+        gp->glow_tint.r = gt[0]; gp->glow_tint.g = gt[1]; gp->glow_tint.b = gt[2];
+    }
+    bs_ui_slider_float(mk("Head Mult"),    &gp->head_mult,     0.0f, 8.0f);
+    bs_ui_slider_float(mk("Head Falloff"), &gp->head_falloff,  0.5f, 10.0f);
+    bs_ui_slider_float(mk("Head Range"),   &gp->head_range,    0.0f, 1.0f);
+    bs_ui_slider_float(mk("Distort Amp"),  &gp->distort_amp,   0.0f, 0.3f);
+    bs_ui_slider_float(mk("Wave Speed"),   &gp->wave_speed,    0.0f, 50.0f);
+    bs_ui_slider_float(mk("Wave Freq"),    &gp->wave_freq,     0.0f, 30.0f);
+    bs_ui_slider_float(mk("Jitter Speed"), &gp->jitter_speed, 0.0f, 100.0f);
+    bs_ui_slider_float(mk("Jitter Freq"),  &gp->jitter_freq,   0.0f, 60.0f);
+    f32 tc[3] = { gp->temp_cool.r, gp->temp_cool.g, gp->temp_cool.b };
+    if (bs_ui_color_edit3(mk("Cool (tail)"), tc)) {
+        gp->temp_cool.r = tc[0]; gp->temp_cool.g = tc[1]; gp->temp_cool.b = tc[2];
+    }
+    f32 tw[3] = { gp->temp_warm.r, gp->temp_warm.g, gp->temp_warm.b };
+    if (bs_ui_color_edit3(mk("Warm (mid)"), tw)) {
+        gp->temp_warm.r = tw[0]; gp->temp_warm.g = tw[1]; gp->temp_warm.b = tw[2];
+    }
+    f32 th[3] = { gp->temp_hot.r, gp->temp_hot.g, gp->temp_hot.b };
+    if (bs_ui_color_edit3(mk("Hot (head)"), th)) {
+        gp->temp_hot.r = th[0]; gp->temp_hot.g = th[1]; gp->temp_hot.b = th[2];
+    }
+    if (bs_ui_button(mk("Reset Defaults"), TRUE)) {
+        *gp = bs_glow_params{
+            1.0f, 6.0f, 4.0f, 2.5f, 0.80f, 0.08f, 15.0f, 8.0f, 45.0f, 24.0f,
+            bs_color{ 1.0f, 0.85f, 0.5f, 1.0f },
+            bs_color{ 0.90f, 0.15f, 0.02f, 1.0f },
+            bs_color{ 1.0f, 0.45f, 0.05f, 1.0f },
+            bs_color{ 1.0f, 0.98f, 0.90f, 1.0f }
+        };
+    }
+}
 static void build_editor_panel(game_state* s) {
     if (bs_ui_begin_panel("EDITOR PANEL", BS_UI_ANCHOR_TOP_LEFT, 12.0f, BsUiType::BS_UI_TYPE_EDITOR)) {
-        // Inside your rendering loop
-        bs_ui_checkbox("Show hull boundary", &EDITOR_DRAW_HULL_BOUNDARY);
-        if (EDITOR_DRAW_HULL_BOUNDARY) {
-            // ---- Cosmetic smoothed hull silhouette. Stroke each ship's de-blocked (marching-squares) outline
-            // over its roof fill so the hull reads as one solid shape instead of a staircase of tiles. The
-            // loops are cached ship-local (extracted once in game_init) and transformed to the live pose here,
-            // so the rim rides each hull rigidly at its own origin/angle. Drawn unconditionally at every zoom —
-            // it sits on LAYER_HULL_OUTLINE above the roof, and the enemy's outline is its only silhouette cue
-            // while undocked (its interior is hidden). Per-faction tints match each roof's faction colour.
-            draw_hull_outline(&s->ship, &s->hull_outline, HULL_OUTLINE_COLOR, 2.0f);
-            draw_hull_outline(&s->enemy_ship, &s->enemy_hull_outline, ENEMY_HULL_OUTLINE_COLOR, 2.0f);
+        // ---- EDIT MODE -------------------------------------------------------------------------
+        // When active, left-click selects a ship or light in the world and drag repositions it.
+        // Flight simulation is suspended while active so dragged poses stay put.
+        const f32 EM[4] = { 0.55f, 0.85f, 0.95f, 1.0f };
+        bs_ui_text_colored(EM[0], EM[1], EM[2], EM[3], "EDIT MODE");
+        bool edit_on = s->edit_mode_active ? true : false;
+        bs_ui_checkbox("Edit mode active", &edit_on);
+        s->edit_mode_active = edit_on ? TRUE : FALSE;
+        // ---- LIGHTS ----------------------------------------------------------------------------
+        // Spawn / remove / edit the editor-managed 2D point lights.
+        bs_ui_separator();
+        const f32 LT[4] = { 0.95f, 0.85f, 0.55f, 1.0f };
+        bs_ui_text_colored(LT[0], LT[1], LT[2], LT[3], "LIGHTS");
+        // Scene-global ambient floor.
+        f32 amb[3] = { s->light_ambient.r, s->light_ambient.g, s->light_ambient.b };
+        if (bs_ui_color_edit3("Ambient##light_amb", amb)) {
+            s->light_ambient.r = amb[0]; s->light_ambient.g = amb[1]; s->light_ambient.b = amb[2];
+        }
+        // Spawn a new light at the camera center (the visible world center), select it.
+        if (bs_ui_button("Add Light", TRUE)) {
+            bs_light2d nl{};
+            nl.position  = s->camera.position;
+            nl.radius    = 320.0f;
+            nl.intensity = 1.6f;
+            nl.color     = bs_color{ 1.00f, 0.92f, 0.78f, 1.0f }; // warm default
+            nl.enabled   = TRUE;
+            s->lights.push_back(nl);
+            s->light_selected = (i32)s->lights.size() - 1;
+        }
+        // Per-light rows. Collect a remove request and apply it AFTER the loop so we never erase
+        // while iterating. Button/widget ids are suffixed "##<i>" to stay unique per row.
+        i32 remove_idx = -1;
+        for (size_t i = 0; i < s->lights.size(); ++i) {
+            bs_light2d& L = s->lights[i];
+            char id[32], label[48];
+            snprintf(label, sizeof(label), "Light %zu%s", i, ((i32)i == s->light_selected) ? " *" : "");
+            bs_ui_text_colored(LT[0], LT[1], LT[2], LT[3], label);
+            snprintf(id, sizeof(id), "Select##%zu", i);
+            if (bs_ui_button_sized(id, 60.0f, TRUE)) s->light_selected = (i32)i;
+            bs_ui_same_line();
+            snprintf(id, sizeof(id), "Remove##%zu", i);
+            if (bs_ui_button_sized(id, 60.0f, TRUE)) remove_idx = (i32)i;
+            bool on = L.enabled ? true : false;
+            snprintf(id, sizeof(id), "Enabled##%zu", i);
+            bs_ui_checkbox(id, &on);
+            L.enabled = on ? TRUE : FALSE;
+            snprintf(id, sizeof(id), "Radius##%zu", i);
+            bs_ui_slider_float(id, &L.radius, 16.0f, 1200.0f);
+            snprintf(id, sizeof(id), "Intensity##%zu", i);
+            bs_ui_slider_float(id, &L.intensity, 0.0f, 4.0f);
+            f32 col[3] = { L.color.r, L.color.g, L.color.b };
+            snprintf(id, sizeof(id), "Color##%zu", i);
+            if (bs_ui_color_edit3(id, col)) { L.color.r = col[0]; L.color.g = col[1]; L.color.b = col[2]; }
+            bs_ui_separator();
+        }
+        if (remove_idx >= 0 && remove_idx < (i32)s->lights.size()) {
+            s->lights.erase(s->lights.begin() + remove_idx);
+            // Keep the selection valid after the shift.
+            if (s->light_selected == remove_idx)      s->light_selected = -1;
+            else if (s->light_selected > remove_idx)  s->light_selected -= 1;
+        }
+        // ---- Per-Entity Glow Controls --------------------------------------------------------
+        bs_ui_separator();
+        const f32 GL[4] = { 1.0f, 0.75f, 0.35f, 1.0f };
+        bs_ui_text_colored(GL[0], GL[1], GL[2], GL[3], "SHIP GLOW");
+        draw_glow_editor(&s->player_ship().glow, "ship");
+        bs_ui_separator();
+        bs_ui_text_colored(GL[0], GL[1], GL[2], GL[3], "EXHAUST GLOW");
+        draw_glow_editor(&s->exhaust_glow, "exhaust");
+        bs_ui_separator();
+        bs_ui_text_colored(GL[0], GL[1], GL[2], GL[3], "BULLET GLOW");
+        draw_glow_editor(&s->bullet_glow, "bullet");
+        // Also keep the global fallback editable for entities that don't set an override.
+        bs_ui_separator();
+        bs_ui_text_colored(GL[0], GL[1], GL[2], GL[3], "GLOBAL GLOW (fallback)");
+        draw_glow_editor(&s->glow_params, "global");
+        // ---- HDR BLOOM -------------------------------------------------------------------------
+        bs_ui_separator();
+        const f32 BL[4] = { 0.75f, 0.55f, 0.95f, 1.0f };
+        bs_ui_text_colored(BL[0], BL[1], BL[2], BL[3], "HDR BLOOM");
+        bool bloom_on = s->bloom_enabled ? true : false;
+        bs_ui_checkbox("Enabled##bloom", &bloom_on);
+        s->bloom_enabled = bloom_on ? TRUE : FALSE;
+        bs_ui_slider_float("Threshold##bloom", &s->bloom_threshold, 0.0f, 2.0f);
+        bs_ui_slider_float("Intensity##bloom", &s->bloom_intensity, 0.0f, 2.0f);
+        bool dyn_bloom = s->dynamic_bloom ? true : false;
+        bs_ui_checkbox("Dynamic (speed-driven)", &dyn_bloom);
+        s->dynamic_bloom = dyn_bloom ? TRUE : FALSE;
+        // ---- BACKGROUND LAYERS (debug toggles) -----------------------------------------------
+        const f32 BG[4] = { 0.75f, 0.55f, 0.35f, 1.0f };
+        bs_ui_text_colored(BG[0], BG[1], BG[2], BG[3], "BACKGROUND LAYERS");
+        bool layer0_on = s->bg_layer0_enabled ? true : false;
+        bool layer1_on = s->bg_layer1_enabled ? true : false;
+        bool layer2_on = s->bg_layer2_enabled ? true : false;
+        bs_ui_checkbox("Far starfield (p=0.01)", &layer0_on);
+        bs_ui_checkbox("Mid starfield (p=0.05)", &layer1_on);
+        bs_ui_checkbox("Mapped system (p=0.30)", &layer2_on);
+        s->bg_layer0_enabled = layer0_on ? TRUE : FALSE;
+        s->bg_layer1_enabled = layer1_on ? TRUE : FALSE;
+        s->bg_layer2_enabled = layer2_on ? TRUE : FALSE;
+        bs_ui_separator();
+        const f32 SF[4] = { 0.55f, 0.85f, 0.95f, 1.0f };
+        bs_ui_text_colored(SF[0], SF[1], SF[2], SF[3], "STARFIELD LOD");
+        bs_ui_slider_float("Density", &s->starfield_lod_density, 0.0f, 0.5f);
+        bs_ui_slider_float("Size", &s->starfield_lod_size, 0.25f, 3.0f);
+        bs_ui_slider_float("Brightness", &s->starfield_lod_brightness, 0.0f, 3.0f);
+        bs_ui_separator();
+        bs_ui_text_colored(SF[0], SF[1], SF[2], SF[3], "STAR DAZZLE");
+        bs_ui_slider_float("Inner radius", &s->star_dazzle_inner_radius, 0.0f, 50000.0f);
+        bs_ui_slider_float("Outer radius", &s->star_dazzle_outer_radius, 0.0f, 100000.0f);
+        bs_ui_slider_float("Intensity", &s->star_dazzle_intensity, 0.0f, 1.0f);
+        bool star_light_on = s->star_light_enabled ? true : false;
+        bs_ui_checkbox("Star volumetric light", &star_light_on);
+        s->star_light_enabled = star_light_on ? TRUE : FALSE;
+        if (s->star_light_enabled) {
+            bs_ui_slider_float("Star light intensity", &s->star_light_intensity_mul, 0.0f, 4.0f);
+            bs_ui_slider_float("Star light radius",    &s->star_light_radius_mul, 0.1f, 4.0f);
+        }
+        s->star_fx.build_ui();
+        // ---- TRAVEL ----------------------------------------------------------------------------
+        bs_ui_separator();
+        const f32 TR[4] = { 0.55f, 0.95f, 0.75f, 1.0f };
+        bs_ui_text_colored(TR[0], TR[1], TR[2], TR[3], "TRAVEL");
+        b8 was_travel = s->travel_enabled;
+        bool travel_on = s->travel_enabled ? true : false;
+        bs_ui_checkbox("Enable Continuous Travel", &travel_on);
+        s->travel_enabled = travel_on ? TRUE : FALSE;
+        if (s->travel_enabled != was_travel)
+            action_log_push(s, "Continuous travel %s", s->travel_enabled ? "enabled" : "disabled");
+        if (s->travel_enabled) {
+            // Auto-init travel on first enable if not already active.
+            if (!s->travel.active && s->travel.progress == 0.0f) {
+                travel_init(&s->travel, s->player_ship().origin, Vec2{ 50000.0f, 0.0f });
+            }
+            bool paused = s->travel_paused ? true : false;
+            bs_ui_checkbox("Pause Travel", &paused);
+            s->travel_paused = paused ? TRUE : FALSE;
+            bs_ui_slider_float("Speed", &s->travel.speed, 0.01f, 2.0f);
+            i32 ease_idx = (i32)s->travel.ease_mode;
+            if (bs_ui_combo("Ease Mode", &ease_idx, "Linear\0Smoothstep\0Quad In/Out\0")) {
+                if (ease_idx >= 0 && ease_idx < TRAVEL_EASE_COUNT)
+                    s->travel.ease_mode = (TravelEaseMode)ease_idx;
+            }
+            bs_ui_separator();
+            char prog_buf[48];
+            snprintf(prog_buf, sizeof(prog_buf), "Progress: %.1f%%", s->travel.progress * 100.0f);
+            bs_ui_text(prog_buf);
+            bs_ui_text("Hierarchical Position:");
+            char cell_buf[48];
+            snprintf(cell_buf, sizeof(cell_buf), "  Cell: (%lld, %lld)",
+                     s->travel.current.cell.x, s->travel.current.cell.y);
+            bs_ui_text(cell_buf);
+            char local_buf[48];
+            snprintf(local_buf, sizeof(local_buf), "  Local: (%.1f, %.1f)",
+                     s->travel.current.local.x, s->travel.current.local.y);
+            bs_ui_text(local_buf);
+            char world_buf[64];
+            snprintf(world_buf, sizeof(world_buf), "  World: (%.1f, %.1f)",
+                     (f32)s->travel.world_x, (f32)s->travel.world_y);
+            bs_ui_text(world_buf);
+            // Distance to final destination.
+            f64 dest_x, dest_y;
+            bs_math::hierpos_to_f64(&s->travel.destination, BS_HIERPOS_CELL_SIZE, &dest_x, &dest_y);
+            f64 dx = dest_x - s->travel.world_x;
+            f64 dy = dest_y - s->travel.world_y;
+            f64 dist = sqrt(dx * dx + dy * dy);
+            char dist_buf[48];
+            snprintf(dist_buf, sizeof(dist_buf), "  Dist to dest: %.1f", (f32)dist);
+            bs_ui_text(dist_buf);
+            if (bs_ui_button("Reset Travel", s->travel.progress > 0.0f ? TRUE : FALSE)) {
+                travel_reset(&s->travel);
+            }
+        }
+        // ---- SYSTEM VIEW -----------------------------------------------------------------------
+        bs_ui_separator();
+        const f32 SV[4] = { 0.95f, 0.55f, 0.35f, 1.0f };
+        bs_ui_text_colored(SV[0], SV[1], SV[2], SV[3], "SYSTEM VIEW");
+        bs_ui_checkbox("Animate scale",     &s->map_anim_scale);
+        bs_ui_checkbox("Animate rotation",  &s->map_anim_rotate);
+        bs_ui_checkbox("Animate alpha",     &s->map_anim_alpha);
+        bs_ui_checkbox("Animate thickness", &s->map_anim_thickness);
+        bs_ui_checkbox("Draw hyperjump range", &s->map_draw_jump_range);
+        if (s->map_draw_jump_range) {
+            bs_ui_slider_float("Range (units)", &s->map_jump_range, 0.0f, 10000000.0f);
+        }
+        bs_ui_checkbox("Draw sensor range", &s->map_draw_sensor_range);
+        if (s->map_draw_sensor_range) {
+            bs_ui_slider_float("Sensor range (units)", &s->map_sensor_range, 10000.0f, 500000.0f);
+        }
+        bs_ui_checkbox("Draw system lanes", &s->map_draw_lanes);
+        bool show_mb = (bool)s->show_metaball_ui;
+        bs_ui_checkbox("Show metaball UI", &show_mb);
+        s->show_metaball_ui = (b8)show_mb;
+        if (s->show_metaball_ui) {
+            bs_ui_slider_float("Radius factor", &s->metaball_radius_factor, 0.5f, 500.0f);
+            bs_ui_slider_float("Threshold",     &s->metaball_threshold,     0.1f, 5.0f);
+            f32 grid_w_f = (f32)s->metaball_grid_w;
+            f32 grid_h_f = (f32)s->metaball_grid_h;
+            bs_ui_slider_float("Grid width",  &grid_w_f, 10.0f, 120.0f);
+            bs_ui_slider_float("Grid height", &grid_h_f, 10.0f, 90.0f);
+            s->metaball_grid_w = (i32)grid_w_f;
+            s->metaball_grid_h = (i32)grid_h_f;
+        }
+        // Zoom is controlled by mouse wheel (scroller) in system view.
+    }
+    bs_ui_end_panel();
+}
+// =====================================================================================
+// Transform panel: standalone window showing the selected entity's name, world position,
+// angle, and HierPos2 galaxy coordinates. Appears in edit mode when an entity is selected.
+// =====================================================================================
+static void build_transform_panel(game_state* s) {
+    if (!s->edit_mode_active || s->edit_selection.kind == EDIT_NONE) return;
+    if (bs_ui_begin_panel("TRANSFORM", BS_UI_ANCHOR_TOP_RIGHT, 12.0f, BsUiType::BS_UI_TYPE_EDITOR)) {
+        const f32 TF[4] = { 0.95f, 0.55f, 0.35f, 1.0f };
+        bs_ui_text_colored(TF[0], TF[1], TF[2], TF[3], "TRANSFORM");
+        Vec2  world_pos = Vec2{ 0.0f, 0.0f };
+        f32   angle_deg = 0.0f;
+        const char* name = "?";
+        if (s->edit_selection.kind == EDIT_SHIP) {
+            const Ship* sh = (s->edit_selection.index == 0) ? &s->player_ship() : &s->enemy_ship;
+            world_pos = sh->origin;
+            angle_deg = sh->angle * (180.0f / 3.14159265f);
+            name = (sh->vessel_name && sh->vessel_name[0]) ? sh->vessel_name
+                 : (s->edit_selection.index == 0) ? "Player Ship" : "Enemy Ship";
+        } else if (s->edit_selection.kind == EDIT_LIGHT) {
+            const bs_light2d& L = s->lights[s->edit_selection.index];
+            world_pos = L.position;
+            name = "Light";
+        }
+        // Entity name
+        char name_buf[64];
+        snprintf(name_buf, sizeof(name_buf), "Name: %s", name);
+        bs_ui_text(name_buf);
+        // World position (read-only text)
+        char pos_buf[64];
+        snprintf(pos_buf, sizeof(pos_buf), "Position: %.1f, %.1f", world_pos.x, world_pos.y);
+        bs_ui_text(pos_buf);
+        // Angle (ships only)
+        if (s->edit_selection.kind == EDIT_SHIP) {
+            char ang_buf[48];
+            snprintf(ang_buf, sizeof(ang_buf), "Angle: %.1f deg", angle_deg);
+            bs_ui_text(ang_buf);
+        }
+        // HierPos2 galaxy coordinates
+        bs_math::HierPos2 gal = world_to_galaxy_pos(world_pos);
+        char cell_buf[64];
+        snprintf(cell_buf, sizeof(cell_buf), "Sector: %lld, %lld", gal.cell.x, gal.cell.y);
+        bs_ui_text(cell_buf);
+        char local_buf[64];
+        snprintf(local_buf, sizeof(local_buf), "Local: %.1f, %.1f", gal.local.x, gal.local.y);
+        bs_ui_text(local_buf);
+        bs_ui_separator();
+        if (bs_ui_button("Deselect", TRUE)) {
+            s->edit_selection = EditSelection{ EDIT_NONE, -1 };
+            s->edit_drag.active = FALSE;
+            s->edit_drag.mode   = EDIT_DRAG_NONE;
         }
     }
     bs_ui_end_panel();
 }
-
+// Distance-based sensor visibility (0..1). Range and dist must be in the SAME units.
+f32 sensor_visibility_from_dist(f32 dist, f32 range) {
+    if (range <= 0.0f) return 1.0f;
+    if (dist >= range) return 0.0f;
+    f32 t = dist / range;
+    return 1.0f - t * t * t;
+}
+// Compute sensor visibility (0..1) for an entity at render-local position `pos`.
+// 1.0 = fully visible (inside strong sensor zone), 0.0 = outside range.
+static f32 get_sensor_visibility(const game_state* s, Vec2 pos) {
+    if (!s->map_draw_sensor_range || s->map_sensor_range <= 0.0f || s->map_entity_count == 0)
+        return 1.0f;
+    Vec2 ship_rel = hierpos_diff(&s->map_entities[0].galaxy_pos, &s->camera_hierpos, BS_HIERPOS_CELL_SIZE);
+    f32 dist = vec2_length(vec2_sub(pos, ship_rel));
+    return sensor_visibility_from_dist(dist, s->map_sensor_range);
+}
+// ---- Metaball movement UI (marching squares) -------------------------------------------
+// Each ship emits a scalar field; the contour at threshold=1.0 is drawn via marching squares.
+// When ships get close their fields merge into organic blob shapes.
+static void draw_ship_metaballs(game_state* s) {
+    if (s->mode != MODE_GLOBAL || !s->show_metaball_ui) return;
+    i32 gw = s->metaball_grid_w;
+    i32 gh = s->metaball_grid_h;
+    if (gw < 2 || gh < 2) return;
+    f32 threshold = s->metaball_threshold;
+    if (threshold < 1.0e-4f) threshold = 1.0e-4f;
+    f32 radius_factor = s->metaball_radius_factor;
+    // ---- Gather ALL sources unconditionally. ------------------------------------------
+    // Every source contributes to the summed field at every sample point; culling a
+    // source because it is off-screen changes the field values and makes the contour
+    // shape zoom-dependent. renderer_draw_line clips the output segments to the viewport.
+    struct MBSource { Vec2 origin; f32 r2; bool enemy; };
+    MBSource srcs[2];
+    i32 src_count = 0;
+    {
+        const Ship* ships[2]  = { &s->player_ship(), &s->enemy_ship };
+        bool        is_enemy[2] = { false, true };
+        for (i32 i = 0; i < 2; ++i) {
+            f32 r = ship_bounding_radius(ships[i]) * radius_factor;
+            if (r <= 0.0f) continue;
+            srcs[src_count++] = MBSource{ ships[i]->origin, r * r, is_enemy[i] };
+        }
+    }
+    if (src_count == 0) return;
+    // ---- Grid AABB = camera viewport, padded. ----------------------------------------
+    // The grid samples the scalar field over the visible region at a fixed cell count,
+    // so it is always well-resolved on screen. The field itself is the SUM of all sources
+    // (none culled), so the contour at any given world point is invariant to zoom — we
+    // simply sample a different window of that same field.
+    f32 vis_w = (f32)s->fb_width  / s->camera.zoom;
+    f32 vis_h = (f32)s->fb_height / s->camera.zoom;
+    const f32 MARGIN = 0.15f;
+    f32 pad_x = vis_w * MARGIN;
+    f32 pad_y = vis_h * MARGIN;
+    f32 min_x = s->camera.position.x - vis_w * 0.5f - pad_x;
+    f32 max_x = s->camera.position.x + vis_w * 0.5f + pad_x;
+    f32 min_y = s->camera.position.y - vis_h * 0.5f - pad_y;
+    f32 max_y = s->camera.position.y + vis_h * 0.5f + pad_y;
+    f32 cell_w = (max_x - min_x) / (f32)gw;
+    f32 cell_h = (max_y - min_y) / (f32)gh;
+    static const i32 MAX_GW = 120;
+    static const i32 MAX_GH = 90;
+    if (gw > MAX_GW) gw = MAX_GW;
+    if (gh > MAX_GH) gh = MAX_GH;
+    static const i32 MAX_GRID_CORNERS = (MAX_GW + 1) * (MAX_GH + 1);
+    static f32 samples[MAX_GRID_CORNERS];
+    // Evaluate scalar field at each grid corner (sum of contributing ships only).
+    auto sample_idx = [&](i32 gx, i32 gy) -> i32 { return gy * (gw + 1) + gx; };
+    for (i32 gy = 0; gy <= gh; ++gy) {
+        for (i32 gx = 0; gx <= gw; ++gx) {
+            Vec2 pos{ min_x + (f32)gx * cell_w, min_y + (f32)gy * cell_h };
+            f32 val = 0.0f;
+            for (i32 i = 0; i < src_count; ++i) {
+                Vec2 d = vec2_sub(pos, srcs[i].origin);
+                val += srcs[i].r2 / (d.x * d.x + d.y * d.y + 0.0001f);
+            }
+            samples[sample_idx(gx, gy)] = val;
+        }
+    }
+    // Marching-squares edge pairs per case (corrected). Edge indices: 0=left, 1=right,
+    // 2=top, 3=bottom. Edges connect: left=TL-BL, right=TR-BR, top=TL-TR, bottom=BL-BR.
+    // Case mask: TL=1, TR=2, BR=4, BL=8.
+    static const i32 MS_EDGE_PAIRS[16][5] = {
+        /* 0  ....  */ {0, -1,-1, -1,-1},
+        /* 1  TL    */ {1,  0, 2, -1,-1},
+        /* 2  TR    */ {1,  2, 1, -1,-1},
+        /* 3  TL TR */ {1,  0, 1, -1,-1},
+        /* 4  BR    */ {1,  1, 3, -1,-1},
+        /* 5  TL BR */ {2,  0, 2,  1, 3},
+        /* 6  TR BR */ {1,  2, 3, -1,-1},
+        /* 7  ~BL   */ {1,  0, 3, -1,-1},
+        /* 8  BL    */ {1,  0, 3, -1,-1},
+        /* 9  TL BL */ {1,  2, 3, -1,-1},
+        /* 10 TR BL */ {2,  2, 1,  0, 3},
+        /* 11 ~BR   */ {1,  1, 3, -1,-1},
+        /* 12 BR BL */ {1,  0, 1, -1,-1},
+        /* 13 ~TR   */ {1,  2, 1, -1,-1},
+        /* 14 ~TL   */ {1,  0, 2, -1,-1},
+        /* 15 ####  */ {0, -1,-1, -1,-1},
+    };
+    bs_color player_col = {0.2f, 0.85f, 1.0f, 0.6f};
+    bs_color enemy_col  = {1.0f, 0.4f,  0.2f, 0.6f};
+    bool has_enemy = false;
+    Vec2 enemy_origin{0.0f, 0.0f};
+    Vec2 player_origin = s->player_ship().origin;
+    for (i32 i = 0; i < src_count; ++i) {
+        if (srcs[i].enemy) { has_enemy = true; enemy_origin = srcs[i].origin; }
+        else               { player_origin = srcs[i].origin; }
+    }
+    for (i32 gy = 0; gy < gh; ++gy) {
+        for (i32 gx = 0; gx < gw; ++gx) {
+            f32 bl = samples[sample_idx(gx,   gy  )];
+            f32 br = samples[sample_idx(gx+1, gy  )];
+            f32 tl = samples[sample_idx(gx,   gy+1)];
+            f32 tr = samples[sample_idx(gx+1, gy+1)];
+            i32 mask = ((tl > threshold) ? 1 : 0)
+                     | ((tr > threshold) ? 2 : 0)
+                     | ((br > threshold) ? 4 : 0)
+                     | ((bl > threshold) ? 8 : 0);
+            const i32* ep = MS_EDGE_PAIRS[mask];
+            i32 seg_count = ep[0];
+            if (seg_count == 0) continue;
+            f32 x0 = min_x + (f32)gx * cell_w;
+            f32 y0 = min_y + (f32)gy * cell_h;
+            f32 x1 = x0 + cell_w;
+            f32 y1 = y0 + cell_h;
+            // Linear interpolation along each edge to find exact threshold crossing.
+            auto lerp_edge = [&](f32 v0, f32 v1) -> f32 {
+                f32 denom = v1 - v0;
+                if (fabsf(denom) < 0.0001f) return 0.5f;
+                f32 t = (threshold - v0) / denom;
+                return clampf(t, 0.0f, 1.0f);
+            };
+            f32 left_t   = lerp_edge(bl, tl);
+            f32 right_t  = lerp_edge(br, tr);
+            f32 bottom_t = lerp_edge(bl, br);
+            f32 top_t    = lerp_edge(tl, tr);
+            Vec2 v_left   = { x0, y0 + left_t   * cell_h };
+            Vec2 v_right  = { x1, y0 + right_t  * cell_h };
+            Vec2 v_bottom = { x0 + bottom_t * cell_w, y0 };
+            Vec2 v_top    = { x0 + top_t    * cell_w, y1 };
+            Vec2 edge_verts[4] = { v_left, v_right, v_top, v_bottom };
+            // Color this cell by the nearer ship (cell center), so merged blobs read with the
+            // right team color on each side of the bridge.
+            bs_color seg_col = player_col;
+            if (has_enemy) {
+                Vec2 cc{ x0 + cell_w * 0.5f, y0 + cell_h * 0.5f };
+                Vec2 dp = vec2_sub(cc, player_origin);
+                Vec2 de = vec2_sub(cc, enemy_origin);
+                if (de.x*de.x + de.y*de.y < dp.x*dp.x + dp.y*dp.y) seg_col = enemy_col;
+            }
+            for (i32 si = 0; si < seg_count; ++si) {
+                i32 ea = ep[1 + si*2];
+                i32 eb = ep[1 + si*2 + 1];
+                if (ea >= 0 && eb >= 0)
+                    renderer_draw_line(edge_verts[ea], edge_verts[eb], 1.5f, seg_col, LAYER_UI);
+            }
+        }
+    }
+}
+// ---- Time-control panel: top-center toggle for pause/resume (visible in ALL modes) ----
+static void draw_time_control_panel(game_state* s) {
+    if (bs_ui_begin_panel("TIME", BS_UI_ANCHOR_TOP_CENTER, 12.0f, BsUiType::BS_UI_TYPE_GAME)) {
+        const char* label = (s->time_scale == 0.0f) ? "Resume" : "Pause";
+        if (bs_ui_button(label, TRUE)) {
+            s->time_scale = (s->time_scale == 0.0f) ? 1.0f : 0.0f;
+            action_log_push(s, (s->time_scale == 0.0f) ? "Game paused." : "Game resumed.");
+        }
+    }
+    bs_ui_end_panel();
+}
+// Scalar compression factor: 1.0 at normal zoom, shrinking toward 0.15 at min zoom.
+static f32 compression_factor(f32 zoom) {
+    const f32 threshold = 0.02f;
+    const f32 min_zoom  = 0.000004f;
+    if (zoom >= threshold) return 1.0f;
+    f32 t = (zoom - min_zoom) / (threshold - min_zoom);
+    t = t * t * (3.0f - 2.0f * t);         // smoothstep
+    return 0.15f + 0.85f * t;
+}
+// Compress camera-relative positions toward the origin when zoomed out.
+// This is purely cosmetic: true galaxy positions remain unchanged.
+static Vec2 cosmetic_compress(Vec2 pos, f32 zoom) {
+    return vec2_scale(pos, compression_factor(zoom));
+}
 b8 game_render(Game* game_inst, f32 dt) {
     game_state* s = (game_state*)game_inst->state;
     if (!s) return TRUE;
-
+    s->elapsed_time += dt;
+    // Volumetric star light accumulator (filled in MODE_SYSTEM, consumed at end of frame)
+    bs_light2d star_light{};
+    b8 has_star_light = FALSE;
     renderer_set_camera(s->camera);
-
-    const Ship* ship = &s->ship;
-    f32 interior_a = 1.0f - s->roof_alpha; // interior fades out as roof fades in
-    f32 roof_a     = s->roof_alpha;
-
-    // ---- Camera visible circle (world space), passed to draw_ship_tiles for cull. The view shows a
-    // fb_width x fb_height rectangle scaled by 1/zoom and rotated by camera.rotation; its bounding
-    // circle (rotation-invariant) has radius = half the screen diagonal in world units. One tile_size
-    // of slack keeps a tile straddling the screen edge from being culled. Off-screen hulls/tiles cost
-    // 0 sprites — this is what keeps the 9165-tile enemy off the batch until you actually fly near it.
-    Vec2 cam_center = s->camera.position;
-    f32  z          = (s->camera.zoom > 0.0001f) ? s->camera.zoom : 1.0f;
-    f32  vis_r      = 0.5f * sqrtf((f32)s->fb_width * s->fb_width + (f32)s->fb_height * s->fb_height) / z
-                      + s->ship.tile_size;
-
-    // ---- Both hulls' tiles through the shared cross-fade path. One call per ship emits the
-    // interior (LAYER_FLOOR/WALL) AND the roof silhouette (LAYER_ROOF); layer order — not emit
-    // order — governs overlap, so the player crew overlay below correctly slots between them.
-    // The enemy hull rides its own origin/angle, so it draws at its placed pose automatically.
-    draw_ship_tiles(ship, interior_a, roof_a, ROOF_COLOR, cam_center, vis_r);
-
-    // The ENEMY hull's interior is GATED on docking. You can't see inside a hostile ship: while
-    // UNDOCKED it renders as a solid roof silhouette at EVERY zoom (interior alpha forced to 0, roof
-    // forced fully opaque), so zooming into local mode shows only its outline — never its decks.
-    // Once the airlocks mate (enemy_docked, computed in game_update), it falls back to the SAME
-    // interior<->roof cross-fade as the player, so you can board/inspect the revealed interior in
-    // local mode. This is the render half of the "dock to see inside the inoperative ship" rule.
-    f32 enemy_interior_a = s->enemy_docked ? interior_a : 0.0f;
-    f32 enemy_roof_a     = s->enemy_docked ? roof_a     : 1.0f;
-    draw_ship_tiles(&s->enemy_ship, enemy_interior_a, enemy_roof_a, ENEMY_ROOF_COLOR, cam_center, vis_r);
-
-    // ---- Docking CONNECTOR bridge. While the hulls are mated a single walkable tile spans the gap
-    // between the two airlocks (spawned in update_docking via dock_connector_tile). It belongs to no
-    // ship grid, so it's drawn here as a raw world-pose quad at the stored connector pose. It rides
-    // the SAME interior<->roof cross-fade as the decks: interior tube colour when zoomed in (the crew
-    // walks across it), roof silhouette when zoomed out, so it reads as one continuous structure with
-    // both hulls at every blend fraction. Torn down on undock (connector_active clears), so it simply
-    // stops drawing the instant the ships part.
-    if (s->connector_active) {
-        if (interior_a > 0.001f) {
-            bs_color cc = CONNECTOR_COLOR;
-            cc.a *= interior_a;
-            draw_world_tile(s->connector_world, s->connector_angle, s->ship.tile_size, cc, LAYER_FLOOR);
+    // ---- System view render (MODE_SYSTEM) -- all star systems visible at once ----------------
+    if (s->mode == MODE_SYSTEM) {
+        // Update hovered cell (skip when cursor is over UI panels).
+        if (!bs_imgui_wants_mouse()) {
+            Vec2 mw = mouse_world(s);
+            update_cell_hover_effect(&s->galaxy_voronoi, dt, mw, &s->camera_hierpos, s->camera.zoom, s->systems);
         }
-        if (roof_a > 0.001f) {
-            bs_color rc = ROOF_COLOR;
-            rc.a *= roof_a;
-            draw_world_tile(s->connector_world, s->connector_angle, s->ship.tile_size, rc, LAYER_ROOF);
+        // Draw Delaunay dual lanes (natural connectivity from Voronoi diagram).
+        if (s->map_draw_lanes) {
+            bs_color lane_col = bs_color{ 0.25f, 0.40f, 0.55f, 0.35f };
+            draw_delaunay_lanes(&s->galaxy_voronoi, s->systems, s, lane_col, 1.0f);
         }
-    }
-
-    // ---- DEBUG collider overlay. Trace the exact tight OBB ships_collide tests around BOTH hulls so
-    // the hitbox is visible: it hugs the occupied tiles, rides each ship's full pose, and (while
-    // docked) you can see the two boxes meet flush at the airlocks with the connector spanning the
-    // gap. Same magenta loop on player and enemy; pulled straight from the collision geometry so the
-    // outline can never drift from what actually collides. Drawn unconditionally — the collider exists
-    // whether or not the hulls are touching.
-    draw_collider_outline(ship, COLLIDER_COLOR, 1.5f);
-    draw_collider_outline(&s->enemy_ship, COLLIDER_COLOR, 1.5f);
-
-    // ---- Crew + move-order feedback. Each crew rides the hull it's BOUND to (crew_ship): a crew
-    // that boarded the enemy draws on the enemy's deck at the enemy's pose. Player crew fade with
-    // the player interior; ENEMY-bound crew fade with the enemy interior alpha (enemy_interior_a),
-    // so a boarded crew is visible only while docked — once you undock, the enemy hull (and anyone
-    // aboard it) goes back to an opaque roof silhouette, exactly like its decks. ----
-    if (interior_a > 0.001f) 
-    {
-        // ---- Move-order feedback: path line (crew -> remaining waypoints) + destination
-        // marker. Waypoints are ship-local; lift each to world so they ride the ship's pose
-        // and stay glued to the deck as it moves/rotates. Drawn above the crew, fading with
-        // the interior so it vanishes into the roof cross-fade.
-        for(auto& c : s->crew)
+        // Draw Voronoi cell wireframe edges (territory boundaries).
+        bs_color vedge_col = bs_color{ 0.45f, 0.55f, 0.70f, 0.12f };
+        draw_voronoi_edges(&s->galaxy_voronoi, s, vedge_col, 1.0f);
+        // Overlay hovered cell with rotating neon-purple trail.
+        bs_color hover_col = bs_color{ 0.55f, 0.20f, 1.00f, 1.00f };
+        draw_cell_hover_effect(&s->galaxy_voronoi, s, hover_col);
+        // Draw every star system at its camera-relative galaxy position.
+        // ---- Pass 1: Stars only (aux bloom eligible for streaks) ----
+        renderer_set_aux_bloom_mode(s->star_fx.streak_enabled);
+        // Star-responsive streak params: derive multipliers from the current/nearest system.
+        if (s->current_system >= 0 && s->current_system < s->system_count)
         {
-            // Resolve the hull this crew stands on, and the interior alpha of THAT hull. Enemy crew
-            // are hidden (alpha 0) while undocked — skip drawing them entirely so no ghost leaks
-            // through the enemy roof silhouette.
-            const Ship* chull = crew_ship(s, &c);
-            f32 crew_a = (c.ship_id == 0) ? interior_a : enemy_interior_a;
-            if (crew_a <= 0.001f) continue;
-
-            if (c.path_len > 0 && c.path_idx < c.path_len) {
-                bs_color pc = PATH_COLOR;
-                pc.a *= crew_a;
-                Vec2 prev = ship_local_to_world(chull, c.position);
-                for (i32 i = c.path_idx; i < c.path_len; ++i) {
-                    Vec2 wp = ship_local_to_world(chull, c.path[i]);
-                    renderer_draw_line(prev, wp, 1.0f, pc, LAYER_PATH);
-                    prev = wp;
+            StarSystem& ss = s->systems[s->current_system];
+            f32 length_mul = clampf(0.5f + ss.star.radius / 1500.0f, 0.5f, 2.0f);
+            bs_color c = ss.star.color;
+            f32 luminance = 0.3f * c.r + 0.6f * c.g + 0.1f * c.b;
+            f32 intensity_mul = 0.4f + 0.6f * luminance;
+            s->star_fx.streak_length_mul = length_mul;
+            s->star_fx.streak_intensity_mul = intensity_mul;
+        }
+        else
+        {
+            s->star_fx.streak_length_mul = 1.0f;
+            s->star_fx.streak_intensity_mul = 1.0f;
+        }
+        for (i32 sys = 0; sys < s->system_count; ++sys) {
+            StarSystem& ss = s->systems[sys];
+            Vec2 sys_pos_raw = hierpos_diff(&ss.galaxy_center, &s->camera_hierpos, BS_HIERPOS_CELL_SIZE);
+            f32 vis = get_sensor_visibility(s, sys_pos_raw);
+            Vec2 sys_pos = cosmetic_compress(sys_pos_raw, s->camera.zoom);
+            Vec2 star_pos = vec2_add(sys_pos, ss.star.position);
+            f32 base_r = ss.star.radius * (0.3f + 0.7f * vis);
+            f32 screen_r = base_r * s->camera.zoom;
+            f32 zoom_scale = (screen_r < STAR_MIN_SCREEN_RADIUS)
+                ? (STAR_MIN_SCREEN_RADIUS / screen_r) : 1.0f;
+            Vec2 star_screen = camera2d_world_to_screen(&s->camera, s->fb_width, s->fb_height, star_pos);
+            Vec2 screen_center = Vec2{ (f32)s->fb_width * 0.5f, (f32)s->fb_height * 0.5f };
+            f32 dist_from_center = vec2_length(vec2_sub(star_screen, screen_center));
+            f32 dist_scale = 1.0f + dist_from_center * STAR_DIST_SCALE_FACTOR;
+            dist_scale = fminf(dist_scale, STAR_MAX_DIST_SCALE);
+            f32 total_scale = zoom_scale * dist_scale;
+            f32 scaled_base_r = base_r * total_scale;
+            f32 screen_radius = scaled_base_r * s->camera.zoom;
+            renderer_set_streak_source(star_screen);
+            s->star_fx.draw_star(ss, star_pos, star_screen, scaled_base_r, screen_radius, vis,
+                                 s->galaxy_map_time, LAYER_CELESTIAL,
+                                 s->fb_width, s->fb_height, total_scale);
+        }
+        renderer_set_aux_bloom_mode(FALSE);
+        // ---- Pass 2: Labels, planets, orbit rings, and star light ----
+        for (i32 sys = 0; sys < s->system_count; ++sys) {
+            StarSystem& ss = s->systems[sys];
+            Vec2 sys_pos_raw = hierpos_diff(&ss.galaxy_center, &s->camera_hierpos, BS_HIERPOS_CELL_SIZE);
+            f32 vis = get_sensor_visibility(s, sys_pos_raw);
+            Vec2 sys_pos = cosmetic_compress(sys_pos_raw, s->camera.zoom);
+            Vec2 star_pos = vec2_add(sys_pos, ss.star.position);
+            // System name label above the star (only when clearly visible)
+            if (ss.name && ss.name[0] && vis > 0.5f) {
+                Vec2 screen = camera2d_world_to_screen(&s->camera, s->fb_width, s->fb_height, star_pos);
+                f32 zoom_factor = 0.006f / s->camera.zoom;
+                f32 font_scale = 1.0f + 0.25f * (zoom_factor - 1.0f);
+                font_scale = clampf(font_scale, 0.8f, 1.6f);
+                bs_color label_col = bs_color{ 0.90f, 0.92f, 0.96f, 0.85f * vis };
+                bs_ui_label_at(ss.name, screen.x, screen.y - ss.star.radius * s->camera.zoom - 4.0f,
+                               font_scale, label_col, ss.name);
+            }
+            // Planets + orbit rings — draw true elliptical orbit paths.
+            f32 comp = compression_factor(s->camera.zoom);
+            f32 inv_zoom = 1.0f / s->camera.zoom;
+            f32 max_orbit = 0.0f;
+            for (i32 i = 0; i < ss.planet_count; ++i) {
+                const CelestialBody& p = ss.planets[i];
+                bs_color planet_col = p.color; planet_col.a *= vis;
+                bs_color ring_col = p.color; ring_col.a = 0.25f * vis;
+                f32 cw = cosf(p.arg_periapsis);
+                f32 sw = sinf(p.arg_periapsis);
+                f32 b = p.semi_major_axis * sqrtf(1.0f - p.eccentricity * p.eccentricity);
+                const i32 SEGMENTS = 64;
+                Vec2 prev = Vec2{0,0};
+                b8 first = TRUE;
+                for (i32 seg = 0; seg <= SEGMENTS; ++seg) {
+                    f32 E = (f32)seg / (f32)SEGMENTS * 2.0f * BS_PI;
+                    f32 x = p.semi_major_axis * (cosf(E) - p.eccentricity);
+                    f32 y = b * sinf(E);
+                    Vec2 rot = Vec2{ cw * x - sw * y, sw * x + cw * y };
+                    Vec2 pt = vec2_add(sys_pos, vec2_scale(rot, comp));
+                    if (!first) {
+                        renderer_draw_line(prev, pt, 1.0f, ring_col, LAYER_CELESTIAL);
+                    }
+                    prev = pt;
+                    first = FALSE;
                 }
-                Vec2 goal = ship_local_to_world(chull, c.path[c.path_len - 1]);
-                renderer_draw_circle(goal, 8.0f, 16, 1.0f, pc, LAYER_PATH);
+                Vec2 planet_off = vec2_scale(p.position, comp);
+                Vec2 planet_vis = vec2_add(sys_pos, planet_off);
+                renderer_draw_circle(planet_vis, 2.0f * inv_zoom, 16, 1.0f, planet_col, LAYER_CELESTIAL);
+                max_orbit = fmaxf(max_orbit, p.semi_major_axis);
             }
-            // Crew member (a simple quad for now), only meaningful in local view. Its stored
-            // position is ship-local; draw it at its hull's full pose (world position + heading)
-            // so it's part of that rigid body. In local mode the camera cancels the PLAYER heading,
-            // so player crew read screen-upright; enemy crew carry the enemy's relative yaw.
-            bs_color crew = CREW_COLOR;
-            crew.a *= crew_a;
-            bs_sprite cs{};
-            cs.position = ship_local_to_world(chull, c.position);
-            cs.size     = Vec2{ c.radius * 2.0f, c.radius * 2.0f };
-            cs.origin   = Vec2{ 0.5f, 0.5f };
-            cs.rotation = chull->angle;
-            cs.uv       = bs_rect{ 0.0f, 0.0f, 1.0f, 1.0f };
-            cs.tint     = crew;
-            cs.texture  = bs_texture{ BS_INVALID_HANDLE };
-            cs.blend    = (crew.a < 0.999f) ? BLEND_ALPHA : BLEND_NONE;
-            cs.layer    = LAYER_CREW;
-            renderer_draw_sprite(&cs);
+            // ---- Test sprites: colored dots orbiting the CURRENT star (volumetric light demo)
+            if (sys == s->current_system) {
+                const i32 TEST_COUNT = 8;
+                for (i32 ti = 0; ti < TEST_COUNT; ++ti) {
+                    f32 t_angle = (f32)ti / (f32)TEST_COUNT * 2.0f * BS_PI + s->galaxy_map_time * 0.3f;
+                    f32 t_orbit = max_orbit * 0.3f + max_orbit * 0.7f * ((f32)ti / (f32)TEST_COUNT);
+                    Vec2 tpos = Vec2{
+                        star_pos.x + cosf(t_angle) * t_orbit * comp,
+                        star_pos.y + sinf(t_angle) * t_orbit * comp
+                    };
+                    bs_color tcol = ss.star.color;
+                    tcol.a = vis * 0.9f;
+                    renderer_draw_circle(tpos, 3.0f * inv_zoom, 8, 2.0f, tcol, LAYER_CELESTIAL);
+                }
+            }
+            // Register current system's star as a point light for volumetric illumination
+            if (s->star_light_enabled && sys == s->current_system) {
+                star_light = make_star_light(star_pos, ss.star.color, max_orbit, comp, vis,
+                                              s->star_light_intensity_mul, s->star_light_radius_mul);
+                has_star_light = TRUE;
+            }
+        }
+        // ---- Galaxy map entities ---------------------------------------------------------
+        for (i32 i = 0; i < s->map_entity_count; ++i) {
+            Vec2 pos = hierpos_diff(&s->map_entities[i].galaxy_pos, &s->camera_hierpos, BS_HIERPOS_CELL_SIZE);
+            pos = cosmetic_compress(pos, s->camera.zoom);
+            // Player ship (index 0) is always fully visible; others fade with sensor range
+            f32 vis = (i == 0) ? 1.0f : get_sensor_visibility(s, pos);
+            bs_color ent_col = s->map_entities[i].color;
+            ent_col.a *= vis;
+            renderer_draw_circle(pos, s->map_entities[i].radius * (0.3f + 0.7f * vis), 8, 2.0f,
+                                 ent_col, LAYER_UI);
+        }
+        // Animated quad around the player ship (index 0, has_outline == TRUE)
+        if (s->map_entity_count > 0 && s->map_entities[0].has_outline) {
+            Vec2 player_gal = hierpos_diff(&s->map_entities[0].galaxy_pos, &s->camera_hierpos, BS_HIERPOS_CELL_SIZE);
+            player_gal = cosmetic_compress(player_gal, s->camera.zoom);
+            // Animation parameters
+            f32 t = s->galaxy_map_time;
+            f32 scale_mul  = s->map_anim_scale     ? (1.0f + 0.30f * sinf(t * 2.0f)) : 1.0f;
+            f32 angle      = s->map_anim_rotate    ? (t * 1.5f) : 0.0f;
+            f32 fill_alpha = s->map_anim_alpha     ? (0.45f + 0.35f * sinf(t * 3.0f)) : 0.80f;
+            f32 out_alpha  = s->map_anim_alpha     ? (0.70f + 0.25f * sinf(t * 3.0f)) : 0.90f;
+            f32 thick_mul  = s->map_anim_thickness ? (1.0f + 0.50f * sinf(t * 4.0f)) : 1.0f;
+            f32 base_size  = 120.0f;
+            Vec2 size      = Vec2{ base_size * scale_mul, base_size * scale_mul };
+            // Filled quad (sprite supports rotation natively)
+            bs_sprite sq{};
+            sq.position = player_gal;
+            sq.size     = size;
+            sq.origin   = Vec2{ 0.5f, 0.5f };
+            sq.rotation = angle;
+            sq.uv       = bs_rect{ 0.0f, 0.0f, 1.0f, 1.0f };
+            sq.tint     = bs_color{ 0.2f, 0.8f, 1.0f, fill_alpha };
+            sq.texture  = bs_texture{ 0 }; // white texture
+            sq.blend    = BLEND_ALPHA;
+            sq.layer    = LAYER_UI;
+            sq.glow_override = nullptr;
+            renderer_draw_sprite(&sq);
+            // Rotated outline
+            f32 outline_thick = 3.0f * thick_mul;
+            bs_color out_col  = bs_color{ 1.0f, 1.0f, 1.0f, out_alpha };
+            draw_rotated_rect_outline(player_gal,
+                                      Vec2{ size.x * 0.5f, size.y * 0.5f },
+                                      angle, outline_thick, out_col, LAYER_UI);
+        }
+        // ---- Hyperjump range circle ---------------------------------------------------------
+        if (s->map_draw_jump_range) {
+            Vec2 ship_rel = hierpos_diff(&s->map_entities[0].galaxy_pos, &s->camera_hierpos, BS_HIERPOS_CELL_SIZE);
+            ship_rel = cosmetic_compress(ship_rel, s->camera.zoom);
+            f32 r = s->map_jump_range;
+            bs_color range_col = bs_color{ 0.35f, 0.75f, 0.95f, 0.30f };
+            u32 segments = 96;
+            for (u32 i = 0; i < segments; i += 2) {
+                f32 a0 = (f32)i       / segments * 2.0f * BS_PI;
+                f32 a1 = (f32)(i + 1) / segments * 2.0f * BS_PI;
+                Vec2 p0 = vec2_add(ship_rel, Vec2{ cosf(a0) * r, sinf(a0) * r });
+                Vec2 p1 = vec2_add(ship_rel, Vec2{ cosf(a1) * r, sinf(a1) * r });
+                renderer_draw_line(p0, p1, 1.5f, range_col, LAYER_UI);
+            }
+        }
+        // ---- Sensor detection range rings ---------------------------------------------------
+        if (s->map_draw_sensor_range && s->map_entity_count > 0) {
+            Vec2 ship_rel = hierpos_diff(&s->map_entities[0].galaxy_pos, &s->camera_hierpos, BS_HIERPOS_CELL_SIZE);
+            ship_rel = cosmetic_compress(ship_rel, s->camera.zoom);
+            constexpr u32 SENSOR_RING_COUNT = 20;
+            constexpr f32 SENSOR_BASE_ALPHA = 0.45f;
+            bs_color base_col = bs_color{ 0.45f, 0.90f, 0.40f, 0.0f };
+            for (u32 ring = 1; ring <= SENSOR_RING_COUNT; ++ring) {
+                f32 t = (f32)ring / (f32)SENSOR_RING_COUNT;
+                f32 r = s->map_sensor_range * t;
+                f32 alpha = SENSOR_BASE_ALPHA * (1.0f - t * t * t);
+                if (alpha <= 0.0f) continue;
+                bs_color ring_col = base_col;
+                ring_col.a = alpha;
+                renderer_draw_circle(ship_rel, r, 64, 1.0f, ring_col, LAYER_UI);
+            }
+        }
+        // ---- Map entity hover tooltip -------------------------------------------------------
+        i32 mx = 0, my = 0;
+        input_get_mouse_position(&mx, &my);
+        const MapEntity* hovered = nullptr;
+        for (i32 i = 0; i < s->map_entity_count; ++i) {
+            Vec2 rel = hierpos_diff(&s->map_entities[i].galaxy_pos, &s->camera_hierpos, BS_HIERPOS_CELL_SIZE);
+            rel = cosmetic_compress(rel, s->camera.zoom);
+            Vec2 screen = camera2d_world_to_screen(&s->camera, s->fb_width, s->fb_height, rel);
+            f32 dx = (f32)mx - screen.x;
+            f32 dy = (f32)my - screen.y;
+            f32 hit_r = s->map_entities[i].radius * s->camera.zoom + 8.0f;
+            if (dx * dx + dy * dy <= hit_r * hit_r) {
+                hovered = &s->map_entities[i];
+                break; // first match wins
+            }
+        }
+        if (hovered) {
+            f64 ax, ay, bx, by;
+            hierpos_to_f64(&hovered->galaxy_pos, BS_HIERPOS_CELL_SIZE, &ax, &ay);
+            hierpos_to_f64(&s->map_entities[0].galaxy_pos, BS_HIERPOS_CELL_SIZE, &bx, &by);
+            f64 dist = sqrt((ax - bx) * (ax - bx) + (ay - by) * (ay - by));
+            char buf[128];
+            if (dist >= 1000000.0) {
+                snprintf(buf, sizeof(buf), "%s\nDist: %.2f M u", hovered->name ? hovered->name : "?", dist / 1000000.0);
+            } else if (dist >= 1000.0) {
+                snprintf(buf, sizeof(buf), "%s\nDist: %.2f k u", hovered->name ? hovered->name : "?", dist / 1000.0);
+            } else {
+                snprintf(buf, sizeof(buf), "%s\nDist: %.0f u", hovered->name ? hovered->name : "?", dist);
+            }
+            bs_ui_tooltip_at((f32)mx, (f32)my, buf);
+        }
+    }
+    // ---- Global mode parallax background (layers back-to-front) ------------------------
+    if (s->mode == MODE_GLOBAL) {
+        // Update current star world position for the dazzle effect.
+        if (s->current_system >= 0 && s->current_system < s->system_count) {
+            StarSystem& ss = s->systems[s->current_system];
+            Vec2 sys_pos_raw = hierpos_diff(&ss.galaxy_center, &s->camera_hierpos, BS_HIERPOS_CELL_SIZE);
+            Vec2 sys_pos = cosmetic_compress(sys_pos_raw, s->camera.zoom);
+            s->star_pos = vec2_add(sys_pos, ss.star.position);
+        } else {
+            s->star_pos = bs_math::Vec2{0,0};
+        }
+        s->global_background.draw(s->camera, s->fb_width, s->fb_height, dt, s->elapsed_time);
+    }
+    // ---- Movable 2D point lights (editor-managed). Submit the whole list each frame; the backend
+    // accumulates them per-pixel over light_ambient. Sprite layers >= LAYER_UI (nav overlay + HUD
+    // text + the light markers below) render fullbright so the UI stays readable. An empty list
+    // renders the scene fullbright (lighting is opt-in via the EDITOR PANEL's "Add Light").
+    // ---- Compute dynamic bloom / glow from ship speed -------------------
+    f32 speed_ratio = 0.0f;
+    if (s->mode != MODE_SYSTEM) {
+        f32 speed = vec2_length(s->player_flight().velocity);
+        speed_ratio = clampf(speed / SHIP_MAX_SPEED, 0.0f, 1.0f);
+    }
+    bs_glow_params render_glow = s->glow_params;
+    f32 render_bloom_intensity = s->bloom_intensity;
+    if (s->dynamic_bloom) {
+        render_glow.intensity += speed_ratio * 1.0f;
+        render_bloom_intensity += speed_ratio * 0.5f;
+    }
+    // Build frame-local light array: star light first (when in system view), then editor lights
+    bs_light2d frame_lights[16];
+    u32 frame_light_count = 0;
+    if (has_star_light) {
+        frame_lights[0] = star_light;
+        frame_light_count = 1;
+    }
+    for (u32 i = 0; i < s->lights.size() && frame_light_count < 16; ++i) {
+        frame_lights[frame_light_count++] = s->lights[i];
+    }
+    // When a star light is active, boost ambient so the galaxy map stays visible
+    // (the default ambient is ~0.2, which makes the map 80% darker than fullbright).
+    bs_color frame_ambient = s->light_ambient;
+    if (has_star_light) {
+        frame_ambient = bs_color{ 0.85f, 0.88f, 0.95f, 1.0f };
+    }
+    renderer_set_lights(frame_light_count > 0 ? frame_lights : nullptr,
+                        frame_light_count, frame_ambient, LAYER_UI);
+    renderer_set_glow_params(&render_glow);
+    renderer_set_bloom_enabled(s->bloom_enabled);
+    renderer_set_bloom_params(s->bloom_threshold, render_bloom_intensity);
+    // ---- Ship rendering (skipped in system view) -------------------------
+    if (s->mode != MODE_SYSTEM) {
+        // Directional star light: from each ship toward the current star. For a distant star
+        // all ships get roughly the same direction, but we compute it per ship to stay correct.
+        bs_math::Vec3 default_light_dir = bs_math::Vec3{ 0.0f, -1.0f, 0.2f };
+        // Compute a fleet-wide light direction from the player ship to the star as a fallback.
+        bs_math::Vec2 to_star = vec2_sub(s->star_pos, s->player_ship().origin);
+        f32 star_dist = vec2_length(to_star);
+        bs_math::Vec3 fleet_light_dir = default_light_dir;
+        if (star_dist > 0.001f) {
+            bs_math::Vec2 d = vec2_scale(to_star, 1.0f / star_dist);
+            fleet_light_dir = bs_math::Vec3{ d.x, d.y, 0.2f };
+        }
 
-            // Selection ring around the selected crew (rotation-invariant circle, so it reads the
-            // same whether or not the heading is cancelled). Sits above the path.
-            if (c.crew_selected) {
-                bs_color sc = SELECT_COLOR;
-                sc.a *= crew_a;
-                renderer_draw_circle(cs.position, c.radius + 4.0f, 20, 1.0f, sc, LAYER_SELECT);
+        // Render each fleet ship with its own per-ship speed ratio.
+        for (i32 i = 0; i < s->fleet.count(); ++i) {
+            const Ship* ship = &s->fleet.at(i).ship;
+            f32 ship_speed = vec2_length(s->fleet.at(i).flight.velocity);
+            f32 ship_speed_ratio = clampf(ship_speed / SHIP_MAX_SPEED, 0.0f, 1.0f);
+
+            bs_math::Vec2 ship_to_star = vec2_sub(s->star_pos, ship->origin);
+            f32 dist = vec2_length(ship_to_star);
+            bs_math::Vec3 light_dir = fleet_light_dir;
+            if (dist > 0.001f) {
+                bs_math::Vec2 d = vec2_scale(ship_to_star, 1.0f / dist);
+                light_dir = bs_math::Vec3{ d.x, d.y, 0.2f };
             }
 
+            draw_ship_visual(ship, 1.0f, light_dir);
+            draw_engine_exhaust(ship, s->exhaust_texture, &s->exhaust_glow,
+                                ship_speed_ratio, 1.0f, s->elapsed_time);
+            // ---- DEBUG collider overlay.
+            draw_collider_outline(ship, COLLIDER_COLOR, 1.5f);
         }
-    }
-
-    // ---- Helm / flight-authority HUD (screen-anchored bitmap text) ----
-    // Surfaces the Phase 4 flight gate so it's legible instead of mysterious: an unmanned ship
-    // that ignores WASD must SAY so, or it just looks broken. Shown only in/around global mode
-    // (where flight control applies); fades in with the roof cross-fade so it tracks the mode.
-    if (roof_a > 0.01f) {
-        b8 piloted = crew_is_piloting(s);
-        const char* helm_line = piloted ? "HELM: MANNED  -  FLIGHT READY"
-                                        : "HELM: UNMANNED  -  FLIGHT LOCKED";
-        // Green when a pilot is at the helm, amber-red when the helm is empty.
-        bs_color helm_col = piloted ? bs_color{ 0.40f, 0.85f, 0.45f, 1.0f }
-                                    : bs_color{ 0.95f, 0.45f, 0.25f, 1.0f };
-        helm_col.a *= roof_a; // fade with the mode cross-fade
-        text_draw(helm_line, 12.0f, 12.0f, 2.0f, helm_col,
-                  &s->camera, s->fb_width, s->fb_height, LAYER_HUD_TEXT);
-    }
-
-    // ---- Docking prompt HUD (Phase 2) ----
-    // Surfaces the dock/undock affordance so the T key is discoverable. Three states:
-    //   * DOCKED        -> "DOCKED  -  PRESS T TO UNDOCK" (cyan): the join is latched; T releases it.
-    //   * dock_eligible -> "PRESS T TO DOCK" (green): airlocks are aligned & close; T mates the hulls.
-    //   * otherwise     -> nothing (no affordance available; fly closer / align the airlocks).
-    // Drawn one line below the helm HUD, screen-anchored. Always shown when docked (so the player can
-    // always see how to leave); the eligibility prompt is independent of mode since you align hulls in
-    // global mode but may inspect the join in local mode.
-    {
-        const char* dock_line = nullptr;
-        bs_color    dock_col;
-        if (s->enemy_docked) {
-            dock_line = "DOCKED  -  PRESS T TO UNDOCK";
-            dock_col  = bs_color{ 0.35f, 0.80f, 0.90f, 1.0f }; // cyan: actively mated
-        } else if (s->dock_eligible) {
-            dock_line = "PRESS T TO DOCK";
-            dock_col  = bs_color{ 0.45f, 0.88f, 0.50f, 1.0f }; // green: ready to mate
+        f32 enemy_alpha = 1.0f;
+        if (s->mode == MODE_GLOBAL && s->map_draw_sensor_range) {
+            f32 enemy_dist = vec2_length(vec2_sub(s->enemy_ship.origin, s->player_ship().origin));
+            f32 enemy_vis  = sensor_visibility_from_dist(enemy_dist, s->map_sensor_range);
+            enemy_alpha *= enemy_vis;
         }
-        if (dock_line) {
-            // Place just under the helm line (helm is scale 2 => ~16px glyphs at y=12). Use the same
-            // left margin so the HUD reads as one stacked block.
-            text_draw(dock_line, 12.0f, 12.0f + 16.0f * 2.0f + 6.0f, 2.0f, dock_col,
-                      &s->camera, s->fb_width, s->fb_height, LAYER_HUD_TEXT);
+        draw_ship_visual(&s->enemy_ship, enemy_alpha, fleet_light_dir);
+        draw_collider_outline(&s->enemy_ship, COLLIDER_COLOR, 1.5f);
+        // ---- RTS controls overlay (hover selection, etc.) ------------------------------------
+        s->rts_controls.draw();
+        // ---- Combat entities (non-ship targets draw as quads) -------------------------------
+        for (i32 i = 0; i < s->combat_entity_count; ++i) {
+            const CombatEntity* ce = &s->combat_entities[i];
+            if (!ce->active || ce->ship) continue; // ships are drawn above
+            renderer_draw_quad(ce->position,
+                               Vec2{ ce->radius * 2.0f, ce->radius * 2.0f },
+                               ce->tint, LAYER_UI);
         }
+        // ---- Projectiles ---------------------------------------------------------------------
+        s->projectiles.glow_override = &s->bullet_glow;
+        s->projectiles.render(LAYER_UI);
+        // ---- EDIT MODE selection highlight ----------------------------------------------------
+        // When active, every editor light gets a tinted marker and a faint radius circle so they
+        // are easy to locate. The selected entity (ship or light) gets a bright highlight on top.
+        if (s->edit_mode_active) {
+            f32 zoom_inv = 1.0f / ((s->camera.zoom > 0.0001f) ? s->camera.zoom : 1.0f);
+            // All lights: small tinted marker + faint radius circle.
+            for (size_t i = 0; i < s->lights.size(); ++i) {
+                const bs_light2d& L = s->lights[i];
+                if (!L.enabled) continue;
+                bs_color col = L.color;
+                bs_color mkr = bs_color{ col.r, col.g, col.b, 0.40f };
+                bs_color rad = bs_color{ col.r, col.g, col.b, 0.15f };
+                f32 r_mkr = 12.0f * zoom_inv;
+                renderer_draw_circle(L.position, r_mkr, 8, 2.0f, mkr, LAYER_GIZMO);
+                renderer_draw_circle(L.position, L.radius, 32, 1.5f, rad, LAYER_GIZMO);
+            }
+            // Selected entity: bright highlight on top.
+            const bs_color SEL = bs_color{ 0.30f, 0.95f, 1.00f, 1.0f };
+            if (s->edit_selection.kind == EDIT_SHIP) {
+                const Ship* sel = (s->edit_selection.index == 0) ? &s->player_ship() : &s->enemy_ship;
+                draw_collider_outline(sel, SEL, 3.0f);
+            } else if (s->edit_selection.kind == EDIT_LIGHT &&
+                       s->edit_selection.index >= 0 &&
+                       s->edit_selection.index < (i32)s->lights.size()) {
+                Vec2 p = s->lights[s->edit_selection.index].position;
+                f32  r = 24.0f * zoom_inv;
+                renderer_draw_circle(p, r, 24, 2.0f, SEL, LAYER_GIZMO);
+                renderer_draw_line(Vec2{ p.x - r, p.y }, Vec2{ p.x + r, p.y }, 2.0f, SEL, LAYER_GIZMO);
+                renderer_draw_line(Vec2{ p.x, p.y - r }, Vec2{ p.x, p.y + r }, 2.0f, SEL, LAYER_GIZMO);
+            }
+            // ---- GIZMOS (translation arrows + rotation ring) ----------------------------------
+            if (s->edit_selection.kind != EDIT_NONE) {
+                Vec2 origin = edit_entity_position(s, s->edit_selection);
+                f32 axis_len = gizmo_axis_len(zoom_inv);
+                f32 arrow_sz = gizmo_arrow_size(zoom_inv);
+                // Which gizmo part is currently under the cursor? Visual feedback must match the
+                // hit-test logic in edit_pick_gizmo so the user knows what will activate on click.
+                EditDragMode hover = edit_pick_gizmo(s, mouse_world(s));
+                // Rotation ring — sized to extend past the entity bounds + 30 px screen padding.
+                f32 ring_r = 0.0f;
+                if (s->edit_selection.kind == EDIT_SHIP) {
+                    const Ship* sh = (s->edit_selection.index == 0) ? &s->player_ship() : &s->enemy_ship;
+                    ring_r = gizmo_ring_radius_ship(sh, zoom_inv);
+                } else {
+                    ring_r = gizmo_ring_radius_light(zoom_inv);
+                }
+                bs_color ring_col = (hover == EDIT_DRAG_ROTATE)
+                    ? bs_color{ 0.30f, 0.95f, 1.00f, 1.0f }   // bright cyan on hover
+                    : bs_color{ 0.90f, 0.90f, 0.90f, 0.60f }; // gray normally
+                f32 ring_thick = (hover == EDIT_DRAG_ROTATE) ? 2.5f : 1.5f;
+                renderer_draw_circle(origin, ring_r, 32, ring_thick, ring_col, LAYER_GIZMO);
+                // X axis (red) and Y axis (green) — brighten and thicken on hover.
+                bs_color x_col = (hover == EDIT_DRAG_AXIS_X)
+                    ? bs_color{ 1.00f, 1.00f, 1.00f, 1.0f }   // white on hover
+                    : bs_color{ 1.00f, 0.20f, 0.20f, 1.0f };  // red normally
+                bs_color y_col = (hover == EDIT_DRAG_AXIS_Y)
+                    ? bs_color{ 1.00f, 1.00f, 1.00f, 1.0f }   // white on hover
+                    : bs_color{ 0.20f, 1.00f, 0.30f, 1.0f };  // green normally
+                f32 axis_thick = 2.5f;
+                if (hover == EDIT_DRAG_AXIS_X || hover == EDIT_DRAG_AXIS_Y)
+                    axis_thick = 4.0f;
+                Vec2 x_end = vec2_add(origin, Vec2{ axis_len, 0.0f });
+                Vec2 y_end = vec2_add(origin, Vec2{ 0.0f, axis_len });
+                renderer_draw_line(origin, x_end, axis_thick, x_col, LAYER_GIZMO);
+                renderer_draw_line(origin, y_end, axis_thick, y_col, LAYER_GIZMO);
+                // Arrow heads follow their parent axis color.
+                renderer_draw_line(x_end, Vec2{ x_end.x - arrow_sz, x_end.y - arrow_sz * 0.5f }, 2.0f, x_col, LAYER_GIZMO);
+                renderer_draw_line(x_end, Vec2{ x_end.x - arrow_sz, x_end.y + arrow_sz * 0.5f }, 2.0f, x_col, LAYER_GIZMO);
+                renderer_draw_line(y_end, Vec2{ y_end.x - arrow_sz * 0.5f, y_end.y - arrow_sz }, 2.0f, y_col, LAYER_GIZMO);
+                renderer_draw_line(y_end, Vec2{ y_end.x + arrow_sz * 0.5f, y_end.y - arrow_sz }, 2.0f, y_col, LAYER_GIZMO);
+            }
+        }
+        // ---- Travel debug overlay (editor-gated) -----------------------------------------------
+        if (s->travel_enabled) {
+            Vec2 origin_world = hierpos_to_vec2(&s->travel.origin,      BS_HIERPOS_CELL_SIZE);
+            Vec2 dest_world   = hierpos_to_vec2(&s->travel.destination, BS_HIERPOS_CELL_SIZE);
+            Vec2 ship_world   = hierpos_to_vec2(&s->travel.current,    BS_HIERPOS_CELL_SIZE);
+            // Path line: faint cyan.
+            bs_color path_col = bs_color{ 0.35f, 0.90f, 0.95f, 0.6f };
+            renderer_draw_line(origin_world, dest_world, 1.5f, path_col, LAYER_UI);
+            // Origin marker: green circle.
+            renderer_draw_circle(origin_world, 12.0f, 16, 2.0f, bs_color{ 0.35f, 0.95f, 0.45f, 0.9f }, LAYER_UI);
+            // Destination marker: red circle.
+            renderer_draw_circle(dest_world,   12.0f, 16, 2.0f, bs_color{ 0.95f, 0.35f, 0.35f, 0.9f }, LAYER_UI);
+            // Current ship marker: yellow circle.
+            renderer_draw_circle(ship_world,    8.0f, 16, 2.0f, bs_color{ 1.00f, 0.95f, 0.35f, 0.9f }, LAYER_UI);
+        }
+        // ---- Sensor range circle (global mode only) -----------------------------------------
+        if (s->mode == MODE_GLOBAL && s->map_draw_sensor_range) {
+            bs_color sensor_col = bs_color{ 0.45f, 0.90f, 0.40f, 0.30f };
+            renderer_draw_circle(s->player_ship().origin, s->map_sensor_range, 64, 2.0f, sensor_col, LAYER_UI);
+        }
+        // ---- Metaball movement UI (global mode only) ------------------------------------------
+        draw_ship_metaballs(s);
     }
-
-    // Crew Job Panel — immediate-mode ImGui, built between renderer_begin_frame/end_frame (we are
-    // inside game_render). It surfaces the selected crew's jobs, resolves its own clicks, and
-    // dispatches them to the job queue. ImGui composites it on top of the world automatically, and
-    // it self-anchors to the screen (no camera-cancel needed). No-op when no crew is selected.
-    build_crew_job_panel(s);
-
-    // Editor Panel
+    // Action Log Panel -- bottom-right HUD. Shows last 3 messages (fades after 3s), expands to
+    // full 30-entry history on hover. Logs significant player actions.
+    if (!s->edit_mode_active)
+        build_action_log_panel(s, dt);
+    // ---- Encounter panel (centered, modal) -----------------------------------------------
+    if (s->encounter_active && !s->edit_mode_active) {
+        if (bs_ui_begin_panel("ENCOUNTER", BS_UI_ANCHOR_CENTER, 12.0f, BsUiType::BS_UI_TYPE_GAME)) {
+            bs_ui_text_colored(1.0f, 1.0f, 1.0f, 1.0f, s->enemy_ship.vessel_name);
+            bs_ui_separator();
+            Vec2 delta = vec2_sub(s->player_ship().origin, s->enemy_ship.origin);
+            f32 dist   = vec2_length(delta);
+            char info[128];
+            snprintf(info, sizeof(info), "Distance: %.1f m", dist);
+            bs_ui_text_colored(0.8f, 0.8f, 0.8f, 1.0f, info);
+            char faction_line[128];
+            snprintf(faction_line, sizeof(faction_line), "Faction: %s",
+                     vessel_faction_name(s->enemy_ship.faction));
+            bs_ui_text_colored(0.8f, 0.8f, 0.8f, 1.0f, faction_line);
+            bs_ui_text_colored(0.7f, 0.7f, 0.7f, 1.0f,
+                                vessel_faction_desc(s->enemy_ship.faction));
+            bs_ui_separator();
+            if (bs_ui_button("Engage",  TRUE)) {
+                s->encounter_active = FALSE;
+                s->time_scale = 1.0f;
+                action_log_push(s, "Engage selected.");
+            }
+            if (bs_ui_button("Avoid",   TRUE)) {
+                s->encounter_active = FALSE;
+                s->time_scale = 1.0f;
+                action_log_push(s, "Avoid selected.");
+            }
+            if (bs_ui_button("Hail",    TRUE)) {
+                s->encounter_active = FALSE;
+                s->time_scale = 1.0f;
+                action_log_push(s, "Hail selected.");
+            }
+            if (bs_ui_button("Observe", TRUE)) {
+                s->encounter_active = FALSE;
+                s->time_scale = 1.0f;
+                action_log_push(s, "Observe selected.");
+            }
+        }
+        bs_ui_end_panel();
+    }
+    // Editor Panel (always visible: contains the "Edit mode active" checkbox)
     build_editor_panel(s);
-
+    // Transform panel: only in edit mode when an entity is selected
+    if (s->edit_mode_active)
+        build_transform_panel(s);
+    // Time-control panel (visible in ALL modes, even edit mode)
+    draw_time_control_panel(s);
+    // ---- Navigation HUD + Ship HUD (global mode only, hidden in edit mode) -----------------
+    if (s->mode == MODE_GLOBAL && !s->edit_mode_active) {
+        i32 nearest = find_system_by_cell(&s->map_entities[0].galaxy_pos, &s->galaxy_voronoi, s->systems);
+        f64 sx, sy, nx, ny;
+        hierpos_to_f64(&s->map_entities[0].galaxy_pos, BS_HIERPOS_CELL_SIZE, &sx, &sy);
+        hierpos_to_f64(&s->systems[nearest].galaxy_center, BS_HIERPOS_CELL_SIZE, &nx, &ny);
+        f64 dist = sqrt((sx - nx) * (sx - nx) + (sy - ny) * (sy - ny));
+        char dist_buf[64];
+        if (dist >= 1000000.0) {
+            snprintf(dist_buf, sizeof(dist_buf), "%.2f M u", dist / 1000000.0);
+        } else if (dist >= 1000.0) {
+            snprintf(dist_buf, sizeof(dist_buf), "%.2f k u", dist / 1000.0);
+        } else {
+            snprintf(dist_buf, sizeof(dist_buf), "%.0f u", dist);
+        }
+        if (bs_ui_begin_hud_panel("NAV HUD", BS_UI_ANCHOR_TOP_RIGHT, 16.0f)) {
+            const f32 label_x = 60.0f;
+            const f32 dim_a   = 0.60f;
+            const f32 bright_a= 1.0f;
+            bs_ui_text_colored(0.35f, 0.80f, 0.95f, dim_a, "SECTOR");
+            bs_ui_same_line();
+            bs_ui_set_cursor_pos_x(label_x);
+            bs_ui_text_colored(0.35f, 0.80f, 0.95f, bright_a, "Alpha");
+            bs_ui_text_colored(0.35f, 0.80f, 0.95f, dim_a, "SYS");
+            bs_ui_same_line();
+            bs_ui_set_cursor_pos_x(label_x);
+            bs_ui_text_colored(0.35f, 0.80f, 0.95f, bright_a,
+                               s->systems[s->current_system].name ? s->systems[s->current_system].name : "?");
+            bs_ui_same_line();
+            bs_ui_set_cursor_pos_x(label_x + 110.0f);
+            bs_ui_text_colored(0.35f, 0.80f, 0.95f, dim_a, "|");
+            bs_ui_same_line();
+            bs_ui_set_cursor_pos_x(label_x + 128.0f);
+            bs_ui_text_colored(0.35f, 0.80f, 0.95f, bright_a, dist_buf);
+            bs_ui_text_colored(0.35f, 0.80f, 0.95f, dim_a, "ZONE");
+            bs_ui_same_line();
+            bs_ui_set_cursor_pos_x(label_x);
+            char zone_buf[16];
+            snprintf(zone_buf, sizeof(zone_buf), "%d", get_system_zone(s, s->current_system));
+            bs_ui_text_colored(0.35f, 0.80f, 0.95f, bright_a, zone_buf);
+        }
+        bs_ui_end_hud_panel();
+        // ---- Ship properties HUD (global mode only) -------------------------------------------
+        if (!s->free_camera_active) {
+        f32 speed = vec2_length(s->player_flight().velocity);
+        char speed_buf[64];
+        snprintf(speed_buf, sizeof(speed_buf), "%.1f u/s", speed);
+        if (bs_ui_begin_hud_panel("SHIP HUD", BS_UI_ANCHOR_TOP_RIGHT, 110.0f)) {
+            const f32 label_x = 60.0f;
+            const f32 dim_a   = 0.60f;
+            const f32 bright_a= 1.0f;
+            bs_ui_text_colored(0.35f, 0.80f, 0.95f, dim_a, "SPEED");
+            bs_ui_same_line();
+            bs_ui_set_cursor_pos_x(label_x);
+            bs_ui_text_colored(0.35f, 0.80f, 0.95f, bright_a, speed_buf);
+        }
+        bs_ui_end_hud_panel();
+        }
+    }
     // Periodic stats to the log (the only on-screen text is the diagnostic helm-status HUD above).
     {
         // static f32 acc = 0.0f;
-        // acc += dt;
-        // if (acc >= 1.0f) {
-        //     acc = 0.0f;
-        //     bs_frame_stats fs = renderer_get_frame_stats();
-        //     f32 spd = vec2_length(s->flight.velocity);
-        //     const char* jstate = s->crew.has_current ? job_state_name(s->crew.current.state) : "idle";
-        //     BS_LOG_INFO("proto: mode=%s zoom=%.2f roof=%.2f heading=%.0fdeg spd=%.0f crewpath=%d job=%s pilot=%d quads=%u draws=%u",
-        //                 s->mode == MODE_LOCAL ? "local" : "global",
-        //                 s->camera.zoom, s->roof_alpha,
-        //                 s->ship.angle * BS_RAD2DEG, spd,
-        //                 s->crew.path_len,
-        //                 jstate, (i32)s->crew.is_active_pilot,
-        //                 fs.sprite_count, fs.draw_calls);
-        // }
     }
-
-#if BS_DEBUG
-    // Pick the ship tile col and row under the mouse.
-    // Compute the LOCAL tile center for that tile, then convert to WORLD.
-    // Draw a circle at that world center.
-    // Works when docked by checking both ships.
-    Vec2 t_world;
-    i32 t_col, t_row;
-    pick_tile_under_mouse(s, &t_world, &t_col, &t_row);
-
-    // First check player ship
-    const Ship* picked_ship = &s->ship;
-    TileType t = ship_tile_at(picked_ship, t_col, t_row);
-
-    // If docked and player ship tile is empty, check enemy ship
-    if (s->enemy_docked && t == TILE_EMPTY) {
-        ship_world_to_tile(&s->enemy_ship, t_world, &t_col, &t_row);
-        t = ship_tile_at(&s->enemy_ship, t_col, t_row);
-        if (t != TILE_EMPTY) {
-            picked_ship = &s->enemy_ship;
-        }
-    }
-
-    // Only draw if we found a valid tile
-    if (t != TILE_EMPTY) {
-        const Vec2 local_center = ship_tile_center_local(picked_ship, t_col, t_row);
-        const Vec2 world_center = ship_local_to_world(picked_ship, local_center);
-        renderer_draw_circle(world_center, 16.0f, 16, 1.0f, bs_color{1,1,0,0.75f}, LAYER_PATH);
-    }
-
-    renderer_draw_grid(Vec2{-1e5, -1e5}, Vec2{1e5, 1e5}, 1e3, 1.0f, bs_color{1,1,1,0.5f}, LAYER_DEBUG);
-#endif
-
     return TRUE;
 }
-
 void game_on_resize(Game* game_inst, u32 width, u32 height) {
     game_state* s = (game_state*)game_inst->state;
     if (s) {

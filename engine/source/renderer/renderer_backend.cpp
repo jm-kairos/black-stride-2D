@@ -22,8 +22,21 @@ b8 renderer_backend_create(ERendererBackend type, renderer_backend* out_backend)
             out_backend->create_texture  = sdlgpu_backend_create_texture;
             out_backend->destroy_texture = sdlgpu_backend_destroy_texture;
             out_backend->set_camera      = sdlgpu_backend_set_camera;
-            out_backend->draw_sprite     = sdlgpu_backend_draw_sprite;
-            out_backend->get_frame_stats = sdlgpu_backend_get_frame_stats;
+            out_backend->draw_sprite         = sdlgpu_backend_draw_sprite;
+            out_backend->draw_mapped_sprite  = sdlgpu_backend_draw_mapped_sprite;
+            out_backend->draw_starfield      = sdlgpu_backend_draw_starfield;
+            out_backend->draw_sunburst       = sdlgpu_backend_draw_sunburst;
+            out_backend->set_lights          = sdlgpu_backend_set_lights;
+            out_backend->set_glow_params     = sdlgpu_backend_set_glow_params;
+            out_backend->set_bloom_enabled   = sdlgpu_backend_set_bloom_enabled;
+            out_backend->set_bloom_params    = sdlgpu_backend_set_bloom_params;
+            out_backend->set_streak_enabled  = sdlgpu_backend_set_streak_enabled;
+            out_backend->set_streak_params   = sdlgpu_backend_set_streak_params;
+            out_backend->set_streak_intensity = sdlgpu_backend_set_streak_intensity;
+            out_backend->set_streak_source   = sdlgpu_backend_set_streak_source;
+            out_backend->set_streak_flare_intensity = sdlgpu_backend_set_streak_flare_intensity;
+            out_backend->set_aux_bloom_mode  = sdlgpu_backend_set_aux_bloom_mode;
+            out_backend->get_frame_stats     = sdlgpu_backend_get_frame_stats;
             return TRUE;
         default:
             BS_LOG_FATAL("renderer_backend_create: unknown backend type %d", (int)type);
@@ -42,7 +55,20 @@ void renderer_backend_destroy(renderer_backend* backend)
     backend->create_texture  = 0;
     backend->destroy_texture = 0;
     backend->set_camera      = 0;
-    backend->draw_sprite     = 0;
-    backend->get_frame_stats = 0;
+    backend->draw_sprite         = 0;
+    backend->draw_mapped_sprite  = 0;
+    backend->draw_starfield      = 0;
+    backend->draw_sunburst       = 0;
+    backend->set_lights          = 0;
+    backend->set_glow_params     = 0;
+    backend->set_bloom_enabled   = 0;
+    backend->set_bloom_params    = 0;
+    backend->set_streak_enabled  = 0;
+    backend->set_streak_params   = 0;
+    backend->set_streak_intensity = 0;
+    backend->set_streak_source   = 0;
+    backend->set_streak_flare_intensity = 0;
+    backend->set_aux_bloom_mode  = 0;
+    backend->get_frame_stats     = 0;
     backend->internal_state  = 0;
 }

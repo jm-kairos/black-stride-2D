@@ -1,228 +1,267 @@
 #pragma once
-
 #include <defines.h>
 #include <game_types.h>
 #include <renderer/renderer_types.h>
 #include "ship.h"
-#include "nav.h"
-#include "job.h"
-#include "hull_contour.h"   // Stage-4 render of the cosmetic marching-squares hull silhouette
+#include "projectile.h"
+#include "star_fx.h"
+#include "global_background.h"
+#include "voronoi_galaxy.h"
+#include "travel.h"
+#include "fleet.h"
+#include "rts_controls.h"
 #include <containers/vector.h>
-
 // =====================================================================================
-// Black Stride prototype: tile-based spaceship with two zoom-driven view modes.
+// Black Stride prototype: art-texture ships with two view modes.
 //
-//   mode::local  — zoomed in. Interior tiles (floor/walls/doors/hull) are drawn and one
-//                  crew member is commanded RTS/Kenshi-style: LEFT-CLICK selects them,
-//                  RIGHT-CLICK orders a move and the crew walks there autonomously along an
-//                  A* path through the ship interior. WASD pans the (free-roam) camera.
-//   mode::global — zoomed out. The ship's roof is drawn as a solid silhouette hiding the
-//                  interior; the crew is not shown. WASD flies the whole ship.
-//
-// Crew navigation is SIMULATION, not control: an ordered crew keeps walking its path even
-// after you zoom out to pilot, so it continues across the decks of the moving, rotating
-// hull while you fly (crew lives in ship-local space and rides the rigid-body pose).
-//
-// The mode is derived from camera zoom with a hysteresis band so it does not flicker at
-// the boundary, plus a short cross-fade between interior and roof for a seamless feel.
+//   mode::global — zoomed out. Ship sprites and roof silhouettes visible.
+//                  WASD flies the whole ship (Starsector-style inertial).
+//   mode::system — galaxy map. The player navigates between star systems.
 //
 // Controls:
-//   Mouse wheel  — zoom in/out (drives the mode switch).
-//   Local mode (crew command):
-//     Left-click   — select the crew member (click on its tile; click elsewhere deselects).
-//     Right-click  — order the selected crew to walk to the clicked walkable tile (A* path).
-//     WASD         — pan the camera (free-roam look-around; screen-aligned).
 //   Global mode (ship flight, Starsector-style inertial):
 //     W / S      — thrust forward / reverse along heading (accel / decel to max speed).
 //     C          — brake: decelerate current velocity to zero.
-//     Q / E      — strafe left / right (accel fraction by hull class: 100/75/50/25%).
+//     Q / E      — strafe left / right.
 //     A / D      — turn left / right (turn-accel ramps to max turn rate; auto-stabilizes).
+//   M            — toggle between global and system mode.
 //   Esc          — quit (handled by the engine).
 // =====================================================================================
-
 enum GameMode {
-    MODE_LOCAL = 0,
-    MODE_GLOBAL
+    MODE_GLOBAL = 0,
+    MODE_SYSTEM
 };
-
-// Max jobs a single crew member can have queued (beyond the one in-flight `current` job).
-#define CREW_MAX_JOBS 16
-
-struct Crew {
-    // Which hull this crew is bound to: 0 = player ship, 1 = enemy ship. ALL of this crew's
-    // local-space fields (position, velocity, path) are expressed in crew_ship(s,this)'s frame —
-    // the deck it currently stands on. A crew BOARDS the other hull by walking to the mated
-    // airlock and handing off (game.cpp update_crew_handoff): ship_id flips and position is
-    // re-rooted into the new hull's frame at the SAME world point (no teleport). The binding is
-    // durable across undock — a crew that boarded the enemy rides it away when the hulls part.
-    i32           ship_id;    // 0 = player (s->ship), 1 = enemy (s->enemy_ship)
-
-    bs_math::Vec2 position;   // SHIP-LOCAL center (axis-aligned; rides ship_id's full pose)
-    bs_math::Vec2 velocity;   // SHIP-LOCAL velocity (steered along the path)
-    f32           radius;     // half-extent for AABB tile collision (ship-local)
-
-    // Active move order: a list of SHIP-LOCAL waypoint centers from A* (start -> goal). The
-    // crew steers toward path[path_idx], advancing as it arrives. path_len == 0 means idle
-    // (no order). Because the waypoints are ship-local, the path stays valid for free while
-    // the ship translates and rotates — the crew keeps walking it in every mode.
-    bs_math::Vec2 path[NAV_MAX_PATH];
-    i32           path_len;   // number of valid waypoints (0 = idle / no order)
-    i32           path_idx;   // index of the waypoint currently steered toward
-
-    // ---- Multi-agent avoidance (crew_avoid.*) ----
-    // Destination TILE this crew is heading to (its reserved goal). Other crew route around it,
-    // and Tier-3 deadlock resolution replans toward it. Valid only while has_dest.
-    i32           dest_col, dest_row;
-    b8            has_dest;
-    // Avoidance clocks (seconds): block_timer accrues while the per-frame peer gate is vetoing
-    // motion (maintained in simulate_crew); wait_timer > 0 means this agent is politely YIELDING
-    // (holding position) so a higher-priority peer can pass; stuck_timer is total time spent
-    // unable to make progress, used to abort a hopeless order instead of freezing forever.
-    f32           block_timer;
-    f32           wait_timer;
-    f32           stuck_timer;
-
-    // ---- Cross-ship boarding (Phase 3) ----
-    // A board order is a TWO-LEG move across the docked seam: the crew walks leg A to its OWN hull's
-    // airlock-interior tile, HOPS the mated airlock onto the other hull (ship_id flips, position
-    // re-roots into the new hull's frame at the landfall tile — see update_crew_handoff), then walks
-    // leg B to board_goal on that hull. `boarding` is TRUE only while leg A is in flight (it clears
-    // the instant the hop fires or the order aborts). board_target_ship is the destination hull id;
-    // board_goal_(col,row) is the final goal tile IN THE DESTINATION HULL's grid. A plain same-hull
-    // move leaves boarding FALSE. If the hulls undock mid-transit the order aborts and the crew stays
-    // put (you can't cross a broken seam). Zero-init (Crew{}) => boarding FALSE, so non-board crew are
-    // unaffected.
-    b8            boarding;          // leg A of a cross-ship board order is in flight
-    i32           board_target_ship; // destination hull id (the hull being boarded)
-    i32           board_goal_col;    // final goal tile (destination hull grid)
-    i32           board_goal_row;
-
-    // ---- Seam GLIDE (the smooth airlock crossing) ----
-    // Leg A ends at the crew's OWN airlock-interior tile; the destination landfall tile is ~3 tiles
-    // (one door + the mated gap + one door) away in world space. Rather than snap ship_id+position
-    // across that gap in a single frame (a visible TELEPORT — the old bug: the crew "jumped" between
-    // ships), the crew GLIDES through both open doorways at walking speed. While `transiting` it stays
-    // bound to its origin hull (ship_id unchanged) and its local position is rewritten each frame to
-    // track a world-space point lerped from its own interior tile to the destination interior tile;
-    // the two endpoints are recomputed from the live poses so the glide rides the rigid mated pair.
-    // At t>=1 it binds to the destination hull (ship_id flips, position = the landfall tile center in
-    // that hull's frame) and plans leg B. The exit/landfall interior tiles are collinear through both
-    // mated door centers (doors parallel + TWO tiles apart, the connector bridge tile spanning the gap
-    // at their midpoint), so the straight glide threads the airlocks across the connector.
-    // Zero-init (Crew{}) => transiting FALSE, so non-boarding crew are unaffected (regression guard).
-    b8            transiting;        // a smooth seam crossing is in flight (leg A done, leg B pending)
-    f32           transit_t;         // glide progress 0..1 along the own-interior -> dest-interior line
-    bs_math::Vec2 transit_from_local; // glide start: own airlock-interior tile center, in ORIGIN frame
-    bs_math::Vec2 transit_to_local;   // glide end: landfall tile center, in DESTINATION (board) frame
-
-    // ---- Job system (Phase 3) ----
-    SkillSet      skills;     // per-skill levels (stub; no gameplay effect yet)
-    Job           queue[CREW_MAX_JOBS]; // pending assigned jobs (dispatch: priority then FIFO)
-    i32           job_count;  // number of valid entries in `queue`
-    Job           current;    // the in-flight job (valid when has_current); drives the runner
-    b8            has_current; // is `current` an active job (vs. idle)?
-    b8            is_active_pilot; // TRUE only while a PILOTING job is EXECUTING at the helm
-
-    b8        crew_selected; 
+struct CelestialBody {
+    bs_math::Vec2 position;
+    f32           radius;
+    bs_color      color;
+    // Legacy fields (kept for backward compat, orbit_radius = semi_major_axis)
+    f32           orbit_radius; // distance from parent body
+    f32           orbit_speed;  // radians per second
+    f32           orbit_angle;  // current angle (radians)
+    // Orbital elements (constant after generation)
+    f32           semi_major_axis;  // a
+    f32           eccentricity;     // e (0 = circular)
+    f32           arg_periapsis;    // orientation of ellipse major axis (radians)
+    f32           mean_anomaly_0;   // initial phase (radians)
+    f32           orbital_period;   // seconds per full orbit
 };
-
-// Hull size class — scales how much of the acceleration value strafing (Q/E) may use:
-// frigate 100%, destroyer 75%, cruiser 50%, capital 25%.
-enum HullClass {
-    HULL_FRIGATE = 0,
-    HULL_DESTROYER,
-    HULL_CRUISER,
-    HULL_CAPITAL
+struct StarSystem {
+    bs_math::HierPos2 galaxy_center; // absolute galaxy position of this system's star
+    CelestialBody     star;
+    CelestialBody     planets[5];  // max 5 planets
+    i32               planet_count; // 2–5
+    f32               system_scale; // per-system distance compression
+    const char*       name;          // display label above the star on the map
+    f32               star_pulse_phase;   // random phase offset for core animation
+    f32               corona_pulse_phase; // random phase offset for corona animation
+    f32               halo_pulse_phase;   // random phase offset for halo animation
+    bs_glow_params    glow[3];            // per-star glow: [0]=core, [1]=corona, [2]=halo
 };
-
-// Global-mode inertial flight dynamics (Starsector-style). The ship's POSE (origin, angle)
-// lives in Ship; these are the integrators that drive it. The ship coasts — there is no
-// passive linear drag, only the active brake (C) / reverse (S).
-struct ShipFlight {
-    bs_math::Vec2 velocity;          // world-space linear velocity
-    f32           angular_velocity;  // rad/s, CCW positive; auto-stabilizes when A/D released
-    HullClass     hull;              // determines strafe thrust fraction
+// A generic entity that appears on the galaxy map. Any world object with a Vec2 position
+// can be synced here each frame, making the map system extensible without hardcoding ships.
+#define MAX_MAP_ENTITIES 16
+struct MapEntity {
+    bs_math::HierPos2 galaxy_pos;
+    bs_color          color;
+    f32               radius;
+    b8                has_outline; // if TRUE, draws an animated quad (reserved for player)
+    const char*       name;        // display label for hover tooltip
 };
-
+// A lightweight combat entity that can be hit by projectiles.
+// Ships register themselves here so the projectile system can sweep a flat array.
+#define MAX_COMBAT_ENTITIES 32
+struct CombatEntity {
+    b8            active;
+    bs_math::Vec2 position;
+    bs_math::Vec2 velocity; // world velocity, for aim prediction / hit detection
+    f32           radius;
+    VesselFaction faction;
+    f32           hp;
+    Ship*         ship;   // NULL for non-ship targets; provides visual + physics
+    bs_color      tint;   // fallback colour when ship == NULL
+    bs_glow_params glow;  // per-entity bloom/glow override
+};
+// ShipFlight (global-mode inertial flight dynamics) is defined in fleet.h.
+// =====================================================================================
+// Edit mode: click-to-select, drag-to-reposition ships and lights.
+// Toggled from the EDITOR PANEL. Dragging mutates the entity's live world-space position
+// (light.position or ship.origin) directly, so changes persist once edit mode is exited --
+// the entity state IS the game state, no separate save step is needed.
+// =====================================================================================
+// What kind of entity is currently selected in edit mode.
+enum EditEntityKind {
+    EDIT_NONE = 0,
+    EDIT_LIGHT,     // selection.index = light index into game_state::lights
+    EDIT_SHIP,      // selection.index: 0 = player ship, 1 = enemy ship
+};
+// The editor's current selection. Always check `kind` before interpreting `index`.
+struct EditSelection {
+    EditEntityKind kind;
+    i32            index;  // valid only when kind != EDIT_NONE
+};
+// How the user is currently dragging a selected entity.
+enum EditDragMode {
+    EDIT_DRAG_NONE = 0,
+    EDIT_DRAG_FREE,     // unconstrained translation (existing behaviour)
+    EDIT_DRAG_AXIS_X,   // translating along the X axis
+    EDIT_DRAG_AXIS_Y,   // translating along the Y axis
+    EDIT_DRAG_ROTATE,   // rotating via the ring
+};
+// Drag-in-progress state. `active` is TRUE only between mouse-down and mouse-up on a
+// selected entity. Anchors capture the world-space cursor and entity positions at the
+// instant the drag began, so the entity tracks the cursor without snapping.
+struct EditorDrag {
+    b8            active;         // TRUE while the left button is held on a selected entity
+    EditDragMode  mode;           // which drag mode is active this frame
+    bs_math::Vec2 drag_anchor;    // world-space cursor position at mouse-down
+    bs_math::Vec2 entity_anchor;  // entity position at mouse-down (light.position or ship.origin)
+    f32           entity_angle;   // entity angle at mouse-down (ships only, radians)
+};
+// Forward declaration: defined in global_background.h (included by game.cpp).
+struct GlobalBackground;
 struct game_state {
     u16 fb_width;
     u16 fb_height;
-
     Camera2D  camera;          // persistent; zoom mutated by the wheel
-    Ship      ship;            // loaded from assets/ship.tmap
-    Ship      enemy_ship;      // hostile hull (assets/enemy_ship.tmap); combat prototype, no crew yet
-
-    // ---- Cosmetic smoothed hull silhouettes (hull_contour.{h,cpp}, marching squares) -----
-    // The de-blocked outline of each hull, in SHIP-LOCAL space. Because the contour is
-    // pose-INDEPENDENT (origin/angle not baked in) it is extracted ONCE here in game_init — the
-    // tilemaps never change at runtime — and merely transformed to world at draw time (the
-    // draw_hull_outline helper applies ship_local_to_world per vertex, exactly like draw_tile_span).
-    // PURELY COSMETIC: collision/docking/nav still run on the discrete tile grid; nothing reads these
-    // loops back into the simulation. Drawn as line loops on LAYER_HULL_OUTLINE (above the roof).
-    HullContour hull_outline;       // player ship smoothed contour
-    HullContour enemy_hull_outline; // enemy ship smoothed contour
-
-    // Docking state. TWO distinct concepts, deliberately separated:
-    //
-    //  * enemy_docked  — the LATCHED join. FALSE until the player presses T while dock-eligible;
-    //    then TRUE (the hulls are mechanically mated at the airlock) until they press T again to
-    //    release. This is a piece of GAME STATE, not a geometric readout: once docked the ships move
-    //    as one and the player can let go of the controls. It GATES (a) enemy-interior visibility
-    //    (see game_render — undocked shows only the enemy roof silhouette; docked reveals the
-    //    interior to board it) and (b) ship-ship collision (a mated joint must not self-repel).
-    //
-    //  * dock_eligible — a per-frame GEOMETRIC readout: TRUE this frame iff the player's and enemy's
-    //    HULL_DOOR airlocks are currently aligned and within docking tolerance (ships_docked). It is
-    //    NOT latched — it tracks live geometry every frame. It drives the "Press T to dock" HUD
-    //    prompt and gates whether a T press is allowed to FIRE the dock latch. (While already docked
-    //    it is irrelevant; undocking only needs the latch.)
-    //
-    // Splitting them is what turns docking from a flickery per-frame proximity flag into a real
-    // mechanical state machine: you fly into alignment (dock_eligible goes TRUE, prompt appears),
-    // press T (enemy_docked latches TRUE, hulls snap mated + lock), and they STAY joined even as you
-    // release the stick or drift — until you press T again.
-    b8        enemy_docked;   // LATCHED: are the hulls mechanically mated? (toggled by T)
-    b8        dock_eligible;  // per-frame: are the airlocks aligned+close enough to dock right now?
-
-    // ---- Docking CONNECTOR bridge -------------------------------------------------------
-    // When the hulls latch (enemy_docked goes TRUE) a single walkable CONNECTOR tile is spawned in the
-    // two-tile gap between the mated airlock doors — an airlock tube bridging the two ships so the
-    // crews walk freely across the seam (the merged navmesh routes door -> connector -> door, and the
-    // connector renders as one tile through the same interior/roof cross-fade as the hulls). It is
-    // torn down on undock. Its placement is computed by dock_connector_tile() from the live mated pose
-    // at dock time and stored here (the hulls are rigidly joined while docked, so it never moves).
-    // connector_active mirrors enemy_docked but is kept as its own flag so render/nav read cleanly and
-    // a future "tube still extending" animation can gate on it independently of the latch.
-    b8            connector_active; // is the seam connector tile currently spawned?
-    bs_math::Vec2 connector_world;  // world-space center of the connector tile (valid while active)
-    f32           connector_angle;  // world angle of the connector tile (aligned to the mated doors)
-
-    GameMode  mode;            // current view/control mode (hysteresis-latched)
-    f32       roof_alpha;      // 0 = fully interior, 1 = fully roof; cross-fade state
-
-    Vector(Crew) crew;         // multiple crew members.
-
-    // Free-roam local camera. The view target is a SHIP-LOCAL focus point (so it rides the
-    // ship's pose); WASD pans it in local mode. On zoom-out the camera eases from this focus
-    // toward the ship origin (global view), so the mode hand-off still glides.
-    bs_math::Vec2 cam_focus_local;
-
-    ShipFlight flight;         // global-mode inertial flight dynamics
+    Fleet     fleet;           // player ships; member 0 is the flagship (loaded from assets/ship_deck.ship)
+    Ship      enemy_ship;      // hostile hull (assets/enemy_ship.ship); combat prototype
+    // Convenience accessors for the flagship (the historical single "player ship").
+    Ship&       player_ship()        { return fleet.flagship().ship; }
+    const Ship& player_ship()  const { return fleet.at(0).ship; }
+    ShipFlight& player_flight()       { return fleet.flagship().flight; }
+    // ---- Editor-managed 2D point lights ------------------------------------------------------
+    // The player spawns/removes/edits these from the EDITOR PANEL and drags them around the scene.
+    // Submitted to the renderer each frame (game_render -> renderer_set_lights) and accumulated
+    // per-pixel by the sprite shader over `light_ambient`. lights are stored in WORLD space.
+    Vector(bs_light2d) lights;
+    bs_color      light_ambient;     // scene-global ambient floor for lighting
+    i32           light_selected;    // index of the selected/edited light (-1 = none)
+    // ---- Tunable shader glow parameters (editor panel) -------------------------------------
+    bs_glow_params glow_params;      // copied to GPU each frame via renderer_set_glow_params
+    // ---- HDR Bloom post-process tuning -----------------------------------------------------
+    b8  bloom_enabled;
+    f32 bloom_threshold;
+    f32 bloom_intensity;
+    b8  dynamic_bloom;          // when TRUE, bloom/glow intensity scales with ship speed
+    b8  star_light_enabled;       // toggle volumetric star light in system view
+    b8  bg_layer0_enabled;        // toggle far starfield layer (parallax 0.05)
+    b8  bg_layer1_enabled;        // toggle mid starfield layer (parallax 0.40)
+    b8  bg_layer2_enabled;        // toggle mapped system layer (parallax 1.0)
+    // Procedural starfield tunables (editor panel).
+    f32 starfield_lod_density;     // cell fill rate 0..1 (default 0.06)
+    f32 starfield_lod_size;        // star size multiplier (default 1.0)
+    f32 starfield_lod_brightness;  // overall brightness multiplier (default 1.0)
+    // Star dazzle effect: fade starfield near the bright central star.
+    bs_math::Vec2 star_pos;        // current star world position (updated per frame)
+    f32 star_dazzle_inner_radius;  // world units: fully suppressed inside this
+    f32 star_dazzle_outer_radius;  // world units: no suppression outside this
+    f32 star_dazzle_intensity;     // 0..1 suppression strength
+    f32 star_light_intensity_mul; // multiplier on star light intensity (default 1.0)
+    f32 star_light_radius_mul;    // multiplier on star light radius (default 1.0)
+    bs_texture exhaust_texture;   // soft radial gradient for engine exhaust (runtime-generated)
+    bs_glow_params exhaust_glow;  // per-entity glow for engine exhaust
+    bs_glow_params bullet_glow;   // per-entity glow for combat entities (bullets, etc.)
+    StarFxSystem  star_fx;            // owns textures + draw logic for star visuals
+    GlobalBackground global_background; // parallax background layers for MODE_GLOBAL
+    // ---- Edit mode: click to select, drag to reposition ships and lights -------------------
+    b8            edit_mode_active;  // toggled from the EDITOR PANEL
+    EditSelection edit_selection;    // what is currently selected
+    EditorDrag    edit_drag;         // drag-in-progress state
+    GameMode  mode;            // current view/control mode
+    b8         alt_movement_active; // TRUE while SHIFT-toggled mouse-follow flight mode is active
+    // Free camera mode in MODE_GLOBAL: when TRUE, the camera is detached from the ship
+    // and can be panned with WASD/middle-mouse. The ship continues to coast under physics.
+    b8         free_camera_active;
+    bs_math::Vec2 free_camera_pos;
+    // ---- RTS controls (selection, orders, control groups) ----------------------------------
+    RtsControls rts_controls;
+    // ---- Editor-gated continuous travel (fork #1 prototype) ----------------------------------
+    b8            travel_enabled; // EDITOR PANEL: master toggle for travel system
+    b8            travel_paused;  // EDITOR PANEL: pause travel mid-flight
+    TravelState   travel;         // hierarchical-precision travel state
+    // ---- Galaxy cluster (multiple star systems) --------------------------------------------
+#define GALAXY_MAX_SYSTEMS 64
+    StarSystem    systems[GALAXY_MAX_SYSTEMS];
+    i32           system_count;       // number of populated entries
+    GalaxyVoronoi galaxy_voronoi;      // Voronoi diagram for system territories
+    i32           current_system;     // cached nearest-system index (-1 = deep space)
+    // Generic galaxy-map entities (ships, stations, asteroids, etc.).
+    // Rebuilt each frame from world-space positions via world_to_galaxy_pos().
+    MapEntity     map_entities[MAX_MAP_ENTITIES];
+    i32           map_entity_count;
+    // Floating-origin camera for galaxy map (MODE_SYSTEM).
+    // Tracks which galaxy cell we're viewing from; camera_local (below) is the pan offset.
+    bs_math::HierPos2 camera_hierpos;
+    // System-view middle-mouse drag anchors (screen-space panning).
+    bs_math::Vec2 system_drag_cam;    // camera position when drag started
+    bs_math::Vec2 system_drag_world;  // screen pixel position when drag started
+    // Tunable system-view zoom (editor-adjustable; artists pick the best scale).
+    f32           system_zoom;
+    // ---- Galaxy map player marker animation --------------------------------------------
+    f32  galaxy_map_time;
+    bool map_anim_scale;
+    bool map_anim_rotate;
+    bool map_anim_alpha;
+    bool map_anim_thickness;
+    // Hyperjump range circle (editor-tunable, shown on galaxy map)
+    bool map_draw_jump_range;
+    f32  map_jump_range;
+    // Sensor detection range (editor-tunable, shown on galaxy map)
+    bool map_draw_sensor_range;
+    f32  map_sensor_range;
+    // Delaunay lane connections between star systems (galaxy map)
+    bool map_draw_lanes;
+    // ---- Metaball movement UI (EDITOR PANEL controlled) ----------------------------------
+    b8  show_metaball_ui;
+    f32 metaball_radius_factor;
+    f32 metaball_threshold;
+    i32 metaball_grid_w;
+    i32 metaball_grid_h;
+    // ---- Time control (RTS-style pause/resume, extensible to speed-up) --------------------
+    f32 time_scale;         // 0.0 = paused, 1.0 = normal, 2.0 = 2×, etc.
+    f32 elapsed_time;       // monotonic seconds since game_init (for procedural FX)
+    // ---- Encounter system (blob merge → pause → choose action) ---------------------------
+    b8  encounter_active;       // TRUE while encounter panel is showing
+    b8  encounter_was_active;   // previous-frame value for edge detection
+    b8  encounter_can_retrigger;// TRUE when ships have separated after last encounter
+    // ---- Action Log (player-activity HUD) ----------------------------------------------
+    // Rolling buffer of up to 30 significant player actions. Fades after 3s inactivity,
+    // expands to full history on hover.
+    struct {
+        char entries[30][128]; // rolling message buffer (oldest at 0)
+        i32  count;             // valid entries (0..30)
+        f32  inactivity_timer;  // seconds since last push
+    } action_log;
+    // Map recenter animation (P key in MODE_SYSTEM)
+    bool map_recentering;
+    f32  map_recenter_t;
+    bs_math::Vec2 map_recenter_from_pos;
+    f32  map_recenter_from_zoom;
+    bs_math::Vec2 map_recenter_target_pos;
+    f32  map_input_cooldown; // seconds until pan/drag re-enabled after recenter
+    bool map_drag_needs_fresh_press; // TRUE after recenter until middle mouse released
+    // ---- Projectile system -------------------------------------------------------------
+    ProjectileSystem projectiles;
+    // ---- Combat entities ---------------------------------------------------------------
+    CombatEntity combat_entities[MAX_COMBAT_ENTITIES];
+    i32          combat_entity_count;
 };
-
-// ---- Cross-ship crew binding (Phase 3) ------------------------------------------------
-// Resolve the hull a crew member is bound to from its ship_id. This is THE seam that makes the
-// crew/nav/render code multi-hull: every place that used to hardcode &s->ship now asks the crew
-// which deck it stands on. 0 = player, anything else = enemy (only two hulls in the prototype).
-// Const and mutable overloads so callers that mutate the pose (none yet) and read-only callers
-// (sim, avoidance, render) both compile against the right Ship*.
-inline const Ship* crew_ship(const game_state* s, const Crew* c) {
-    return (c->ship_id == 0) ? &s->ship : &s->enemy_ship;
-}
-inline Ship* crew_ship(game_state* s, const Crew* c) {
-    return (c->ship_id == 0) ? &s->ship : &s->enemy_ship;
-}
-
+// Shared constants / helpers used by parallax layer code (mapped_system_layer.cpp).
+extern const f32 STAR_MIN_SCREEN_RADIUS;
+extern f32 sensor_visibility_from_dist(f32 dist, f32 range);
+// Ship physics constants (shared with RTS autopilot in rts_controls.cpp).
+extern const f32 SHIP_ACCEL;
+extern const f32 SHIP_DECEL;
+extern const f32 SHIP_MAX_SPEED;
+extern const f32 SHIP_TURN_ACCEL;
+extern const f32 SHIP_MAX_TURN;
+// Galaxy coordinate helpers.
+i32 find_nearest_system(const bs_math::HierPos2* ship_pos,
+                        const StarSystem* systems, i32 count);
+bs_math::Vec2 galaxy_to_system_local(const bs_math::HierPos2* ship_galaxy,
+                                     const bs_math::HierPos2* system_center);
+void action_log_push(game_state* s, const char* fmt, ...);
 b8 game_init(Game* game_inst);
 b8 game_update(Game* game_inst, f32 dt);
 b8 game_render(Game* game_inst, f32 dt);

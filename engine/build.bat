@@ -30,7 +30,7 @@ FOR %%f IN (
     SET imguiObjs=!imguiObjs! !objPath!
     IF NOT EXIST !objPath! (
         ECHO "Compiling ImGui: %%~nxf"
-        clang++ -g -c %%f -o !objPath! -w %imguiCompileInclude% -DBS_DEBUG -D_CRT_SECURE_NO_WARNINGS
+        clang++ -g -c %%f -o !objPath! -w %imguiCompileInclude% -DBS_DEBUG -D_CRT_SECURE_NO_WARNINGS -DIMGUI_API="__declspec(dllexport)"
         IF !ERRORLEVEL! NEQ 0 (echo ImGui compile failed: %%~nxf && exit /b !ERRORLEVEL!)
     )
 )
@@ -52,7 +52,7 @@ SET compilerFlags=-g -shared -Wvarargs -Wall -Werror
 REM -Wall -Werror
 SET includeFlags=-Isource -Ivendor/include -isystem %imguiDir% -isystem %imguiDir%\backends
 SET linkerFlags=-Lvendor/lib -lSDL3
-SET defines=-DBS_DEBUG -DBSEXPORT -D_CRT_SECURE_NO_WARNINGS
+SET defines=-DBS_DEBUG -DBSEXPORT -D_CRT_SECURE_NO_WARNINGS -DIMGUI_API="__declspec(dllexport)"
 
 ECHO "Building %assembly%..."
 clang++ %cppFilenames% %imguiObjs% %compilerFlags% -o ../bin/%assembly%.dll %defines% %includeFlags% %linkerFlags%

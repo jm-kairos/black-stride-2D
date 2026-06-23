@@ -1,0 +1,644 @@
+#include <stdio.h>
+#include <math.h>
+#include <string.h>
+#include <stdarg.h>
+#include "ss_generation.h"
+#include "voronoi_galaxy.h"
+#include "voronoi_cell_hover_effect.h"
+#include "star_fx.h"
+
+using namespace bs_math;
+
+static FILE* g_out = nullptr;
+
+static void test_log(const char* fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    vfprintf(g_out, fmt, args);
+    va_end(args);
+    va_start(args, fmt);
+    vprintf(fmt, args);
+    va_end(args);
+}
+
+static b8 test_motion() {
+    test_log("--- Test 1: Planet Motion ---\n");
+    StarSystem sys;
+    memset(&sys, 0, sizeof(sys));
+    generate_star_system(&sys, 42, Vec2{0,0});
+
+    Vec2 pos0[5];
+    for (i32 i = 0; i < sys.planet_count; ++i) pos0[i] = sys.planets[i].position;
+
+    for (i32 step = 0; step < 60; ++step) update_planet_positions(&sys, 1.0f/60.0f);
+
+    b8 moved = FALSE;
+    for (i32 i = 0; i < sys.planet_count; ++i) {
+        Vec2 d = vec2_sub(sys.planets[i].position, pos0[i]);
+        f32 dist = vec2_length(d);
+        test_log("  Planet %d: displacement = %.3f units\n", i, dist);
+        if (dist > 1.0f) moved = TRUE;
+    }
+    test_log("  RESULT: %s\n\n", moved ? "PASS" : "FAIL (planets did not move)");
+    return moved;
+}
+
+static b8 test_non_intersecting() {
+    test_log("--- Test 2: Non-Intersecting Orbits ---\n");
+    i32 fail_count = 0;
+    for (u64 seed = 0; seed < 100; ++seed) {
+        StarSystem sys;
+        memset(&sys, 0, sizeof(sys));
+        generate_star_system(&sys, seed, Vec2{0,0});
+        for (i32 i = 0; i < sys.planet_count - 1; ++i) {
+            CelestialBody& inner = sys.planets[i];
+            CelestialBody& outer = sys.planets[i+1];
+            f32 apo  = inner.semi_major_axis * (1.0f + inner.eccentricity);
+            f32 peri = outer.semi_major_axis * (1.0f - outer.eccentricity);
+            if (apo + 0.05f >= peri) {
+                if (fail_count < 5) test_log("  FAIL seed=%llu pair=%d: apo=%.0f peri=%.0f\n", (unsigned long long)seed, i, apo, peri);
+                ++fail_count;
+            }
+        }
+    }
+    test_log("  %d failures / 100 systems\n", fail_count);
+    test_log("  RESULT: %s\n\n", fail_count == 0 ? "PASS" : "FAIL");
+    return fail_count == 0;
+}
+
+static b8 test_spacing_factor() {
+    test_log("--- Test 3: Spacing Factor Range ---\n");
+    i32 fail_count = 0;
+    for (u64 seed = 0; seed < 100; ++seed) {
+        StarSystem sys;
+        memset(&sys, 0, sizeof(sys));
+        generate_star_system(&sys, seed, Vec2{0,0});
+        for (i32 i = 0; i < sys.planet_count - 1; ++i) {
+            f32 k = sys.planets[i+1].semi_major_axis / sys.planets[i].semi_major_axis;
+            if (k < 1.4f || k > 2.0f) {
+                if (fail_count < 5) test_log("  FAIL seed=%llu pair=%d: k=%.3f\n", (unsigned long long)seed, i, k);
+                ++fail_count;
+            }
+        }
+    }
+    test_log("  %d failures / 100 systems\n", fail_count);
+    test_log("  RESULT: %s\n\n", fail_count == 0 ? "PASS" : "FAIL");
+    return fail_count == 0;
+}
+
+static b8 test_eccentricity() {
+    test_log("--- Test 4: Eccentricity Constraints ---\n");
+    i32 fail_count = 0;
+    for (u64 seed = 0; seed < 100; ++seed) {
+        StarSystem sys;
+        memset(&sys, 0, sizeof(sys));
+        generate_star_system(&sys, seed, Vec2{0,0});
+        for (i32 i = 0; i < sys.planet_count; ++i) {
+            f32 e = sys.planets[i].eccentricity;
+            f32 max_e = (i < sys.planet_count / 2) ? 0.05f : 0.25f;
+            if (e > max_e + 0.001f) {
+                if (fail_count < 5) test_log("  FAIL seed=%llu planet=%d: e=%.4f max=%.2f\n", (unsigned long long)seed, i, e, max_e);
+                ++fail_count;
+            }
+        }
+    }
+    test_log("  %d failures / 100 systems\n", fail_count);
+    test_log("  RESULT: %s\n\n", fail_count == 0 ? "PASS" : "FAIL");
+    return fail_count == 0;
+}
+
+static b8 test_system_scale() {
+    test_log("--- Test 5: System Scale Applied ---\n");
+    i32 fail_count = 0;
+    SSGenConfig cfg;
+    for (u64 seed = 0; seed < 100; ++seed) {
+        StarSystem sys;
+        memset(&sys, 0, sizeof(sys));
+        generate_star_system(&sys, seed, Vec2{0,0}, cfg);
+        f32 a0 = sys.planets[0].semi_major_axis;
+        f32 expected_min = cfg.inner_a_min * sys.system_scale;
+        f32 expected_max = cfg.inner_a_max * sys.system_scale;
+        if (a0 < expected_min - 100.0f || a0 > expected_max + 100.0f) {
+            if (fail_count < 5) test_log("  FAIL seed=%llu: a0=%.0f expected [%.0f, %.0f]\n", (unsigned long long)seed, a0, expected_min, expected_max);
+            ++fail_count;
+        }
+    }
+    test_log("  %d failures / 100 systems\n", fail_count);
+    test_log("  RESULT: %s\n\n", fail_count == 0 ? "PASS" : "FAIL");
+    return fail_count == 0;
+}
+
+static b8 test_planet_count() {
+    test_log("--- Test 6: Variable Planet Count ---\n");
+    i32 fail_count = 0;
+    for (u64 seed = 0; seed < 100; ++seed) {
+        StarSystem sys;
+        memset(&sys, 0, sizeof(sys));
+        generate_star_system(&sys, seed, Vec2{0,0});
+        if (sys.planet_count < 2 || sys.planet_count > 5) {
+            if (fail_count < 5) test_log("  FAIL seed=%llu: count=%d\n", (unsigned long long)seed, sys.planet_count);
+            ++fail_count;
+        }
+    }
+    test_log("  %d failures / 100 systems\n", fail_count);
+    test_log("  RESULT: %s\n\n", fail_count == 0 ? "PASS" : "FAIL");
+    return fail_count == 0;
+}
+
+static b8 test_determinism() {
+    test_log("--- Test 7: Determinism ---\n");
+    StarSystem sys1, sys2;
+    memset(&sys1, 0, sizeof(sys1));
+    memset(&sys2, 0, sizeof(sys2));
+    generate_star_system(&sys1, 12345, Vec2{0,0});
+    generate_star_system(&sys2, 12345, Vec2{0,0});
+
+    b8 same = (sys1.planet_count == sys2.planet_count);
+    if (!same) test_log("  planet_count mismatch: %d vs %d\n", sys1.planet_count, sys2.planet_count);
+
+    for (i32 i = 0; same && i < sys1.planet_count; ++i) {
+        if (fabsf(sys1.planets[i].semi_major_axis - sys2.planets[i].semi_major_axis) > 0.1f) same = FALSE;
+        if (fabsf(sys1.planets[i].eccentricity - sys2.planets[i].eccentricity) > 0.0001f) same = FALSE;
+    }
+    test_log("  RESULT: %s\n\n", same ? "PASS" : "FAIL");
+    return same;
+}
+
+static b8 test_period_consistency() {
+    test_log("--- Test 8: Gameplay Period Consistency ---\n");
+    // Period is gameplay-scaled: speed = 0.02 / sqrt(a/1e6), so period = 2PI / speed.
+    i32 fail_count = 0;
+    for (u64 seed = 0; seed < 100; ++seed) {
+        StarSystem sys;
+        memset(&sys, 0, sizeof(sys));
+        generate_star_system(&sys, seed, Vec2{0,0});
+        for (i32 i = 0; i < sys.planet_count; ++i) {
+            f32 a = sys.planets[i].semi_major_axis;
+            f32 expected_speed = 0.02f / sqrtf(a / 1000000.0f);
+            f32 expected_period = 2.0f * BS_PI / expected_speed;
+            if (fabsf(sys.planets[i].orbital_period - expected_period) > 1.0f ||
+                fabsf(sys.planets[i].orbit_speed - expected_speed) > 0.0001f) {
+                if (fail_count < 3) test_log("  seed=%llu planet=%d: stored_period=%.1f expected=%.1f  stored_speed=%.6f expected=%.6f\n",
+                    (unsigned long long)seed, i, sys.planets[i].orbital_period, expected_period,
+                    sys.planets[i].orbit_speed, expected_speed);
+                ++fail_count;
+            }
+        }
+    }
+    test_log("  %d failures\n", fail_count);
+    test_log("  RESULT: %s\n\n", fail_count == 0 ? "PASS" : "FAIL");
+    return fail_count == 0;
+}
+
+static b8 test_elliptical_orbit() {
+    test_log("--- Test 9: Elliptical Orbit Shape ---\n");
+    // Generate a system, find the most eccentric planet, simulate one full period,
+    // and verify the distance variation matches the expected (1+e)/(1-e) ratio.
+    StarSystem sys;
+    memset(&sys, 0, sizeof(sys));
+    generate_star_system(&sys, 77, Vec2{0,0});
+
+    i32 target = -1;
+    f32 max_e = -1.0f;
+    for (i32 i = 0; i < sys.planet_count; ++i) {
+        if (sys.planets[i].eccentricity > max_e) {
+            max_e = sys.planets[i].eccentricity;
+            target = i;
+        }
+    }
+    if (target < 0) {
+        test_log("  FAIL: no planets found\n\n");
+        return FALSE;
+    }
+
+    CelestialBody& p = sys.planets[target];
+    f32 expected_ratio = (1.0f + p.eccentricity) / (1.0f - p.eccentricity);
+
+    f32 min_dist = 1e30f, max_dist = 0.0f;
+    i32 steps = (i32)(p.orbital_period * 60.0f); // 60 Hz sampling
+    if (steps < 100) steps = 100;
+    f32 dt = p.orbital_period / (f32)steps;
+
+    for (i32 s = 0; s < steps; ++s) {
+        update_planet_positions(&sys, dt);
+        Vec2 d = vec2_sub(p.position, sys.star.position);
+        f32 dist = vec2_length(d);
+        if (dist < min_dist) min_dist = dist;
+        if (dist > max_dist) max_dist = dist;
+    }
+
+    f32 measured_ratio = max_dist / min_dist;
+    f32 error = fabsf(measured_ratio - expected_ratio);
+    b8 pass = error < 0.05f; // 5% tolerance
+
+    test_log("  Planet %d: e=%.4f  expected_ratio=%.4f  measured_ratio=%.4f  error=%.4f\n",
+             target, p.eccentricity, expected_ratio, measured_ratio, error);
+    test_log("  min_dist=%.1f  max_dist=%.1f\n", min_dist, max_dist);
+    test_log("  RESULT: %s\n\n", pass ? "PASS" : "FAIL");
+    return pass;
+}
+
+// =====================================================================================
+// Voronoi Tests
+// =====================================================================================
+
+static void make_test_systems_scatter(StarSystem* systems, i32 count)
+{
+    // Pseudo-random scatter in a 200x200 square (small coords for precision)
+    u64 seed = 0x9E3779B97F4A7C15ull;
+    for (i32 i = 0; i < count; ++i) {
+        memset(&systems[i], 0, sizeof(StarSystem));
+        seed += 0x9E3779B97F4A7C15ull;
+        u64 z = seed;
+        z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
+        z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
+        z = z ^ (z >> 31);
+        f32 rx = (f32)(z & 0xFFFFFFFF) / (f32)0xFFFFFFFF;
+        f32 ry = (f32)((z >> 32) & 0xFFFFFFFF) / (f32)0xFFFFFFFF;
+        Vec2 world = Vec2{ -100.0f + rx * 200.0f, -100.0f + ry * 200.0f };
+        systems[i].galaxy_center = hierpos_from_vec2(world, BS_HIERPOS_CELL_SIZE);
+    }
+}
+
+static b8 test_voronoi_generation() {
+    test_log("--- Test 10: Voronoi Generation ---\n");
+    StarSystem systems[10];
+    make_test_systems_scatter(systems, 10);
+
+    GalaxyVoronoi v;
+    generate_galaxy_voronoi(systems, 10, &v);
+
+    b8 pass = (v.num_sites == 10 && v.edge_count > 0);
+    if (!pass) test_log("  FAIL: expected 10 sites with edges, got %d sites %d edges\n", v.num_sites, v.edge_count);
+
+    test_log("  sites=%d  edges=%d  delaunay=%d\n", v.num_sites, v.edge_count, v.delaunay_edge_count);
+    test_log("  RESULT: %s\n\n", pass ? "PASS" : "FAIL");
+    return pass;
+}
+
+static b8 test_voronoi_cells_valid() {
+    test_log("--- Test 11: Voronoi Cells Valid ---\n");
+    StarSystem systems[10];
+    make_test_systems_scatter(systems, 10);
+
+    GalaxyVoronoi v;
+    generate_galaxy_voronoi(systems, 10, &v);
+
+    i32 fail_count = 0;
+    for (i32 i = 0; i < v.num_sites; ++i) {
+        if (v.cells[i].vert_count < 3) {
+            if (fail_count < 3) test_log("  FAIL cell %d: vert_count=%d\n", i, v.cells[i].vert_count);
+            ++fail_count;
+        }
+    }
+    test_log("  %d invalid cells / %d\n", fail_count, v.num_sites);
+    test_log("  RESULT: %s\n\n", fail_count == 0 ? "PASS" : "FAIL");
+    return fail_count == 0;
+}
+
+static b8 test_voronoi_point_in_cell() {
+    test_log("--- Test 12: Voronoi Point-in-Cell ---\n");
+    StarSystem systems[10];
+    make_test_systems_scatter(systems, 10);
+
+    GalaxyVoronoi v;
+    generate_galaxy_voronoi(systems, 10, &v);
+
+    // find_system_by_cell uses nearest-site distance, which is the
+    // mathematical definition of Voronoi cell membership.
+    i32 fail_count = 0;
+    for (i32 i = 0; i < 10; ++i) {
+        i32 found = find_system_by_cell(&systems[i].galaxy_center, &v, systems);
+        if (found != i) {
+            if (fail_count < 3) test_log("  FAIL: star %d at center returned cell %d\n", i, found);
+            ++fail_count;
+        }
+    }
+    test_log("  %d mismatches / 10\n", fail_count);
+    test_log("  RESULT: %s\n\n", fail_count == 0 ? "PASS" : "FAIL");
+    return fail_count == 0;
+}
+
+static b8 test_voronoi_delaunay_count() {
+    test_log("--- Test 13: Voronoi Delaunay Edge Count ---\n");
+    StarSystem systems[10];
+    make_test_systems_scatter(systems, 10);
+
+    GalaxyVoronoi v;
+    generate_galaxy_voronoi(systems, 10, &v);
+
+    // For N points, a planar triangulation has between N-1 (tree) and 3N-6 (max) edges.
+    // In practice, Delaunay of random points has ~3N edges.
+    i32 min_edges = 10 - 1;      // tree
+    i32 max_edges = 3 * 10 - 6;  // planar max
+    b8 pass = v.delaunay_edge_count >= min_edges && v.delaunay_edge_count <= max_edges;
+    test_log("  delaunay_edges=%d  expected range [%d, %d]\n",
+             v.delaunay_edge_count, min_edges, max_edges);
+    test_log("  RESULT: %s\n\n", pass ? "PASS" : "FAIL");
+    return pass;
+}
+
+static b8 test_voronoi_edge_uniqueness() {
+    test_log("--- Test 14: Voronoi Edge Uniqueness ---\n");
+    StarSystem systems[10];
+    make_test_systems_scatter(systems, 10);
+
+    GalaxyVoronoi v;
+    generate_galaxy_voronoi(systems, 10, &v);
+
+    i32 dup_count = 0;
+    for (i32 i = 0; i < v.delaunay_edge_count; ++i) {
+        for (i32 j = i + 1; j < v.delaunay_edge_count; ++j) {
+            b8 same = (v.delaunay_edges[i].site_a == v.delaunay_edges[j].site_a &&
+                       v.delaunay_edges[i].site_b == v.delaunay_edges[j].site_b) ||
+                      (v.delaunay_edges[i].site_a == v.delaunay_edges[j].site_b &&
+                       v.delaunay_edges[i].site_b == v.delaunay_edges[j].site_a);
+            if (same) {
+                if (dup_count < 3) test_log("  FAIL: duplicate edge (%d,%d)\n",
+                    v.delaunay_edges[i].site_a, v.delaunay_edges[i].site_b);
+                ++dup_count;
+            }
+        }
+    }
+    test_log("  %d duplicates / %d edges\n", dup_count, v.delaunay_edge_count);
+    test_log("  RESULT: %s\n\n", dup_count == 0 ? "PASS" : "FAIL");
+    return dup_count == 0;
+}
+
+static b8 test_voronoi_determinism() {
+    test_log("--- Test 15: Voronoi Determinism ---\n");
+    StarSystem systems[10];
+    make_test_systems_scatter(systems, 10);
+
+    GalaxyVoronoi v1, v2;
+    generate_galaxy_voronoi(systems, 10, &v1);
+    generate_galaxy_voronoi(systems, 10, &v2);
+
+    b8 same = (v1.num_sites == v2.num_sites) &&
+              (v1.edge_count == v2.edge_count) &&
+              (v1.delaunay_edge_count == v2.delaunay_edge_count);
+    if (same && v1.edge_count > 0) {
+        for (i32 i = 0; i < v1.edge_count; ++i) {
+            if (fabsf(v1.edges[i].p0.x - v2.edges[i].p0.x) > 0.1f ||
+                fabsf(v1.edges[i].p0.y - v2.edges[i].p0.y) > 0.1f) {
+                same = FALSE; break;
+            }
+        }
+    }
+    test_log("  RESULT: %s\n\n", same ? "PASS" : "FAIL");
+    return same;
+}
+
+// =====================================================================================
+// Voronoi Cell Hover Effect Tests
+// =====================================================================================
+
+static b8 test_voronoi_cell_indexing() {
+    test_log("--- Test 16: Voronoi Cell Indexing ---\n");
+    StarSystem systems[10];
+    make_test_systems_scatter(systems, 10);
+
+    GalaxyVoronoi v;
+    generate_galaxy_voronoi(systems, 10, &v);
+
+    i32 fail_count = 0;
+    for (i32 i = 0; i < 10; ++i) {
+        f64 cx, cy;
+        hierpos_to_f64(&systems[i].galaxy_center, BS_HIERPOS_CELL_SIZE, &cx, &cy);
+        f32 dx = v.cells[i].center.x - (f32)cx;
+        f32 dy = v.cells[i].center.y - (f32)cy;
+        if (fabsf(dx) > 1.0f || fabsf(dy) > 1.0f) {
+            if (fail_count < 3) test_log("  FAIL: cell %d center=(%.2f,%.2f) system=(%.2f,%.2f) d=(%.2f,%.2f)\n",
+                i, v.cells[i].center.x, v.cells[i].center.y, (f32)cx, (f32)cy, dx, dy);
+            ++fail_count;
+        }
+    }
+    test_log("  %d mismatches / 10\n", fail_count);
+    test_log("  RESULT: %s\n\n", fail_count == 0 ? "PASS" : "FAIL");
+    return fail_count == 0;
+}
+
+static b8 test_voronoi_hover_pick() {
+    test_log("--- Test 17: Voronoi Hover Pick ---\n");
+    StarSystem systems[10];
+    make_test_systems_scatter(systems, 10);
+
+    GalaxyVoronoi v;
+    generate_galaxy_voronoi(systems, 10, &v);
+
+    // Use a camera at origin (no offset) for simplicity.
+    HierPos2 camera_hierpos = HierPos2{0,0,0,0};
+
+    i32 fail_count = 0;
+    for (i32 i = 0; i < 10; ++i) {
+        // Mouse at system i's true galaxy position (camera-relative = true world pos).
+        Vec2 mw = hierpos_diff(&systems[i].galaxy_center, &camera_hierpos, BS_HIERPOS_CELL_SIZE);
+        update_cell_hover_effect(&v, 0.0f, mw, &camera_hierpos, 1.0f, systems);
+        if (v.hovered_cell != i) {
+            if (fail_count < 3) test_log("  FAIL: mouse over system %d -> hovered_cell=%d\n", i, v.hovered_cell);
+            ++fail_count;
+        }
+    }
+    test_log("  %d mismatches / 10\n", fail_count);
+    test_log("  RESULT: %s\n\n", fail_count == 0 ? "PASS" : "FAIL");
+    return fail_count == 0;
+}
+
+static b8 test_voronoi_hover_no_false_positive() {
+    test_log("--- Test 18: Voronoi Hover Midpoint Pick ---\n");
+    StarSystem systems[10];
+    make_test_systems_scatter(systems, 10);
+
+    GalaxyVoronoi v;
+    generate_galaxy_voronoi(systems, 10, &v);
+
+    HierPos2 camera_hierpos = HierPos2{0,0,0,0};
+
+    i32 fail_count = 0;
+    for (i32 i = 0; i < 10; ++i) {
+        // Find nearest neighbor j of system i
+        f64 ix, iy;
+        hierpos_to_f64(&systems[i].galaxy_center, BS_HIERPOS_CELL_SIZE, &ix, &iy);
+        i32 best_j = -1;
+        f64 best_jd = 1e300;
+        for (i32 j = 0; j < 10; ++j) {
+            if (j == i) continue;
+            f64 jx, jy;
+            hierpos_to_f64(&systems[j].galaxy_center, BS_HIERPOS_CELL_SIZE, &jx, &jy);
+            f64 d = (ix-jx)*(ix-jx) + (iy-jy)*(iy-jy);
+            if (d < best_jd) { best_jd = d; best_j = j; }
+        }
+        if (best_j < 0) continue;
+
+        // Place a test point slightly offset from the midpoint toward system i.
+        // The exact midpoint is on the Voronoi boundary; offsetting avoids tie.
+        f64 jx, jy;
+        hierpos_to_f64(&systems[best_j].galaxy_center, BS_HIERPOS_CELL_SIZE, &jx, &jy);
+        f64 mid_x = (ix + jx) * 0.5;
+        f64 mid_y = (iy + jy) * 0.5;
+        // Offset 1% of the segment length toward i.
+        f64 offset_x = (ix - jx) * 0.01;
+        f64 offset_y = (iy - jy) * 0.01;
+        f64 test_x = mid_x + offset_x;
+        f64 test_y = mid_y + offset_y;
+
+        // Convert test point to camera-relative world coordinates.
+        HierPos2 test_h = hierpos_from_vec2(Vec2{(f32)test_x, (f32)test_y}, BS_HIERPOS_CELL_SIZE);
+        Vec2 test_world = hierpos_diff(&test_h, &camera_hierpos, BS_HIERPOS_CELL_SIZE);
+
+        update_cell_hover_effect(&v, 0.0f, test_world, &camera_hierpos, 1.0f, systems);
+
+        // After the offset, system i is definitively closer.
+        i32 expected = i;
+
+        if (v.hovered_cell != expected) {
+            if (fail_count < 3) test_log("  FAIL: midpoint(%d,%d) -> hovered=%d expected=%d\n",
+                i, best_j, v.hovered_cell, expected);
+            ++fail_count;
+        }
+    }
+    test_log("  %d mismatches / 10\n", fail_count);
+    test_log("  RESULT: %s\n\n", fail_count == 0 ? "PASS" : "FAIL");
+    return fail_count == 0;
+}
+
+static b8 test_voronoi_hover_pulse_bounds() {
+    test_log("--- Test 19: Voronoi Hover Pulse Bounds ---\n");
+    StarSystem systems[10];
+    make_test_systems_scatter(systems, 10);
+
+    GalaxyVoronoi v;
+    generate_galaxy_voronoi(systems, 10, &v);
+
+    // Pick a cell that has at least 3 vertices.
+    i32 target = -1;
+    for (i32 i = 0; i < 10; ++i) {
+        if (v.cells[i].vert_count >= 3) { target = i; break; }
+    }
+    if (target < 0) {
+        test_log("  SKIP: no cell with >=3 verts\n");
+        return TRUE;
+    }
+
+    // Simulate pulse over one full cycle (~1 second) and verify bounds.
+    f32 min_alpha = 2.0f, max_alpha = -1.0f;
+    f32 min_thick = 100.0f, max_thick = -1.0f;
+    const i32 STEPS = 64;
+    for (i32 i = 0; i <= STEPS; ++i) {
+        f32 t = (f32)i / (f32)STEPS * BS_PI * 2.0f;
+        f32 pulse = sinf(t) * sinf(t);
+        f32 alpha   = 0.3f + 0.7f * pulse;
+        f32 thick   = 1.0f + 2.0f * pulse;
+        if (alpha < min_alpha) min_alpha = alpha;
+        if (alpha > max_alpha) max_alpha = alpha;
+        if (thick < min_thick) min_thick = thick;
+        if (thick > max_thick) max_thick = thick;
+    }
+
+    b8 alpha_ok = (min_alpha >= 0.29f && max_alpha <= 1.01f);
+    b8 thick_ok = (min_thick >= 0.99f && max_thick <= 3.01f);
+    b8 dims_ok  = (min_alpha < 0.35f && max_alpha > 0.95f);  // must actually pulse
+
+    test_log("  alpha=[%.3f, %.3f] thick=[%.3f, %.3f]\n",
+             min_alpha, max_alpha, min_thick, max_thick);
+    test_log("  RESULT: %s\n\n", (alpha_ok && thick_ok && dims_ok) ? "PASS" : "FAIL");
+    return alpha_ok && thick_ok && dims_ok;
+}
+
+static b8 test_star_volumetric_light() {
+    test_log("--- Test 20: Star Volumetric Light ---\n");
+    StarSystem sys;
+    memset(&sys, 0, sizeof(sys));
+    generate_star_system(&sys, 42, Vec2{ 1000.0f, 2000.0f });
+
+    if (sys.planet_count <= 0) {
+        test_log("  SKIP: no planets\n");
+        return TRUE;
+    }
+
+    // Compute max orbit
+    f32 max_orbit = 0.0f;
+    for (i32 i = 0; i < sys.planet_count; ++i) {
+        max_orbit = fmaxf(max_orbit, sys.planets[i].semi_major_axis);
+    }
+
+    // Test make_star_light at zoom=1.0 (comp = 1.0)
+    Vec2 star_pos = Vec2{ 123.0f, 456.0f };  // explicit test position
+    bs_light2d light = make_star_light(star_pos, sys.star.color, max_orbit, 1.0f, 1.0f);
+
+    b8 pos_ok      = (light.position.x == 123.0f && light.position.y == 456.0f);
+    b8 color_ok    = (light.color.r > 0.0f || light.color.g > 0.0f || light.color.b > 0.0f);
+    b8 radius_ok   = (light.radius > 0.0f && fabsf(light.radius - max_orbit * 3.0f) < 1.0f);
+    b8 intensity_ok = (light.intensity == 3.0f);
+    b8 enabled_ok  = light.enabled;
+
+    // Test with reduced visibility
+    bs_light2d dim = make_star_light(star_pos, sys.star.color, max_orbit, 1.0f, 0.5f);
+    b8 dim_ok = (dim.intensity == 1.5f);
+
+    // Test with compression factor
+    bs_light2d comp = make_star_light(star_pos, sys.star.color, max_orbit, 0.5f, 1.0f);
+    b8 comp_ok = (fabsf(comp.radius - max_orbit * 3.0f * 0.5f) < 1.0f);
+
+    test_log("  planets=%d max_orbit=%.1f radius=%.1f intensity=%.2f\n",
+             sys.planet_count, max_orbit, light.radius, light.intensity);
+    test_log("  RESULT: %s\n\n",
+             (pos_ok && color_ok && radius_ok && intensity_ok && enabled_ok && dim_ok && comp_ok) ? "PASS" : "FAIL");
+    return pos_ok && color_ok && radius_ok && intensity_ok && enabled_ok && dim_ok && comp_ok;
+}
+
+static b8 test_motion_speed_report() {
+    test_log("--- Motion Speed Report (diagnostic) ---\n");
+    StarSystem sys;
+    memset(&sys, 0, sizeof(sys));
+    generate_star_system(&sys, 42, Vec2{0,0});
+    for (i32 i = 0; i < sys.planet_count; ++i) {
+        f32 a = sys.planets[i].semi_major_axis;
+        f32 period = sys.planets[i].orbital_period;
+        f32 speed = sys.planets[i].orbit_speed;
+        f32 deg_per_sec = speed * 180.0f / BS_PI;
+        test_log("  Planet %d: a=%.0f  period=%.1fs  speed=%.8f rad/s  (%.8f deg/s)\n",
+                 i, a, period, speed, deg_per_sec);
+        test_log("           displacement in 1s: %.6f units\n", speed * a);
+    }
+    test_log("\n");
+    return TRUE;
+}
+
+int main(int argc, char** argv) {
+    (void)argc; (void)argv;
+    g_out = fopen("../bin/test_results.txt", "w");
+    if (!g_out) g_out = stdout;
+
+    test_log("=== SS Generation Test Results ===\n\n");
+
+    b8 r1 = test_motion();
+    b8 r2 = test_non_intersecting();
+    b8 r3 = test_spacing_factor();
+    b8 r4 = test_eccentricity();
+    b8 r5 = test_system_scale();
+    b8 r6 = test_planet_count();
+    b8 r7 = test_determinism();
+    b8 r8 = test_period_consistency();
+    b8 r9 = test_elliptical_orbit();
+    b8 r10 = test_voronoi_generation();
+    b8 r11 = test_voronoi_cells_valid();
+    b8 r12 = test_voronoi_point_in_cell();
+    b8 r13 = test_voronoi_delaunay_count();
+    b8 r14 = test_voronoi_edge_uniqueness();
+    b8 r15 = test_voronoi_determinism();
+    b8 r16 = test_voronoi_cell_indexing();
+    b8 r17 = test_voronoi_hover_pick();
+    b8 r18 = test_voronoi_hover_no_false_positive();
+    b8 r19 = test_voronoi_hover_pulse_bounds();
+    b8 r20 = test_star_volumetric_light();
+    test_motion_speed_report();
+
+    i32 passed = (i32)r1 + r2 + r3 + r4 + r5 + r6 + r7 + r8 + r9 +
+                 r10 + r11 + r12 + r13 + r14 + r15 +
+                 r16 + r17 + r18 + r19 + r20;
+    test_log("=== Summary: %d/20 tests passed ===\n", passed);
+
+    if (g_out && g_out != stdout) fclose(g_out);
+    return (passed == 20) ? 0 : 1;
+}

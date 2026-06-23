@@ -49,6 +49,10 @@ compile quad vert vs_6_0
 compile quad frag ps_6_0
 compile sprite vert vs_6_0
 compile sprite frag ps_6_0
+compile mapped_sprite vert vs_6_0
+compile mapped_sprite frag ps_6_0
+compile starfield vert vs_6_0
+compile starfield frag ps_6_0
 echo "Shaders compiled to:"
 echo "  $OUT_DXIL"
 echo "  $OUT_SPV"

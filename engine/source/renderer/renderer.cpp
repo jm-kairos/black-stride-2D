@@ -258,6 +258,101 @@ void renderer_draw_sprite(const bs_sprite* sprite)
     state.backend.draw_sprite(&state.backend, sprite);
 }
 
+void renderer_draw_mapped_sprite(const bs_mapped_sprite* sprite)
+{
+    if (!state.initialized || !state.frame_active || !sprite)
+    {
+        return;
+    }
+    if (state.backend.draw_mapped_sprite)
+        state.backend.draw_mapped_sprite(&state.backend, sprite);
+}
+
+void renderer_draw_starfield(const bs_starfield_params* params)
+{
+    if (!state.initialized || !state.frame_active || !params || !state.backend.draw_starfield)
+    {
+        return;
+    }
+    state.backend.draw_starfield(&state.backend, params);
+}
+
+void renderer_draw_sunburst(const bs_sunburst_params* params)
+{
+    if (!state.initialized || !state.frame_active || !params || !state.backend.draw_sunburst)
+    {
+        return;
+    }
+    state.backend.draw_sunburst(&state.backend, params);
+}
+
+void renderer_set_lights(const bs_light2d* lights, u32 count, bs_color ambient, u32 unlit_layer)
+{
+    if (!state.initialized || !state.backend.set_lights)
+    {
+        return;
+    }
+    // A null/empty list is valid: it disables lighting (fullbright).
+    state.backend.set_lights(&state.backend, lights, (lights ? count : 0), ambient, unlit_layer);
+}
+
+void renderer_set_glow_params(const bs_glow_params* params)
+{
+    if (!state.initialized || !state.backend.set_glow_params)
+    {
+        return;
+    }
+    state.backend.set_glow_params(&state.backend, params);
+}
+
+void renderer_set_bloom_enabled(b8 enabled)
+{
+    if (!state.initialized || !state.backend.set_bloom_enabled) return;
+    state.backend.set_bloom_enabled(&state.backend, enabled);
+}
+
+void renderer_set_bloom_params(f32 threshold, f32 intensity)
+{
+    if (!state.initialized || !state.backend.set_bloom_params) return;
+    state.backend.set_bloom_params(&state.backend, threshold, intensity);
+}
+
+void renderer_set_streak_enabled(b8 enabled)
+{
+    if (!state.initialized || !state.backend.set_streak_enabled) return;
+    state.backend.set_streak_enabled(&state.backend, enabled);
+}
+
+void renderer_set_streak_params(f32 angle, f32 length)
+{
+    if (!state.initialized || !state.backend.set_streak_params) return;
+    state.backend.set_streak_params(&state.backend, angle, length);
+}
+
+void renderer_set_streak_intensity(f32 intensity)
+{
+    if (!state.initialized || !state.backend.set_streak_intensity) return;
+    state.backend.set_streak_intensity(&state.backend, intensity);
+}
+
+void renderer_set_streak_source(bs_math::Vec2 screen_pos)
+{
+    if (!state.initialized || !state.backend.set_streak_source) return;
+    state.backend.set_streak_source(&state.backend, screen_pos);
+}
+
+void renderer_set_streak_flare_intensity(f32 intensity)
+{
+    if (!state.initialized || !state.backend.set_streak_flare_intensity) return;
+    state.backend.set_streak_flare_intensity(&state.backend, intensity);
+}
+
+void renderer_set_aux_bloom_mode(b8 enabled)
+{
+    if (!state.initialized || !state.backend.set_aux_bloom_mode) return;
+    state.backend.set_aux_bloom_mode(&state.backend, enabled);
+}
+
 // -------------------------------------------------------------------------------------
 // Phase 4 — debug / vector layer. Every primitive lowers to one or more white-texture
 // quads pushed through the existing sprite batch, so blending, layering, and the camera
@@ -288,9 +383,11 @@ void renderer_draw_line(bs_math::Vec2 a, bs_math::Vec2 b, f32 thickness,
     s.rotation = atan2f(d.y, d.x);
     s.uv       = bs_rect{ 0.0f, 0.0f, 1.0f, 1.0f };
     s.tint     = color;
+    s.custom   = bs_color{ 0.0f, 0.0f, 0.0f, 0.0f };
     s.texture  = bs_texture{ BS_INVALID_HANDLE }; // white texture => solid color
-    s.blend    = (color.a < 0.999f) ? BLEND_ALPHA : BLEND_NONE;
-    s.layer    = layer;
+    s.blend          = (color.a < 0.999f) ? BLEND_ALPHA : BLEND_NONE;
+    s.layer          = layer;
+    s.glow_override  = nullptr;
     state.backend.draw_sprite(&state.backend, &s);
 }
 
@@ -306,9 +403,11 @@ void renderer_draw_quad(bs_math::Vec2 center, bs_math::Vec2 size,
     s.rotation = 0.0f;
     s.uv       = bs_rect{ 0.0f, 0.0f, 1.0f, 1.0f };
     s.tint     = color;
+    s.custom   = bs_color{ 0.0f, 0.0f, 0.0f, 0.0f };
     s.texture  = bs_texture{ BS_INVALID_HANDLE };
-    s.blend    = (color.a < 0.999f) ? BLEND_ALPHA : BLEND_NONE;
-    s.layer    = layer;
+    s.blend          = (color.a < 0.999f) ? BLEND_ALPHA : BLEND_NONE;
+    s.layer          = layer;
+    s.glow_override  = nullptr;
     state.backend.draw_sprite(&state.backend, &s);
 }
 

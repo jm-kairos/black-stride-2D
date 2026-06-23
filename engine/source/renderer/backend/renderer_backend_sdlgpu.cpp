@@ -17,6 +17,7 @@
 #include "renderer/backend/renderer_backend_sdlgpu.h"
 #include "renderer/renderer_backend.h"
 #include "renderer/bs_imgui.h" // SDL-free facade; implemented at the bottom of this TU
+#include "renderer/starfield_gpu_resources.h"
 
 #include "core/logger.h"
 #include "platform/platform.h"
@@ -24,6 +25,7 @@
 #include "renderer/camera2d.h"
 
 #include <SDL3/SDL_gpu.h>
+#include <math.h> // cosf, sinf for occlusion atlas
 #include <SDL3/SDL_iostream.h> // SDL_LoadFile
 
 // Dear ImGui. Included via -isystem (see engine/build.bat) so ImGui's own headers never trip
@@ -41,14 +43,65 @@
 
 using namespace bs_math; // Mat4, mat4_ortho, etc.
 
-// One interleaved sprite vertex: 2D position + UV + RGBA tint. Matches the pipeline vertex
-// layout and the HLSL VSInput (TEXCOORD0=position, TEXCOORD1=uv, TEXCOORD2=color).
+// Workaround: on D3D12, SDL_GetGPUSwapchainTextureFormat() may report R8G8B8A8_UNORM
+// at init time while the actual swapchain is created as B8G8R8A8_UNORM.  If we build
+// pipelines with the reported value we get a format-mismatch validation error on every
+// swapchain-facing draw.  Force B8G8R8A8_UNORM when we detect this specific case.
+static SDL_GPUTextureFormat get_corrected_swapchain_format(SDL_GPUDevice* device, SDL_Window* window)
+{
+    const char* driver = SDL_GetGPUDeviceDriver(device);
+    SDL_GPUTextureFormat fmt = SDL_GetGPUSwapchainTextureFormat(device, window);
+    if (driver && SDL_strcmp(driver, "direct3d12") == 0 &&
+        fmt == SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM)
+    {
+        BS_LOG_WARN("D3D12 init: SDL reports R8G8B8A8_UNORM but swapchain is B8G8R8A8_UNORM; forcing B8G8R8A8_UNORM for swapchain-facing pipelines.");
+        return SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM;
+    }
+    return fmt;
+}
+
+// One interleaved sprite vertex: 2D position + UV + RGBA tint + custom float4.
+// Matches the pipeline vertex layout and the HLSL VSInput
+// (TEXCOORD0=position, TEXCOORD1=uv, TEXCOORD2=color, TEXCOORD3=custom).B
 typedef struct sprite_vertex
 {
     f32 x, y;       // world-space position (pre-transformed CPU-side)
     f32 u, v;       // atlas UV
     f32 r, g, b, a; // tint
+    f32 cr, cg, cb, ca; // custom per-sprite shader parameters
 } sprite_vertex;
+
+// One interleaved mapped-sprite vertex: 2D position + UV + world pos + rotation angle.
+typedef struct mapped_vertex
+{
+    f32 x, y;       // world-space position
+    f32 u, v;       // atlas UV
+    f32 wx, wy, wz; // world-space position for lighting
+    f32 angle;      // sprite rotation in radians
+} mapped_vertex;
+
+// Directional light uniform for the mapped sprite fragment shader.
+typedef struct mapped_light
+{
+    f32 light_dir[4];  // xyz = normalized world-space light direction, w = intensity
+    f32 ambient[4];    // rgb = ambient color, a = unused
+    f32 tuning[4];     // x = normal strength, y = depth parallax scale, z = unused, w = unused
+} mapped_light;
+
+// Max 2D lights packed into the fragment uniform. MUST equal BS_MAX_LIGHTS in sprite.frag.hlsl.
+#define BS_BACKEND_MAX_LIGHTS 16
+
+// Fragment light uniform — MUST match LightUBO in sprite.frag.hlsl (2 + 2*N float4s).
+// Pushed per draw-run via SDL_PushGPUFragmentUniformData. params.y is the per-run lit flag
+// (0 => fullbright), so unlit runs (HUD/UI) push y=0; each light's color.w is its enable flag.
+typedef struct gpu_lights
+{
+    f32 params[4];                              // x = light count, y = lit flag (0 = fullbright)
+    f32 ambient[4];                             // rgb = ambient floor
+    f32 pos_radius[BS_BACKEND_MAX_LIGHTS][4];   // xy = pos, z = radius, w = intensity
+    f32 color[BS_BACKEND_MAX_LIGHTS][4];        // rgb = color, w = per-light enabled
+    f32 glow[8][4];                             // tunable glow/heat params (see sprite.frag.hlsl)
+} gpu_lights;
 
 // Capacity limits for the per-frame dynamic batch. HARD CEILING: the index buffer is u16
 // (see ibuffer below), and the index init computes base = (u16)(s*4), so the largest
@@ -61,6 +114,7 @@ typedef struct sprite_vertex
 #define BS_MAX_BATCH_VERTS    (BS_MAX_SPRITES * 4)
 #define BS_MAX_BATCH_INDICES  (BS_MAX_SPRITES * 6)
 #define BS_MAX_TEXTURES       1024
+#define BS_MAX_MAPPED_SPRITES 256
 
 // A pooled GPU texture. `generation` increments on destroy so stale handles are detectable.
 typedef struct gpu_texture
@@ -94,9 +148,17 @@ typedef struct sdlgpu_state
 
     SDL_FColor clear_color;
 
-    // Sprite pipelines: one per EBlendMode, all sharing the sprite vert/frag shaders.
+    // Sprite pipelines: one per EBlendMode. `pipelines` targets swapchain; `pipelines_offscreen`
+    // targets scene_rt (RGBA8) when bloom is enabled so format matches the render target.
     SDL_GPUGraphicsPipeline* pipelines[BLEND_MODE_COUNT];
-    SDL_GPUSampler*          sampler;
+    SDL_GPUGraphicsPipeline* pipelines_offscreen[BLEND_MODE_COUNT];
+
+    // 4-map mapped sprite pipeline (alpha blend only; drawn inside the scene pass).
+    SDL_GPUGraphicsPipeline* pipeline_mapped;
+    SDL_GPUGraphicsPipeline* pipeline_mapped_offscreen;
+
+    SDL_GPUSampler*          sampler;        // NEAREST  — pixel-art sprites
+    SDL_GPUSampler*          sampler_linear; // LINEAR   — post-process sampling
 
     // GPU-resident batch buffers. The index buffer is filled once (quad pattern is fixed);
     // the vertex buffer is re-uploaded each frame from the sorted sprite list.
@@ -104,16 +166,38 @@ typedef struct sdlgpu_state
     SDL_GPUBuffer*         ibuffer;
     SDL_GPUTransferBuffer* vtransfer; // persistent UPLOAD transfer buffer for the vertex stream
 
+    // GPU-resident buffers for 4-map mapped sprites (separate vertex layout + pipeline).
+    SDL_GPUBuffer*         mapped_vbuffer;
+    SDL_GPUBuffer*         mapped_ibuffer;
+    SDL_GPUTransferBuffer* mapped_vtransfer;
+
     // Texture pool.
     gpu_texture textures[BS_MAX_TEXTURES];
-    bs_texture  white_texture; // 1x1 opaque white; lets solid sprites reuse the sprite pipeline
+    bs_texture  white_texture;  // 1x1 opaque white; lets solid sprites reuse the sprite pipeline
+    bs_texture  circle_texture; // radial gradient circle for aux-bloom sunburst proxy
 
     // Camera (rebuilt into view-proj each frame from the live swapchain size).
     Camera2D camera;
 
+    // 2D point lights pushed to the sprite fragment shader per draw-run. Defaults to count 0
+    // (fullbright) in initialize so the renderer behaves exactly as before until the game sets some.
+    bs_light2d lights[BS_BACKEND_MAX_LIGHTS];
+    u32        light_count;
+    bs_color   light_ambient;
+    u32        light_unlit_layer; // sprite layers >= this draw fullbright (HUD/UI)
+
+    // Tunable glow parameters pushed to the sprite fragment shader per draw-run.
+    bs_glow_params glow_params;
+    b8             glow_params_set; // TRUE if the game has ever set glow params (for defaults)
+
     // CPU-side per-frame batch.
     batched_sprite batch[BS_MAX_SPRITES];
     u32            batch_count;
+
+    // 4-map mapped sprite queue: separate from the regular sprite batch because it uses a
+    // different pipeline with four fragment samplers and a directional-light uniform.
+    bs_mapped_sprite mapped_batch[BS_MAX_MAPPED_SPRITES];
+    u32            mapped_batch_count;
 
     // Phase 4: stats snapshotted at the end of end_frame for the previous completed frame.
     bs_frame_stats last_stats;
@@ -121,6 +205,72 @@ typedef struct sdlgpu_state
     // Dear ImGui: TRUE between bs_imgui_initialize and bs_imgui_shutdown. Gates every ImGui
     // call in the frame lifecycle so the engine runs cleanly if ImGui ever fails to init.
     b8 imgui_active;
+
+    // Monospace HUD font (loaded from system Consolas; NULL if unavailable).
+    void* hud_font;
+
+    // ---- HDR Bloom post-process -----------------------------------------------------------
+    // Offscreen render targets (RGBA8). scene_rt is window-sized; bloom_a/b are half-res.
+    SDL_GPUTexture* scene_rt;
+    SDL_GPUTexture* bloom_a;
+    SDL_GPUTexture* bloom_b;
+
+    // Auxiliary bloom targets (half-res) for star-only streak effect.
+    SDL_GPUTexture* aux_bloom_a;
+    SDL_GPUTexture* aux_bloom_b;
+
+    // Post-process pipelines (fullscreen triangle, no blending except where noted).
+    SDL_GPUGraphicsPipeline* pipeline_extract;
+    SDL_GPUGraphicsPipeline* pipeline_blur_h;
+    SDL_GPUGraphicsPipeline* pipeline_blur_v;
+    SDL_GPUGraphicsPipeline* pipeline_composite;
+    SDL_GPUGraphicsPipeline* pipeline_streak;   // directional anamorphic streak
+    SDL_GPUGraphicsPipeline* pipeline_flare;    // lens-flare ghost pass
+    // Procedural starfield layers (one fullscreen draw per layer).
+    SDL_GPUGraphicsPipeline* pipeline_starfield_layer;          // -> offscreen (bloom path)
+    SDL_GPUGraphicsPipeline* pipeline_starfield_layer_swapchain; // -> swapchain (non-bloom)
+
+    // Sunburst star pipeline (additive blend — ONE/ONE).
+    SDL_GPUGraphicsPipeline* pipeline_sunburst;          // -> offscreen (bloom path)
+    SDL_GPUGraphicsPipeline* pipeline_sunburst_swapchain; // -> swapchain (non-bloom)
+
+    // Bloom tuning (editor-settable; defaults give a subtle glow).
+    b8  bloom_enabled;
+    f32 bloom_threshold;
+    f32 bloom_intensity;
+    u32 bloom_width;   // last known width (recreate targets on resize)
+    u32 bloom_height;  // last known height
+
+    // Anamorphic streak tuning.
+    b8  streak_enabled;
+    f32 streak_angle;
+    f32 streak_length;
+    f32 streak_intensity;
+    bs_math::Vec2 streak_source;      // bright source position in screen pixels (for lens flare)
+    b8  streak_source_set;            // whether streak_source has been set this frame
+    f32 streak_flare_intensity;       // lens-flare ghost intensity
+
+    // Auxiliary batch: sprites captured while aux_bloom_mode is active.
+    b8             aux_bloom_mode;
+    batched_sprite aux_batch[BS_MAX_SPRITES];
+    u32            aux_batch_count;
+
+    // Starfield layer queue: parameters queued during game_render, drawn in end_frame.
+    // 2 starfield layers × 3 passes each = 6, round up to 8 for headroom.
+    #define BS_MAX_STARFIELD_LAYERS 8
+    struct {
+        b8               active;
+        bs_starfield_params params;
+    } starfield_queue[BS_MAX_STARFIELD_LAYERS];
+    u32 starfield_queue_count;
+
+    // Sunburst star queue: typically 1-4 stars on screen at once.
+    #define BS_MAX_SUNBURST_STARS 4
+    struct {
+        b8               active;
+        bs_sunburst_params params;
+    } sunburst_queue[BS_MAX_SUNBURST_STARS];
+    u32 sunburst_queue_count;
 } sdlgpu_state;
 
 static sdlgpu_state g_sdl;
@@ -304,11 +454,10 @@ static void fill_blend_state(EBlendMode mode, SDL_GPUColorTargetBlendState* bs)
     }
 }
 
-static b8 create_pipelines(SDL_GPUShader* vs, SDL_GPUShader* fs)
+static b8 create_pipelines_for_format(SDL_GPUShader* vs, SDL_GPUShader* fs,
+                                      SDL_GPUTextureFormat color_fmt,
+                                      SDL_GPUGraphicsPipeline** out_pipelines)
 {
-    SDL_GPUTextureFormat swap_fmt =
-        SDL_GetGPUSwapchainTextureFormat(g_sdl.device, g_sdl.window);
-
     // Vertex buffer: one interleaved stream, per-vertex.
     SDL_GPUVertexBufferDescription vbuf_desc;
     SDL_zero(vbuf_desc);
@@ -317,8 +466,8 @@ static b8 create_pipelines(SDL_GPUShader* vs, SDL_GPUShader* fs)
     vbuf_desc.input_rate         = SDL_GPU_VERTEXINPUTRATE_VERTEX;
     vbuf_desc.instance_step_rate = 0;
 
-    // Attributes: position (loc 0, float2), uv (loc 1, float2), color (loc 2, float4).
-    SDL_GPUVertexAttribute attrs[3];
+    // Attributes: position (loc 0, float2), uv (loc 1, float2), color (loc 2, float4), custom (loc 3, float4).
+    SDL_GPUVertexAttribute attrs[4];
     SDL_zero(attrs);
     attrs[0].location    = 0;
     attrs[0].buffer_slot = 0;
@@ -332,6 +481,10 @@ static b8 create_pipelines(SDL_GPUShader* vs, SDL_GPUShader* fs)
     attrs[2].buffer_slot = 0;
     attrs[2].format      = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4;
     attrs[2].offset      = offsetof(sprite_vertex, r);
+    attrs[3].location    = 3;
+    attrs[3].buffer_slot = 0;
+    attrs[3].format      = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4;
+    attrs[3].offset      = offsetof(sprite_vertex, cr);
 
     for (u32 m = 0; m < BLEND_MODE_COUNT; ++m)
     {
@@ -340,7 +493,7 @@ static b8 create_pipelines(SDL_GPUShader* vs, SDL_GPUShader* fs)
 
         SDL_GPUColorTargetDescription color_target;
         SDL_zero(color_target);
-        color_target.format      = swap_fmt;
+        color_target.format      = color_fmt;
         color_target.blend_state = blend;
 
         SDL_GPUGraphicsPipelineCreateInfo info;
@@ -352,7 +505,7 @@ static b8 create_pipelines(SDL_GPUShader* vs, SDL_GPUShader* fs)
         info.vertex_input_state.vertex_buffer_descriptions = &vbuf_desc;
         info.vertex_input_state.num_vertex_buffers         = 1;
         info.vertex_input_state.vertex_attributes          = attrs;
-        info.vertex_input_state.num_vertex_attributes      = 3;
+        info.vertex_input_state.num_vertex_attributes      = 4;
 
         info.rasterizer_state.fill_mode  = SDL_GPU_FILLMODE_FILL;
         info.rasterizer_state.cull_mode  = SDL_GPU_CULLMODE_NONE;
@@ -362,14 +515,89 @@ static b8 create_pipelines(SDL_GPUShader* vs, SDL_GPUShader* fs)
         info.target_info.num_color_targets         = 1;
         info.target_info.has_depth_stencil_target  = false;
 
-        g_sdl.pipelines[m] = SDL_CreateGPUGraphicsPipeline(g_sdl.device, &info);
-        if (!g_sdl.pipelines[m])
+        out_pipelines[m] = SDL_CreateGPUGraphicsPipeline(g_sdl.device, &info);
+        if (!out_pipelines[m])
         {
-            BS_LOG_FATAL("create_pipelines: pipeline %u failed: %s", m, SDL_GetError());
+            BS_LOG_FATAL("create_pipelines: pipeline %u (fmt %u) failed: %s", m, (u32)color_fmt, SDL_GetError());
             return FALSE;
         }
     }
 
+    return TRUE;
+}
+
+static b8 create_mapped_pipeline_for_format(SDL_GPUShader* vs, SDL_GPUShader* fs,
+                                             SDL_GPUTextureFormat color_fmt,
+                                             SDL_GPUGraphicsPipeline** out_pipeline)
+{
+    SDL_GPUVertexBufferDescription vbuf_desc;
+    SDL_zero(vbuf_desc);
+    vbuf_desc.slot               = 0;
+    vbuf_desc.pitch              = sizeof(mapped_vertex);
+    vbuf_desc.input_rate         = SDL_GPU_VERTEXINPUTRATE_VERTEX;
+    vbuf_desc.instance_step_rate = 0;
+
+    SDL_GPUVertexAttribute attrs[4];
+    SDL_zero(attrs);
+    attrs[0].location    = 0;
+    attrs[0].buffer_slot = 0;
+    attrs[0].format      = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT2;
+    attrs[0].offset      = offsetof(mapped_vertex, x);
+    attrs[1].location    = 1;
+    attrs[1].buffer_slot = 0;
+    attrs[1].format      = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT2;
+    attrs[1].offset      = offsetof(mapped_vertex, u);
+    attrs[2].location    = 2;
+    attrs[2].buffer_slot = 0;
+    attrs[2].format      = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3;
+    attrs[2].offset      = offsetof(mapped_vertex, wx);
+    attrs[3].location    = 3;
+    attrs[3].buffer_slot = 0;
+    attrs[3].format      = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT;
+    attrs[3].offset      = offsetof(mapped_vertex, angle);
+
+    SDL_GPUColorTargetBlendState blend;
+    SDL_zero(blend);
+    blend.color_write_mask = SDL_GPU_COLORCOMPONENT_R | SDL_GPU_COLORCOMPONENT_G |
+                             SDL_GPU_COLORCOMPONENT_B | SDL_GPU_COLORCOMPONENT_A;
+    blend.enable_blend           = true;
+    blend.color_blend_op         = SDL_GPU_BLENDOP_ADD;
+    blend.src_color_blendfactor  = SDL_GPU_BLENDFACTOR_SRC_ALPHA;
+    blend.dst_color_blendfactor  = SDL_GPU_BLENDFACTOR_ONE_MINUS_SRC_ALPHA;
+    blend.alpha_blend_op         = SDL_GPU_BLENDOP_ADD;
+    blend.src_alpha_blendfactor  = SDL_GPU_BLENDFACTOR_ONE;
+    blend.dst_alpha_blendfactor  = SDL_GPU_BLENDFACTOR_ONE_MINUS_SRC_ALPHA;
+
+    SDL_GPUColorTargetDescription color_target;
+    SDL_zero(color_target);
+    color_target.format      = color_fmt;
+    color_target.blend_state = blend;
+
+    SDL_GPUGraphicsPipelineCreateInfo info;
+    SDL_zero(info);
+    info.vertex_shader   = vs;
+    info.fragment_shader = fs;
+    info.primitive_type  = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST;
+
+    info.vertex_input_state.vertex_buffer_descriptions = &vbuf_desc;
+    info.vertex_input_state.num_vertex_buffers         = 1;
+    info.vertex_input_state.vertex_attributes          = attrs;
+    info.vertex_input_state.num_vertex_attributes      = 4;
+
+    info.rasterizer_state.fill_mode  = SDL_GPU_FILLMODE_FILL;
+    info.rasterizer_state.cull_mode  = SDL_GPU_CULLMODE_NONE;
+    info.rasterizer_state.front_face = SDL_GPU_FRONTFACE_COUNTER_CLOCKWISE;
+
+    info.target_info.color_target_descriptions = &color_target;
+    info.target_info.num_color_targets         = 1;
+    info.target_info.has_depth_stencil_target  = false;
+
+    *out_pipeline = SDL_CreateGPUGraphicsPipeline(g_sdl.device, &info);
+    if (!*out_pipeline)
+    {
+        BS_LOG_FATAL("create_mapped_pipeline: failed (fmt %u): %s", (u32)color_fmt, SDL_GetError());
+        return FALSE;
+    }
     return TRUE;
 }
 
@@ -402,6 +630,28 @@ static b8 create_batch_resources()
     g_sdl.vtransfer = SDL_CreateGPUTransferBuffer(g_sdl.device, &tinfo);
     if (!g_sdl.vtransfer) { BS_LOG_FATAL("create_batch_resources: vtransfer failed: %s", SDL_GetError()); return FALSE; }
 
+    // Mapped sprite buffers: separate vertex layout, smaller capacity.
+    SDL_GPUBufferCreateInfo mvinfo;
+    SDL_zero(mvinfo);
+    mvinfo.usage = SDL_GPU_BUFFERUSAGE_VERTEX;
+    mvinfo.size  = sizeof(mapped_vertex) * BS_MAX_MAPPED_SPRITES * 4;
+    g_sdl.mapped_vbuffer = SDL_CreateGPUBuffer(g_sdl.device, &mvinfo);
+    if (!g_sdl.mapped_vbuffer) { BS_LOG_FATAL("create_batch_resources: mapped_vbuffer failed: %s", SDL_GetError()); return FALSE; }
+
+    SDL_GPUBufferCreateInfo miinfo;
+    SDL_zero(miinfo);
+    miinfo.usage = SDL_GPU_BUFFERUSAGE_INDEX;
+    miinfo.size  = sizeof(u16) * BS_MAX_MAPPED_SPRITES * 6;
+    g_sdl.mapped_ibuffer = SDL_CreateGPUBuffer(g_sdl.device, &miinfo);
+    if (!g_sdl.mapped_ibuffer) { BS_LOG_FATAL("create_batch_resources: mapped_ibuffer failed: %s", SDL_GetError()); return FALSE; }
+
+    SDL_GPUTransferBufferCreateInfo mtinfo;
+    SDL_zero(mtinfo);
+    mtinfo.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
+    mtinfo.size  = sizeof(mapped_vertex) * BS_MAX_MAPPED_SPRITES * 4;
+    g_sdl.mapped_vtransfer = SDL_CreateGPUTransferBuffer(g_sdl.device, &mtinfo);
+    if (!g_sdl.mapped_vtransfer) { BS_LOG_FATAL("create_batch_resources: mapped_vtransfer failed: %s", SDL_GetError()); return FALSE; }
+
     // Fill the static index buffer once via a temporary transfer buffer.
     {
         SDL_GPUTransferBufferCreateInfo iti;
@@ -433,6 +683,267 @@ static b8 create_batch_resources()
         SDL_ReleaseGPUTransferBuffer(g_sdl.device, itb);
     }
 
+    // Fill the mapped index buffer once.
+    {
+        SDL_GPUTransferBufferCreateInfo iti;
+        SDL_zero(iti);
+        iti.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
+        iti.size  = sizeof(u16) * BS_MAX_MAPPED_SPRITES * 6;
+        SDL_GPUTransferBuffer* itb = SDL_CreateGPUTransferBuffer(g_sdl.device, &iti);
+        if (!itb) { BS_LOG_FATAL("create_batch_resources: mapped index transfer failed: %s", SDL_GetError()); return FALSE; }
+
+        u16* idx = (u16*)SDL_MapGPUTransferBuffer(g_sdl.device, itb, false);
+        for (u32 s = 0; s < BS_MAX_MAPPED_SPRITES; ++s)
+        {
+            u16 base = (u16)(s * 4u);
+            u32 o    = s * 6u;
+            idx[o + 0] = base + 0; idx[o + 1] = base + 1; idx[o + 2] = base + 2;
+            idx[o + 3] = base + 2; idx[o + 4] = base + 3; idx[o + 5] = base + 0;
+        }
+        SDL_UnmapGPUTransferBuffer(g_sdl.device, itb);
+
+        SDL_GPUCommandBuffer* up = SDL_AcquireGPUCommandBuffer(g_sdl.device);
+        SDL_GPUCopyPass* cp = SDL_BeginGPUCopyPass(up);
+        SDL_GPUTransferBufferLocation src; SDL_zero(src);
+        src.transfer_buffer = itb; src.offset = 0;
+        SDL_GPUBufferRegion dst; SDL_zero(dst);
+        dst.buffer = g_sdl.mapped_ibuffer; dst.offset = 0; dst.size = sizeof(u16) * BS_MAX_MAPPED_SPRITES * 6;
+        SDL_UploadToGPUBuffer(cp, &src, &dst, false);
+        SDL_EndGPUCopyPass(cp);
+        SDL_SubmitGPUCommandBuffer(up);
+        SDL_ReleaseGPUTransferBuffer(g_sdl.device, itb);
+    }
+
+    return TRUE;
+}
+
+// Create offscreen render targets for HDR bloom. scene_rt is window-sized; bloom_a/b are half-res.
+static b8 create_bloom_targets(u32 width, u32 height)
+{
+    g_sdl.bloom_width  = width;
+    g_sdl.bloom_height = height;
+
+    SDL_GPUTextureCreateInfo info;
+    SDL_zero(info);
+    info.type                 = SDL_GPU_TEXTURETYPE_2D;
+    info.format               = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
+    info.layer_count_or_depth = 1;
+    info.num_levels           = 1;
+
+    // Scene render target: full window size, colour target + sampler.
+    info.width  = width;
+    info.height = height;
+    info.usage  = SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER;
+    SDL_PropertiesID rt_props = SDL_CreateProperties();
+    SDL_SetFloatProperty(rt_props, SDL_PROP_GPU_TEXTURE_CREATE_D3D12_CLEAR_R_FLOAT, 0.0f);
+    SDL_SetFloatProperty(rt_props, SDL_PROP_GPU_TEXTURE_CREATE_D3D12_CLEAR_G_FLOAT, 0.0f);
+    SDL_SetFloatProperty(rt_props, SDL_PROP_GPU_TEXTURE_CREATE_D3D12_CLEAR_B_FLOAT, 0.0f);
+    SDL_SetFloatProperty(rt_props, SDL_PROP_GPU_TEXTURE_CREATE_D3D12_CLEAR_A_FLOAT, 1.0f);
+    info.props = rt_props;
+    g_sdl.scene_rt = SDL_CreateGPUTexture(g_sdl.device, &info);
+    SDL_DestroyProperties(rt_props);
+    info.props = 0;
+    if (!g_sdl.scene_rt) { BS_LOG_FATAL("create_bloom_targets: scene_rt failed: %s", SDL_GetError()); return FALSE; }
+
+    // Bloom ping-pong: half resolution.
+    info.width  = (width  > 1) ? (width  / 2) : 1;
+    info.height = (height > 1) ? (height / 2) : 1;
+    info.usage  = SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER;
+    g_sdl.bloom_a = SDL_CreateGPUTexture(g_sdl.device, &info);
+    if (!g_sdl.bloom_a) { BS_LOG_FATAL("create_bloom_targets: bloom_a failed: %s", SDL_GetError()); return FALSE; }
+    g_sdl.bloom_b = SDL_CreateGPUTexture(g_sdl.device, &info);
+    if (!g_sdl.bloom_b) { BS_LOG_FATAL("create_bloom_targets: bloom_b failed: %s", SDL_GetError()); return FALSE; }
+
+    // Auxiliary bloom ping-pong (same half-res for streak effect).
+    g_sdl.aux_bloom_a = SDL_CreateGPUTexture(g_sdl.device, &info);
+    if (!g_sdl.aux_bloom_a) { BS_LOG_FATAL("create_bloom_targets: aux_bloom_a failed: %s", SDL_GetError()); return FALSE; }
+    g_sdl.aux_bloom_b = SDL_CreateGPUTexture(g_sdl.device, &info);
+    if (!g_sdl.aux_bloom_b) { BS_LOG_FATAL("create_bloom_targets: aux_bloom_b failed: %s", SDL_GetError()); return FALSE; }
+
+    return TRUE;
+}
+
+// Create a fullscreen post-process pipeline from pre-loaded shaders.
+static SDL_GPUGraphicsPipeline* create_postprocess_pipeline(
+    SDL_GPUShader* vs, SDL_GPUShader* fs,
+    SDL_GPUTextureFormat color_fmt)
+{
+    SDL_GPUGraphicsPipelineCreateInfo info;
+    SDL_zero(info);
+    info.vertex_shader   = vs;
+    info.fragment_shader = fs;
+    info.primitive_type  = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST;
+
+    SDL_GPUColorTargetDescription ct;
+    SDL_zero(ct);
+    ct.format = color_fmt;
+    ct.blend_state.enable_blend = false;
+
+    info.target_info.color_target_descriptions = &ct;
+    info.target_info.num_color_targets         = 1;
+    info.target_info.has_depth_stencil_target  = false;
+
+    // No vertex attributes (fullscreen triangle uses SV_VertexID).
+    info.vertex_input_state.num_vertex_buffers  = 0;
+    info.vertex_input_state.vertex_buffer_descriptions = NULL;
+    info.vertex_input_state.num_vertex_attributes = 0;
+    info.vertex_input_state.vertex_attributes    = NULL;
+
+    info.rasterizer_state.fill_mode  = SDL_GPU_FILLMODE_FILL;
+    info.rasterizer_state.cull_mode  = SDL_GPU_CULLMODE_NONE;
+    info.rasterizer_state.front_face = SDL_GPU_FRONTFACE_COUNTER_CLOCKWISE;
+
+    // No depth/stencil.
+    info.depth_stencil_state.enable_depth_test   = false;
+    info.depth_stencil_state.enable_depth_write  = false;
+    info.depth_stencil_state.enable_stencil_test = false;
+
+    return SDL_CreateGPUGraphicsPipeline(g_sdl.device, &info);
+}
+
+// Same as above but with additive ONE/ONE blending (for sunburst / starfield-style effects).
+static SDL_GPUGraphicsPipeline* create_additive_postprocess_pipeline(
+    SDL_GPUShader* vs, SDL_GPUShader* fs,
+    SDL_GPUTextureFormat color_fmt)
+{
+    SDL_GPUGraphicsPipelineCreateInfo info;
+    SDL_zero(info);
+    info.vertex_shader   = vs;
+    info.fragment_shader = fs;
+    info.primitive_type  = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST;
+
+    SDL_GPUColorTargetDescription ct;
+    SDL_zero(ct);
+    ct.format = color_fmt;
+    ct.blend_state.enable_blend = true;
+    ct.blend_state.color_blend_op = SDL_GPU_BLENDOP_ADD;
+    ct.blend_state.alpha_blend_op = SDL_GPU_BLENDOP_ADD;
+    ct.blend_state.src_color_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
+    ct.blend_state.dst_color_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
+    ct.blend_state.src_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
+    ct.blend_state.dst_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
+
+    info.target_info.color_target_descriptions = &ct;
+    info.target_info.num_color_targets         = 1;
+    info.target_info.has_depth_stencil_target  = false;
+
+    info.vertex_input_state.num_vertex_buffers  = 0;
+    info.vertex_input_state.vertex_buffer_descriptions = NULL;
+    info.vertex_input_state.num_vertex_attributes = 0;
+    info.vertex_input_state.vertex_attributes    = NULL;
+
+    info.rasterizer_state.fill_mode  = SDL_GPU_FILLMODE_FILL;
+    info.rasterizer_state.cull_mode  = SDL_GPU_CULLMODE_NONE;
+    info.rasterizer_state.front_face = SDL_GPU_FRONTFACE_COUNTER_CLOCKWISE;
+
+    info.depth_stencil_state.enable_depth_test   = false;
+    info.depth_stencil_state.enable_depth_write  = false;
+    info.depth_stencil_state.enable_stencil_test = false;
+
+    return SDL_CreateGPUGraphicsPipeline(g_sdl.device, &info);
+}
+
+static b8 create_postprocess_pipelines(void)
+{
+    SDL_GPUTextureFormat swap_fmt =
+        get_corrected_swapchain_format(g_sdl.device, g_sdl.window);
+
+    SDL_GPUShader* vs = load_shader(g_sdl.device, "fullscreen", "vert",
+                                     SDL_GPU_SHADERSTAGE_VERTEX, 0, 0);
+    if (!vs) return FALSE;
+
+    SDL_GPUTextureFormat offscreen_fmt = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
+
+    // extract -> bloom_a (RGBA8)
+    SDL_GPUShader* fs_extract = load_shader(g_sdl.device, "bloom_extract", "frag",
+                                             SDL_GPU_SHADERSTAGE_FRAGMENT, 1, 1);
+    if (!fs_extract) { SDL_ReleaseGPUShader(g_sdl.device, vs); return FALSE; }
+    g_sdl.pipeline_extract = create_postprocess_pipeline(vs, fs_extract, offscreen_fmt);
+    SDL_ReleaseGPUShader(g_sdl.device, fs_extract);
+    if (!g_sdl.pipeline_extract) { BS_LOG_FATAL("create_postprocess_pipelines: extract failed"); SDL_ReleaseGPUShader(g_sdl.device, vs); return FALSE; }
+
+    // blur_h -> bloom_b (RGBA8)
+    SDL_GPUShader* fs_blur_h = load_shader(g_sdl.device, "bloom_blur_h", "frag",
+                                            SDL_GPU_SHADERSTAGE_FRAGMENT, 1, 1);
+    if (!fs_blur_h) { SDL_ReleaseGPUShader(g_sdl.device, vs); return FALSE; }
+    g_sdl.pipeline_blur_h = create_postprocess_pipeline(vs, fs_blur_h, offscreen_fmt);
+    SDL_ReleaseGPUShader(g_sdl.device, fs_blur_h);
+    if (!g_sdl.pipeline_blur_h) { BS_LOG_FATAL("create_postprocess_pipelines: blur_h failed"); SDL_ReleaseGPUShader(g_sdl.device, vs); return FALSE; }
+
+    // blur_v -> bloom_a (RGBA8)
+    SDL_GPUShader* fs_blur_v = load_shader(g_sdl.device, "bloom_blur_v", "frag",
+                                            SDL_GPU_SHADERSTAGE_FRAGMENT, 1, 1);
+    if (!fs_blur_v) { SDL_ReleaseGPUShader(g_sdl.device, vs); return FALSE; }
+    g_sdl.pipeline_blur_v = create_postprocess_pipeline(vs, fs_blur_v, offscreen_fmt);
+    SDL_ReleaseGPUShader(g_sdl.device, fs_blur_v);
+    if (!g_sdl.pipeline_blur_v) { BS_LOG_FATAL("create_postprocess_pipelines: blur_v failed"); SDL_ReleaseGPUShader(g_sdl.device, vs); return FALSE; }
+
+    // streak -> bloom_b (RGBA8)
+    SDL_GPUShader* fs_streak = load_shader(g_sdl.device, "bloom_streak", "frag",
+                                            SDL_GPU_SHADERSTAGE_FRAGMENT, 1, 1);
+    if (!fs_streak) { SDL_ReleaseGPUShader(g_sdl.device, vs); return FALSE; }
+    g_sdl.pipeline_streak = create_postprocess_pipeline(vs, fs_streak, offscreen_fmt);
+    SDL_ReleaseGPUShader(g_sdl.device, fs_streak);
+    if (!g_sdl.pipeline_streak) { BS_LOG_FATAL("create_postprocess_pipelines: streak failed"); SDL_ReleaseGPUShader(g_sdl.device, vs); return FALSE; }
+
+    // flare -> bloom_a (RGBA8) — lens-flare ghost pass
+    SDL_GPUShader* fs_flare = load_shader(g_sdl.device, "bloom_flare", "frag",
+                                           SDL_GPU_SHADERSTAGE_FRAGMENT, 1, 1);
+    if (!fs_flare) { SDL_ReleaseGPUShader(g_sdl.device, vs); return FALSE; }
+    g_sdl.pipeline_flare = create_postprocess_pipeline(vs, fs_flare, offscreen_fmt);
+    SDL_ReleaseGPUShader(g_sdl.device, fs_flare);
+    if (!g_sdl.pipeline_flare) { BS_LOG_FATAL("create_postprocess_pipelines: flare failed"); SDL_ReleaseGPUShader(g_sdl.device, vs); return FALSE; }
+
+    // starfield_layer -> offscreen (bloom path) — procedural per-layer starfield
+    // Additive blending so multiple layers (far + mid) accumulate instead of overwriting.
+    SDL_GPUShader* fs_starfield_layer = load_shader(g_sdl.device, "starfield_layer", "frag",
+                                                   SDL_GPU_SHADERSTAGE_FRAGMENT, 0, 2);
+    if (!fs_starfield_layer) { SDL_ReleaseGPUShader(g_sdl.device, vs); return FALSE; }
+    g_sdl.pipeline_starfield_layer = create_additive_postprocess_pipeline(vs, fs_starfield_layer, offscreen_fmt);
+    SDL_ReleaseGPUShader(g_sdl.device, fs_starfield_layer);
+    if (!g_sdl.pipeline_starfield_layer) { BS_LOG_FATAL("create_postprocess_pipelines: starfield_layer failed"); SDL_ReleaseGPUShader(g_sdl.device, vs); return FALSE; }
+
+    // starfield_layer -> swapchain (non-bloom direct-to-screen)
+    fs_starfield_layer = load_shader(g_sdl.device, "starfield_layer", "frag",
+                                    SDL_GPU_SHADERSTAGE_FRAGMENT, 0, 2);
+    if (!fs_starfield_layer) { SDL_ReleaseGPUShader(g_sdl.device, vs); return FALSE; }
+    g_sdl.pipeline_starfield_layer_swapchain = create_additive_postprocess_pipeline(vs, fs_starfield_layer, swap_fmt);
+    SDL_ReleaseGPUShader(g_sdl.device, fs_starfield_layer);
+    if (!g_sdl.pipeline_starfield_layer_swapchain) { BS_LOG_FATAL("create_postprocess_pipelines: starfield_layer_swapchain failed"); SDL_ReleaseGPUShader(g_sdl.device, vs); return FALSE; }
+
+    // sunburst -> offscreen (bloom path) — additive blend, custom quad shader
+    SDL_GPUShader* vs_sunburst = load_shader(g_sdl.device, "sunburst", "vert",
+                                              SDL_GPU_SHADERSTAGE_VERTEX, 0, 1);
+    if (!vs_sunburst) { SDL_ReleaseGPUShader(g_sdl.device, vs); return FALSE; }
+    SDL_GPUShader* fs_sunburst = load_shader(g_sdl.device, "sunburst", "frag",
+                                              SDL_GPU_SHADERSTAGE_FRAGMENT, 0, 1);
+    if (!fs_sunburst) { SDL_ReleaseGPUShader(g_sdl.device, vs); SDL_ReleaseGPUShader(g_sdl.device, vs_sunburst); return FALSE; }
+    g_sdl.pipeline_sunburst = create_additive_postprocess_pipeline(vs_sunburst, fs_sunburst, offscreen_fmt);
+    SDL_ReleaseGPUShader(g_sdl.device, fs_sunburst);
+    SDL_ReleaseGPUShader(g_sdl.device, vs_sunburst);
+    if (!g_sdl.pipeline_sunburst) { BS_LOG_FATAL("create_postprocess_pipelines: sunburst failed"); SDL_ReleaseGPUShader(g_sdl.device, vs); return FALSE; }
+
+    // sunburst -> swapchain (non-bloom direct-to-screen path)
+    vs_sunburst = load_shader(g_sdl.device, "sunburst", "vert",
+                               SDL_GPU_SHADERSTAGE_VERTEX, 0, 1);
+    if (!vs_sunburst) { SDL_ReleaseGPUShader(g_sdl.device, vs); return FALSE; }
+    fs_sunburst = load_shader(g_sdl.device, "sunburst", "frag",
+                               SDL_GPU_SHADERSTAGE_FRAGMENT, 0, 1);
+    if (!fs_sunburst) { SDL_ReleaseGPUShader(g_sdl.device, vs); SDL_ReleaseGPUShader(g_sdl.device, vs_sunburst); return FALSE; }
+    g_sdl.pipeline_sunburst_swapchain = create_additive_postprocess_pipeline(vs_sunburst, fs_sunburst, swap_fmt);
+    SDL_ReleaseGPUShader(g_sdl.device, fs_sunburst);
+    SDL_ReleaseGPUShader(g_sdl.device, vs_sunburst);
+    if (!g_sdl.pipeline_sunburst_swapchain) { BS_LOG_FATAL("create_postprocess_pipelines: sunburst_swapchain failed"); SDL_ReleaseGPUShader(g_sdl.device, vs); return FALSE; }
+
+    // composite -> swapchain (must match swapchain format); 4 samplers (scene + bloom + streak + flare)
+    SDL_GPUShader* fs_composite = load_shader(g_sdl.device, "bloom_composite", "frag",
+                                               SDL_GPU_SHADERSTAGE_FRAGMENT, 4, 1);
+    if (!fs_composite) { SDL_ReleaseGPUShader(g_sdl.device, vs); return FALSE; }
+    g_sdl.pipeline_composite = create_postprocess_pipeline(vs, fs_composite, swap_fmt);
+    SDL_ReleaseGPUShader(g_sdl.device, fs_composite);
+    if (!g_sdl.pipeline_composite) { BS_LOG_FATAL("create_postprocess_pipelines: composite failed"); SDL_ReleaseGPUShader(g_sdl.device, vs); return FALSE; }
+
+    SDL_ReleaseGPUShader(g_sdl.device, vs);
     return TRUE;
 }
 
@@ -481,6 +992,34 @@ static b8 create_white_texture()
     return g_sdl.white_texture.id != BS_INVALID_HANDLE;
 }
 
+// Create a radial-gradient circle texture for the sunburst aux-bloom proxy.
+// White in the center, transparent at the edges, so it renders as a true circle.
+static b8 create_circle_texture()
+{
+    const int W = 32;
+    const int H = 32;
+    const int C = 4;
+    u8 pixels[W * H * C];
+
+    for (int y = 0; y < H; ++y)
+    {
+        for (int x = 0; x < W; ++x)
+        {
+            float dx = (x + 0.5f) / (float)W - 0.5f;
+            float dy = (y + 0.5f) / (float)H - 0.5f;
+            float dist = sqrtf(dx * dx + dy * dy) * 2.0f; // 0..1 from center to edge
+            float alpha = 1.0f - clampf(dist, 0.0f, 1.0f);
+            alpha *= alpha; // smoother falloff
+            u8 a = (u8)(alpha * 255.0f);
+            u8* p = &pixels[(y * W + x) * C];
+            p[0] = 255; p[1] = 255; p[2] = 255; p[3] = a;
+        }
+    }
+
+    g_sdl.circle_texture = sdlgpu_backend_create_texture(nullptr, pixels, W, H);
+    return g_sdl.circle_texture.id != BS_INVALID_HANDLE;
+}
+
 // =====================================================================================
 // Backend lifecycle.
 // =====================================================================================
@@ -497,6 +1036,42 @@ b8 sdlgpu_backend_initialize(struct renderer_backend* backend, const char* app_n
     g_sdl.clear_color = SDL_FColor{ 0.0f, 0.0f, 0.05f, 1.0f }; // space-black default
     g_sdl.camera      = camera2d_default();
 
+    // No lights => the scene renders fullbright exactly as before until the game calls
+    // renderer_set_lights. Ambient defaults to full white (irrelevant while count is 0).
+    g_sdl.light_count       = 0;
+    g_sdl.light_ambient     = bs_color{ 1.0f, 1.0f, 1.0f, 1.0f };
+    g_sdl.light_unlit_layer = 0;
+
+    // Default glow params match hardcoded sprite.frag.hlsl defaults.
+    g_sdl.glow_params = bs_glow_params{
+        1.0f, 6.0f, 4.0f, 2.5f, 0.80f, 0.08f, 15.0f, 8.0f, 45.0f, 24.0f,
+        bs_color{ 1.0f, 0.85f, 0.5f, 1.0f },
+        bs_color{ 0.90f, 0.15f, 0.02f, 1.0f },
+        bs_color{ 1.0f, 0.45f, 0.05f, 1.0f },
+        bs_color{ 1.0f, 0.98f, 0.90f, 1.0f }
+    };
+    g_sdl.glow_params_set = FALSE;
+
+    // Bloom defaults: disabled by default until the user opts in via the editor panel.
+    g_sdl.bloom_enabled   = FALSE;
+    g_sdl.bloom_threshold = 1.2f;
+    g_sdl.bloom_intensity = 0.3f;
+    g_sdl.bloom_width     = 0;
+    g_sdl.bloom_height    = 0;
+
+    // Streak defaults: disabled.
+    g_sdl.streak_enabled   = FALSE;
+    g_sdl.streak_angle     = 0.0f;
+    g_sdl.streak_length    = 3.0f;
+    g_sdl.streak_intensity = 0.5f;
+    g_sdl.streak_source    = bs_math::Vec2{0.0f, 0.0f};
+    g_sdl.streak_source_set = FALSE;
+    g_sdl.streak_flare_intensity = 0.5f;
+
+    // Aux batch capture off by default.
+    g_sdl.aux_bloom_mode  = FALSE;
+    g_sdl.aux_batch_count = 0;
+
     // Create the device (DXIL + SPIR-V requested; SDL picks an available driver).
     g_sdl.device = SDL_CreateGPUDevice(
         SDL_GPU_SHADERFORMAT_DXIL | SDL_GPU_SHADERFORMAT_SPIRV, true, NULL);
@@ -511,16 +1086,37 @@ b8 sdlgpu_backend_initialize(struct renderer_backend* backend, const char* app_n
     BS_LOG_INFO("SDL GPU device created (driver: %s, shader formats: 0x%x).",
         SDL_GetGPUDeviceDriver(g_sdl.device), (u32)SDL_GetGPUShaderFormats(g_sdl.device));
 
-    // Load sprite shaders: vertex has 1 uniform buffer (view_proj), fragment has 1 sampler.
+    // Load sprite shaders: vertex has 1 uniform buffer (view_proj); fragment has 1 sampler
+    // (sprite texture) and 1 uniform buffer (lights at b0 space3).
     SDL_GPUShader* vs = load_shader(g_sdl.device, "sprite", "vert", SDL_GPU_SHADERSTAGE_VERTEX, 0, 1);
-    SDL_GPUShader* fs = load_shader(g_sdl.device, "sprite", "frag", SDL_GPU_SHADERSTAGE_FRAGMENT, 1, 0);
+    SDL_GPUShader* fs = load_shader(g_sdl.device, "sprite", "frag", SDL_GPU_SHADERSTAGE_FRAGMENT, 1, 1);
     if (!vs || !fs) return FALSE;
 
-    if (!create_pipelines(vs, fs)) return FALSE;
+    SDL_GPUTextureFormat swap_fmt =
+        get_corrected_swapchain_format(g_sdl.device, g_sdl.window);
+
+    // Swapchain-format pipelines (direct-to-screen path).
+    if (!create_pipelines_for_format(vs, fs, swap_fmt, g_sdl.pipelines)) return FALSE;
+
+    // Offscreen pipelines (bloom path targets scene_rt which is RGBA8).
+    if (!create_pipelines_for_format(vs, fs, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, g_sdl.pipelines_offscreen))
+        return FALSE;
 
     // Shaders are baked into the pipelines; release the standalone handles.
     SDL_ReleaseGPUShader(g_sdl.device, vs);
     SDL_ReleaseGPUShader(g_sdl.device, fs);
+
+    // Load 4-map mapped sprite shaders: vertex has 1 UBO (camera), fragment has 4 samplers
+    // (diffuse, normal, depth, position) and 1 UBO (directional light).
+    SDL_GPUShader* mvs = load_shader(g_sdl.device, "mapped_sprite", "vert", SDL_GPU_SHADERSTAGE_VERTEX, 0, 1);
+    SDL_GPUShader* mfs = load_shader(g_sdl.device, "mapped_sprite", "frag", SDL_GPU_SHADERSTAGE_FRAGMENT, 4, 1);
+    if (!mvs || !mfs) return FALSE;
+
+    if (!create_mapped_pipeline_for_format(mvs, mfs, swap_fmt, &g_sdl.pipeline_mapped)) return FALSE;
+    if (!create_mapped_pipeline_for_format(mvs, mfs, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, &g_sdl.pipeline_mapped_offscreen)) return FALSE;
+
+    SDL_ReleaseGPUShader(g_sdl.device, mvs);
+    SDL_ReleaseGPUShader(g_sdl.device, mfs);
 
     // Sampler: nearest filtering, clamp — crisp pixel-art sprites.
     SDL_GPUSamplerCreateInfo sinfo;
@@ -534,10 +1130,29 @@ b8 sdlgpu_backend_initialize(struct renderer_backend* backend, const char* app_n
     g_sdl.sampler = SDL_CreateGPUSampler(g_sdl.device, &sinfo);
     if (!g_sdl.sampler) { BS_LOG_FATAL("sdlgpu_backend_initialize: sampler failed: %s", SDL_GetError()); return FALSE; }
 
+    // LINEAR sampler for post-process passes (blur / composite) — smooth interpolation.
+    SDL_zero(sinfo);
+    sinfo.min_filter     = SDL_GPU_FILTER_LINEAR;
+    sinfo.mag_filter     = SDL_GPU_FILTER_LINEAR;
+    sinfo.mipmap_mode    = SDL_GPU_SAMPLERMIPMAPMODE_LINEAR;
+    sinfo.address_mode_u = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
+    sinfo.address_mode_v = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
+    sinfo.address_mode_w = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
+    g_sdl.sampler_linear = SDL_CreateGPUSampler(g_sdl.device, &sinfo);
+    if (!g_sdl.sampler_linear) { BS_LOG_FATAL("sdlgpu_backend_initialize: linear sampler failed: %s", SDL_GetError()); return FALSE; }
+
     if (!create_batch_resources()) return FALSE;
     if (!create_white_texture())   return FALSE;
+    if (!create_circle_texture())  return FALSE;
 
-    BS_LOG_INFO("SDL GPU backend initialized (Phase 3: sprites).");
+    // Query the actual window size for initial bloom targets (fallback to 1280x720).
+    int win_w = 1280, win_h = 720;
+    SDL_GetWindowSizeInPixels(g_sdl.window, &win_w, &win_h);
+
+    if (!create_bloom_targets((u32)win_w, (u32)win_h)) return FALSE;
+    if (!create_postprocess_pipelines())  return FALSE;
+
+    BS_LOG_INFO("SDL GPU backend initialized (Phase 3: sprites + bloom).");
     return TRUE;
 }
 
@@ -558,13 +1173,39 @@ void sdlgpu_backend_shutdown(struct renderer_backend* backend)
         }
     }
 
-    if (g_sdl.sampler)   SDL_ReleaseGPUSampler(g_sdl.device, g_sdl.sampler);
-    if (g_sdl.vtransfer) SDL_ReleaseGPUTransferBuffer(g_sdl.device, g_sdl.vtransfer);
-    if (g_sdl.vbuffer)   SDL_ReleaseGPUBuffer(g_sdl.device, g_sdl.vbuffer);
-    if (g_sdl.ibuffer)   SDL_ReleaseGPUBuffer(g_sdl.device, g_sdl.ibuffer);
+    if (g_sdl.sampler)        SDL_ReleaseGPUSampler(g_sdl.device, g_sdl.sampler);
+    if (g_sdl.sampler_linear) SDL_ReleaseGPUSampler(g_sdl.device, g_sdl.sampler_linear);
+    if (g_sdl.vtransfer)      SDL_ReleaseGPUTransferBuffer(g_sdl.device, g_sdl.vtransfer);
+    if (g_sdl.vbuffer)        SDL_ReleaseGPUBuffer(g_sdl.device, g_sdl.vbuffer);
+    if (g_sdl.ibuffer)        SDL_ReleaseGPUBuffer(g_sdl.device, g_sdl.ibuffer);
+    if (g_sdl.mapped_vtransfer) SDL_ReleaseGPUTransferBuffer(g_sdl.device, g_sdl.mapped_vtransfer);
+    if (g_sdl.mapped_vbuffer)   SDL_ReleaseGPUBuffer(g_sdl.device, g_sdl.mapped_vbuffer);
+    if (g_sdl.mapped_ibuffer)   SDL_ReleaseGPUBuffer(g_sdl.device, g_sdl.mapped_ibuffer);
+
+    // Bloom resources.
+    if (g_sdl.scene_rt)   SDL_ReleaseGPUTexture(g_sdl.device, g_sdl.scene_rt);
+    if (g_sdl.bloom_a)    SDL_ReleaseGPUTexture(g_sdl.device, g_sdl.bloom_a);
+    if (g_sdl.bloom_b)    SDL_ReleaseGPUTexture(g_sdl.device, g_sdl.bloom_b);
+    if (g_sdl.aux_bloom_a) SDL_ReleaseGPUTexture(g_sdl.device, g_sdl.aux_bloom_a);
+    if (g_sdl.aux_bloom_b) SDL_ReleaseGPUTexture(g_sdl.device, g_sdl.aux_bloom_b);
+    if (g_sdl.pipeline_extract)   SDL_ReleaseGPUGraphicsPipeline(g_sdl.device, g_sdl.pipeline_extract);
+    if (g_sdl.pipeline_blur_h)    SDL_ReleaseGPUGraphicsPipeline(g_sdl.device, g_sdl.pipeline_blur_h);
+    if (g_sdl.pipeline_blur_v)    SDL_ReleaseGPUGraphicsPipeline(g_sdl.device, g_sdl.pipeline_blur_v);
+    if (g_sdl.pipeline_streak)    SDL_ReleaseGPUGraphicsPipeline(g_sdl.device, g_sdl.pipeline_streak);
+    if (g_sdl.pipeline_flare)     SDL_ReleaseGPUGraphicsPipeline(g_sdl.device, g_sdl.pipeline_flare);
+    if (g_sdl.pipeline_starfield_layer)          SDL_ReleaseGPUGraphicsPipeline(g_sdl.device, g_sdl.pipeline_starfield_layer);
+    if (g_sdl.pipeline_starfield_layer_swapchain) SDL_ReleaseGPUGraphicsPipeline(g_sdl.device, g_sdl.pipeline_starfield_layer_swapchain);
+    if (g_sdl.pipeline_sunburst)          SDL_ReleaseGPUGraphicsPipeline(g_sdl.device, g_sdl.pipeline_sunburst);
+    if (g_sdl.pipeline_sunburst_swapchain) SDL_ReleaseGPUGraphicsPipeline(g_sdl.device, g_sdl.pipeline_sunburst_swapchain);
+    if (g_sdl.pipeline_composite) SDL_ReleaseGPUGraphicsPipeline(g_sdl.device, g_sdl.pipeline_composite);
+    if (g_sdl.pipeline_mapped) SDL_ReleaseGPUGraphicsPipeline(g_sdl.device, g_sdl.pipeline_mapped);
+    if (g_sdl.pipeline_mapped_offscreen) SDL_ReleaseGPUGraphicsPipeline(g_sdl.device, g_sdl.pipeline_mapped_offscreen);
 
     for (u32 m = 0; m < BLEND_MODE_COUNT; ++m)
-        if (g_sdl.pipelines[m]) SDL_ReleaseGPUGraphicsPipeline(g_sdl.device, g_sdl.pipelines[m]);
+    {
+        if (g_sdl.pipelines[m])          SDL_ReleaseGPUGraphicsPipeline(g_sdl.device, g_sdl.pipelines[m]);
+        if (g_sdl.pipelines_offscreen[m]) SDL_ReleaseGPUGraphicsPipeline(g_sdl.device, g_sdl.pipelines_offscreen[m]);
+    }
 
     SDL_ReleaseWindowFromGPUDevice(g_sdl.device, g_sdl.window);
     SDL_DestroyGPUDevice(g_sdl.device);
@@ -576,9 +1217,27 @@ void sdlgpu_backend_shutdown(struct renderer_backend* backend)
 void sdlgpu_backend_on_resize(struct renderer_backend* backend, u16 width, u16 height)
 {
     (void)backend;
-    // The swapchain auto-resizes; view-proj is rebuilt each frame from the live size. Nothing to
-    // do here beyond logging. Kept as a hook for future render-target recreation.
     BS_LOG_DEBUG("sdlgpu_backend_on_resize: %ux%u.", (u32)width, (u32)height);
+
+    // Recreate bloom targets if the window size changed.
+    if (g_sdl.bloom_width != (u32)width || g_sdl.bloom_height != (u32)height)
+    {
+        SDL_WaitForGPUIdle(g_sdl.device);
+
+        if (g_sdl.scene_rt) SDL_ReleaseGPUTexture(g_sdl.device, g_sdl.scene_rt);
+        if (g_sdl.bloom_a)  SDL_ReleaseGPUTexture(g_sdl.device, g_sdl.bloom_a);
+        if (g_sdl.bloom_b)  SDL_ReleaseGPUTexture(g_sdl.device, g_sdl.bloom_b);
+        if (g_sdl.aux_bloom_a) SDL_ReleaseGPUTexture(g_sdl.device, g_sdl.aux_bloom_a);
+        if (g_sdl.aux_bloom_b) SDL_ReleaseGPUTexture(g_sdl.device, g_sdl.aux_bloom_b);
+        g_sdl.scene_rt = NULL;
+        g_sdl.bloom_a  = NULL;
+        g_sdl.bloom_b  = NULL;
+        g_sdl.aux_bloom_a = NULL;
+        g_sdl.aux_bloom_b = NULL;
+
+        if (!create_bloom_targets((u32)width, (u32)height))
+            BS_LOG_ERROR("on_resize: failed to recreate bloom targets (%ux%u).", (u32)width, (u32)height);
+    }
 }
 
 void sdlgpu_backend_set_clear_color(struct renderer_backend* backend, bs_color color)
@@ -604,6 +1263,10 @@ b8 sdlgpu_backend_begin_frame(struct renderer_backend* backend, f32 dt)
     g_sdl.swapchain_texture = NULL;
     g_sdl.pass              = NULL;
     g_sdl.batch_count       = 0; // reset CPU batch; the game refills it via draw_sprite
+    g_sdl.mapped_batch_count = 0; // reset mapped sprite queue
+    g_sdl.starfield_queue_count = 0; // reset starfield layer queue
+    g_sdl.sunburst_queue_count  = 0; // reset sunburst star queue
+    g_sdl.streak_source_set     = FALSE; // source must be resubmitted each frame
 
     // Begin the ImGui frame here, AFTER a command buffer is secured, so the game can build
     // its UI during render(dt) (which runs between begin_frame and end_frame). The matching
@@ -694,6 +1357,148 @@ void sdlgpu_backend_set_camera(struct renderer_backend* backend, Camera2D camera
     g_sdl.camera = camera;
 }
 
+void sdlgpu_backend_set_lights(struct renderer_backend* backend, const bs_light2d* lights,
+                               u32 count, bs_color ambient, u32 unlit_layer)
+{
+    (void)backend;
+    if (count > BS_BACKEND_MAX_LIGHTS) count = BS_BACKEND_MAX_LIGHTS;
+    g_sdl.light_count = count;
+    for (u32 i = 0; i < count; ++i) g_sdl.lights[i] = lights[i];
+    g_sdl.light_ambient     = ambient;
+    g_sdl.light_unlit_layer = unlit_layer;
+}
+
+void sdlgpu_backend_set_glow_params(struct renderer_backend* backend, const bs_glow_params* params)
+{
+    (void)backend;
+    if (params)
+    {
+        g_sdl.glow_params = *params;
+        g_sdl.glow_params_set = TRUE;
+    }
+    else
+    {
+        // Reset to defaults
+        g_sdl.glow_params = bs_glow_params{
+            1.0f, 6.0f, 4.0f, 2.5f, 0.80f, 0.08f, 15.0f, 8.0f, 45.0f, 24.0f,
+            bs_color{ 1.0f, 0.85f, 0.5f, 1.0f },
+            bs_color{ 0.90f, 0.15f, 0.02f, 1.0f },
+            bs_color{ 1.0f, 0.45f, 0.05f, 1.0f },
+            bs_color{ 1.0f, 0.98f, 0.90f, 1.0f }
+        };
+        g_sdl.glow_params_set = FALSE;
+    }
+}
+
+void sdlgpu_backend_set_bloom_enabled(struct renderer_backend* backend, b8 enabled)
+{
+    (void)backend;
+    g_sdl.bloom_enabled = enabled;
+}
+
+void sdlgpu_backend_set_bloom_params(struct renderer_backend* backend, f32 threshold, f32 intensity)
+{
+    (void)backend;
+    g_sdl.bloom_threshold = threshold;
+    g_sdl.bloom_intensity = intensity;
+}
+
+void sdlgpu_backend_set_streak_enabled(struct renderer_backend* backend, b8 enabled)
+{
+    (void)backend;
+    g_sdl.streak_enabled = enabled;
+}
+
+void sdlgpu_backend_set_streak_params(struct renderer_backend* backend, f32 angle, f32 length)
+{
+    (void)backend;
+    g_sdl.streak_angle  = angle;
+    g_sdl.streak_length = length;
+}
+
+void sdlgpu_backend_set_streak_intensity(struct renderer_backend* backend, f32 intensity)
+{
+    (void)backend;
+    g_sdl.streak_intensity = intensity;
+}
+
+void sdlgpu_backend_set_streak_source(struct renderer_backend* backend, bs_math::Vec2 screen_pos)
+{
+    (void)backend;
+    g_sdl.streak_source = screen_pos;
+    g_sdl.streak_source_set = TRUE;
+}
+
+void sdlgpu_backend_set_streak_flare_intensity(struct renderer_backend* backend, f32 intensity)
+{
+    (void)backend;
+    g_sdl.streak_flare_intensity = intensity;
+}
+
+void sdlgpu_backend_set_aux_bloom_mode(struct renderer_backend* backend, b8 enabled)
+{
+    (void)backend;
+    g_sdl.aux_bloom_mode = enabled;
+    if (enabled) g_sdl.aux_batch_count = 0;
+}
+
+void sdlgpu_backend_draw_starfield(struct renderer_backend* backend, const bs_starfield_params* params)
+{
+    (void)backend;
+    if (!params) return;
+
+    if (g_sdl.starfield_queue_count >= BS_MAX_STARFIELD_LAYERS)
+    {
+        BS_LOG_WARN("draw_starfield: queue full (%u); dropping layer.", (u32)BS_MAX_STARFIELD_LAYERS);
+        return;
+    }
+    auto& slot = g_sdl.starfield_queue[g_sdl.starfield_queue_count++];
+    slot.active  = TRUE;
+    slot.params  = *params;
+}
+
+void sdlgpu_backend_draw_sunburst(struct renderer_backend* backend, const bs_sunburst_params* params)
+{
+    (void)backend;
+    if (!params) return;
+
+    if (g_sdl.sunburst_queue_count >= BS_MAX_SUNBURST_STARS)
+    {
+        BS_LOG_WARN("draw_sunburst: queue full (%u); dropping star.", (u32)BS_MAX_SUNBURST_STARS);
+        return;
+    }
+    auto& slot = g_sdl.sunburst_queue[g_sdl.sunburst_queue_count++];
+    slot.active  = TRUE;
+    slot.params  = *params;
+
+    // Aux-bloom proxy: the sunburst shader is not captured by the sprite batch, so emit a
+    // bright additive proxy sprite into the aux batch when this star should streak.
+    if (params->aux_bloom && g_sdl.aux_bloom_mode && g_sdl.aux_batch_count < BS_MAX_SPRITES)
+    {
+        bs_sprite proxy{};
+        proxy.position  = bs_math::Vec2{ params->aux_bloom_world_pos.x, params->aux_bloom_world_pos.y };
+        // body_radius is in screen pixels; proxy sprite size is in world units.
+        f32 world_body  = params->body_radius / g_sdl.camera.zoom;
+        proxy.size      = bs_math::Vec2{ world_body * 2.0f, world_body * 2.0f };
+        proxy.origin    = bs_math::Vec2{ 0.5f, 0.5f };
+        proxy.rotation  = 0.0f;
+        proxy.uv        = bs_rect{ 0.0f, 0.0f, 1.0f, 1.0f };
+        proxy.tint      = params->color;
+        proxy.tint.a    = params->visibility;
+        proxy.texture   = g_sdl.circle_texture; // true circular shape
+        proxy.blend     = BLEND_ADDITIVE;
+        proxy.layer     = params->layer;
+        proxy.glow_override = nullptr; // no extra glow; the texture is the shape
+
+        u32 tex_index = (g_sdl.circle_texture.id & 0x3FFFFu);
+        u32 sort_key  = make_sort_key(proxy.layer, proxy.blend, tex_index);
+
+        batched_sprite* a = &g_sdl.aux_batch[g_sdl.aux_batch_count++];
+        a->sprite   = proxy;
+        a->sort_key = sort_key;
+    }
+}
+
 void sdlgpu_backend_draw_sprite(struct renderer_backend* backend, const bs_sprite* sprite)
 {
     (void)backend;
@@ -716,9 +1521,31 @@ void sdlgpu_backend_draw_sprite(struct renderer_backend* backend, const bs_sprit
         tex_index = (g_sdl.white_texture.id & 0x3FFFFu);
     }
 
+    u32 sort_key = make_sort_key(sprite->layer, sprite->blend, tex_index);
+
     batched_sprite* b = &g_sdl.batch[g_sdl.batch_count++];
     b->sprite   = *sprite;
-    b->sort_key = make_sort_key(sprite->layer, sprite->blend, tex_index);
+    b->sort_key = sort_key;
+
+    // Aux batch capture: when active, also push to the auxiliary batch for streak processing.
+    if (g_sdl.aux_bloom_mode && g_sdl.aux_batch_count < BS_MAX_SPRITES)
+    {
+        batched_sprite* a = &g_sdl.aux_batch[g_sdl.aux_batch_count++];
+        a->sprite   = *sprite;
+        a->sort_key = sort_key;
+    }
+}
+
+void sdlgpu_backend_draw_mapped_sprite(struct renderer_backend* backend, const bs_mapped_sprite* sprite)
+{
+    (void)backend;
+    if (!sprite) return;
+    if (g_sdl.mapped_batch_count >= BS_MAX_MAPPED_SPRITES)
+    {
+        BS_LOG_WARN("draw_mapped_sprite: batch full (%u); dropping sprite.", (u32)BS_MAX_MAPPED_SPRITES);
+        return;
+    }
+    g_sdl.mapped_batch[g_sdl.mapped_batch_count++] = *sprite;
 }
 
 void sdlgpu_backend_get_frame_stats(struct renderer_backend* backend, bs_frame_stats* out_stats)
@@ -755,6 +1582,11 @@ b8 bs_imgui_initialize(void)
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     io.IniFilename = NULL; // don't litter the working dir with imgui.ini
 
+    // Load monospace HUD font from system fonts (Consolas).
+    g_sdl.hud_font = io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\consola.ttf", 14.0f, NULL, io.Fonts->GetGlyphRangesDefault());
+    if (!g_sdl.hud_font)
+        BS_LOG_WARN("bs_imgui_initialize: Consolas font not found (C:\\Windows\\Fonts\\consola.ttf). HUD will use default font.");
+
     if (!ImGui_ImplSDL3_InitForSDLGPU(g_sdl.window))
     {
         BS_LOG_ERROR("bs_imgui_initialize: ImGui_ImplSDL3_InitForSDLGPU failed.");
@@ -765,7 +1597,7 @@ b8 bs_imgui_initialize(void)
     ImGui_ImplSDLGPU3_InitInfo init_info;
     SDL_zero(init_info);
     init_info.Device            = g_sdl.device;
-    init_info.ColorTargetFormat = SDL_GetGPUSwapchainTextureFormat(g_sdl.device, g_sdl.window);
+    init_info.ColorTargetFormat = get_corrected_swapchain_format(g_sdl.device, g_sdl.window);
     init_info.MSAASamples       = SDL_GPU_SAMPLECOUNT_1;
 
     if (!ImGui_ImplSDLGPU3_Init(&init_info))
@@ -816,6 +1648,11 @@ b8 bs_imgui_wants_keyboard(void)
     return ImGui::GetIO().WantCaptureKeyboard ? TRUE : FALSE;
 }
 
+void* bs_imgui_get_hud_font(void)
+{
+    return g_sdl.hud_font;
+}
+
 // =====================================================================================
 // end_frame: flush the sprite batch.
 //   1. sort the CPU batch by (layer, blend, texture)
@@ -848,46 +1685,60 @@ b8 sdlgpu_backend_end_frame(struct renderer_backend* backend, f32 dt)
     if (g_sdl.batch_count > 1)
         SDL_qsort(g_sdl.batch, g_sdl.batch_count, sizeof(batched_sprite), batch_compare);
 
+    // Sort aux batch too (if any).
+    u32 aux_count = g_sdl.aux_batch_count;
+    if (aux_count > 1)
+        SDL_qsort(g_sdl.aux_batch, aux_count, sizeof(batched_sprite), batch_compare);
+
     // ---- 2 & 3: build vertices and upload (only if we have sprites) ----
     if (g_sdl.batch_count > 0)
     {
         sprite_vertex* verts = (sprite_vertex*)SDL_MapGPUTransferBuffer(g_sdl.device, g_sdl.vtransfer, true);
 
-        for (u32 i = 0; i < g_sdl.batch_count; ++i)
+        // Write aux-batch vertices first (if any), then regular-batch vertices.
+        u32 aux_count     = g_sdl.aux_batch_count;
+        u32 total_sprites = aux_count + g_sdl.batch_count;
+
+        for (u32 pass = 0; pass < 2; ++pass)
         {
-            const bs_sprite* s = &g_sdl.batch[i].sprite;
+            u32 count  = (pass == 0) ? aux_count : g_sdl.batch_count;
+            u32 vbase  = (pass == 0) ? 0 : aux_count;
+            batched_sprite* src_sprites = (pass == 0) ? g_sdl.aux_batch : g_sdl.batch;
 
-            // Local-space corners relative to the pivot (origin is normalized within the quad).
-            f32 ox = s->origin.x * s->size.x;
-            f32 oy = s->origin.y * s->size.y;
-
-            Vec2 corners[4];
-            // World is y-up (origin at screen center). "Top" corners therefore sit at
-            // POSITIVE local y. origin.y is measured from the texture top (y-down UV space),
-            // so distance pivot->top = oy (up, +) and pivot->bottom = size.y-oy (down, -).
-            // Pairing top corners with v0 (texture top) keeps the image upright on screen.
-            corners[0] = Vec2{ -ox,            oy              }; // top-left
-            corners[1] = Vec2{ s->size.x - ox, oy              }; // top-right
-            corners[2] = Vec2{ s->size.x - ox, oy - s->size.y  }; // bottom-right
-            corners[3] = Vec2{ -ox,            oy - s->size.y  }; // bottom-left
-
-            // UVs from the atlas sub-rect (top-left origin, y-down in texture space).
-            f32 u0 = s->uv.x,            v0 = s->uv.y;
-            f32 u1 = s->uv.x + s->uv.w,  v1 = s->uv.y + s->uv.h;
-            f32 uvs[4][2] = { { u0, v0 }, { u1, v0 }, { u1, v1 }, { u0, v1 } };
-
-            for (u32 c = 0; c < 4; ++c)
+            for (u32 i = 0; i < count; ++i)
             {
-                Vec2 r = vec2_rotate(corners[c], s->rotation);
-                sprite_vertex* vtx = &verts[i * 4u + c];
-                vtx->x = s->position.x + r.x;
-                vtx->y = s->position.y + r.y;
-                vtx->u = uvs[c][0];
-                vtx->v = uvs[c][1];
-                vtx->r = s->tint.r;
-                vtx->g = s->tint.g;
-                vtx->b = s->tint.b;
-                vtx->a = s->tint.a;
+                const bs_sprite* s = &src_sprites[i].sprite;
+
+                f32 ox = s->origin.x * s->size.x;
+                f32 oy = s->origin.y * s->size.y;
+
+                Vec2 corners[4];
+                corners[0] = Vec2{ -ox,            oy              };
+                corners[1] = Vec2{ s->size.x - ox, oy              };
+                corners[2] = Vec2{ s->size.x - ox, oy - s->size.y  };
+                corners[3] = Vec2{ -ox,            oy - s->size.y  };
+
+                f32 u0 = s->uv.x,            v0 = s->uv.y;
+                f32 u1 = s->uv.x + s->uv.w,  v1 = s->uv.y + s->uv.h;
+                f32 uvs[4][2] = { { u0, v0 }, { u1, v0 }, { u1, v1 }, { u0, v1 } };
+
+                for (u32 c = 0; c < 4; ++c)
+                {
+                    Vec2 r = vec2_rotate(corners[c], s->rotation);
+                    sprite_vertex* vtx = &verts[(vbase + i) * 4u + c];
+                    vtx->x = s->position.x + r.x;
+                    vtx->y = s->position.y + r.y;
+                    vtx->u = uvs[c][0];
+                    vtx->v = uvs[c][1];
+                    vtx->r  = s->tint.r;
+                    vtx->g  = s->tint.g;
+                    vtx->b  = s->tint.b;
+                    vtx->a  = s->tint.a;
+                    vtx->cr = s->custom.r;
+                    vtx->cg = s->custom.g;
+                    vtx->cb = s->custom.b;
+                    vtx->ca = s->custom.a;
+                }
             }
         }
 
@@ -898,7 +1749,51 @@ b8 sdlgpu_backend_end_frame(struct renderer_backend* backend, f32 dt)
         src.transfer_buffer = g_sdl.vtransfer; src.offset = 0;
         SDL_GPUBufferRegion dst; SDL_zero(dst);
         dst.buffer = g_sdl.vbuffer; dst.offset = 0;
-        dst.size   = sizeof(sprite_vertex) * 4u * g_sdl.batch_count;
+        dst.size   = sizeof(sprite_vertex) * 4u * total_sprites;
+        SDL_UploadToGPUBuffer(cp, &src, &dst, true);
+        SDL_EndGPUCopyPass(cp);
+    }
+
+    // ---- 2b & 3b: build and upload mapped sprite vertices ----
+    if (g_sdl.mapped_batch_count > 0)
+    {
+        mapped_vertex* mverts = (mapped_vertex*)SDL_MapGPUTransferBuffer(g_sdl.device, g_sdl.mapped_vtransfer, true);
+        for (u32 i = 0; i < g_sdl.mapped_batch_count; ++i)
+        {
+            const bs_mapped_sprite& s = g_sdl.mapped_batch[i];
+            f32 ox = s.origin.x * s.size.x;
+            f32 oy = s.origin.y * s.size.y;
+            Vec2 corners[4] = {
+                Vec2{ -ox,            oy             },
+                Vec2{ s.size.x - ox,  oy             },
+                Vec2{ s.size.x - ox,  oy - s.size.y },
+                Vec2{ -ox,            oy - s.size.y }
+            };
+            f32 u0 = s.uv.x,           v0 = s.uv.y;
+            f32 u1 = s.uv.x + s.uv.w,  v1 = s.uv.y + s.uv.h;
+            f32 uvs[4][2] = { { u0, v0 }, { u1, v0 }, { u1, v1 }, { u0, v1 } };
+            for (u32 c = 0; c < 4; ++c)
+            {
+                Vec2 r = vec2_rotate(corners[c], s.rotation);
+                mapped_vertex* vtx = &mverts[i * 4u + c];
+                vtx->x = s.position.x + r.x;
+                vtx->y = s.position.y + r.y;
+                vtx->u = uvs[c][0];
+                vtx->v = uvs[c][1];
+                vtx->wx = s.position.x;
+                vtx->wy = s.position.y;
+                vtx->wz = 0.0f;
+                vtx->angle = s.rotation;
+            }
+        }
+        SDL_UnmapGPUTransferBuffer(g_sdl.device, g_sdl.mapped_vtransfer);
+
+        SDL_GPUCopyPass* cp = SDL_BeginGPUCopyPass(g_sdl.cmd);
+        SDL_GPUTransferBufferLocation src; SDL_zero(src);
+        src.transfer_buffer = g_sdl.mapped_vtransfer; src.offset = 0;
+        SDL_GPUBufferRegion dst; SDL_zero(dst);
+        dst.buffer = g_sdl.mapped_vbuffer; dst.offset = 0;
+        dst.size   = sizeof(mapped_vertex) * 4u * g_sdl.mapped_batch_count;
         SDL_UploadToGPUBuffer(cp, &src, &dst, true);
         SDL_EndGPUCopyPass(cp);
     }
@@ -930,22 +1825,58 @@ b8 sdlgpu_backend_end_frame(struct renderer_backend* backend, f32 dt)
         ImGui_ImplSDLGPU3_PrepareDrawData(imgui_draw_data, g_sdl.cmd);
     }
 
-    SDL_GPUColorTargetInfo color_target;
-    SDL_zero(color_target);
-    color_target.texture     = g_sdl.swapchain_texture;
-    color_target.clear_color = g_sdl.clear_color;
-    color_target.load_op     = SDL_GPU_LOADOP_CLEAR;
-    color_target.store_op    = SDL_GPU_STOREOP_STORE;
-
-    g_sdl.pass = SDL_BeginGPURenderPass(g_sdl.cmd, &color_target, 1, NULL);
-
-    u32 draw_calls = 0;
-    if (g_sdl.batch_count > 0)
+    // ---- Helper: draw a sub-range of a sprite batch into the CURRENT render pass ----
+    auto draw_sprite_batch = [&](b8 render_to_offscreen, batched_sprite* sprites, u32 sprite_count, u32 index_offset, u32 batch_start, u32 batch_end) -> u32
     {
-        // Rebuild the view-proj from the LIVE swapchain size so it stays resize-correct.
+        u32 calls = 0;
+        if (batch_start >= batch_end || batch_start >= sprite_count) return calls;
+        batch_end = (batch_end > sprite_count) ? sprite_count : batch_end;
+
         Mat4 view_proj = camera2d_view_proj(&g_sdl.camera, (u16)g_sdl.swap_width, (u16)g_sdl.swap_height);
 
-        // Bind the shared index buffer once; the vertex buffer too.
+        gpu_lights lit;
+        SDL_zero(lit);
+        lit.params[0]  = (f32)g_sdl.light_count;
+        lit.params[1]  = 0.0f;
+        lit.params[2]  = (f32)g_sdl.swap_width;
+        lit.params[3]  = (f32)g_sdl.swap_height;
+        lit.ambient[0] = g_sdl.light_ambient.r;
+        lit.ambient[1] = g_sdl.light_ambient.g;
+        lit.ambient[2] = g_sdl.light_ambient.b;
+        for (u32 i = 0; i < g_sdl.light_count; ++i)
+        {
+            const bs_light2d& L = g_sdl.lights[i];
+            lit.pos_radius[i][0] = L.position.x;
+            lit.pos_radius[i][1] = L.position.y;
+            lit.pos_radius[i][2] = L.radius;
+            lit.pos_radius[i][3] = L.intensity;
+            lit.color[i][0]      = L.color.r;
+            lit.color[i][1]      = L.color.g;
+            lit.color[i][2]      = L.color.b;
+            lit.color[i][3]      = L.enabled ? 1.0f : 0.0f;
+        }
+
+        auto fill_glow = [&](const bs_glow_params* gp) {
+            const bs_glow_params& p = gp ? *gp : g_sdl.glow_params;
+            lit.glow[0][0] = p.intensity;    lit.glow[0][1] = p.falloff;
+            lit.glow[0][2] = p.head_mult;    lit.glow[0][3] = p.head_falloff;
+            lit.glow[1][0] = p.head_range;   lit.glow[1][1] = p.distort_amp;
+            lit.glow[1][2] = p.wave_speed;   lit.glow[1][3] = p.wave_freq;
+            lit.glow[2][0] = p.jitter_speed; lit.glow[2][1] = p.jitter_freq;
+            lit.glow[2][2] = 0.0f;           lit.glow[2][3] = 0.0f;
+            lit.glow[3][0] = p.glow_tint.r;  lit.glow[3][1] = p.glow_tint.g;
+            lit.glow[3][2] = p.glow_tint.b;  lit.glow[3][3] = 0.0f;
+            lit.glow[4][0] = p.temp_cool.r;  lit.glow[4][1] = p.temp_cool.g;
+            lit.glow[4][2] = p.temp_cool.b;  lit.glow[4][3] = 0.0f;
+            lit.glow[5][0] = p.temp_warm.r;  lit.glow[5][1] = p.temp_warm.g;
+            lit.glow[5][2] = p.temp_warm.b;  lit.glow[5][3] = 0.0f;
+            lit.glow[6][0] = p.temp_hot.r;   lit.glow[6][1] = p.temp_hot.g;
+            lit.glow[6][2] = p.temp_hot.b;   lit.glow[6][3] = 0.0f;
+            lit.glow[7][0] = 0.0f;           lit.glow[7][1] = 0.0f;
+            lit.glow[7][2] = 0.0f;           lit.glow[7][3] = 0.0f;
+        };
+        fill_glow(nullptr); // default to global for first run
+
         SDL_GPUBufferBinding vbind; SDL_zero(vbind);
         vbind.buffer = g_sdl.vbuffer; vbind.offset = 0;
         SDL_BindGPUVertexBuffers(g_sdl.pass, 0, &vbind, 1);
@@ -954,67 +1885,453 @@ b8 sdlgpu_backend_end_frame(struct renderer_backend* backend, f32 dt)
         ibind.buffer = g_sdl.ibuffer; ibind.offset = 0;
         SDL_BindGPUIndexBuffer(g_sdl.pass, &ibind, SDL_GPU_INDEXELEMENTSIZE_16BIT);
 
-        // Walk contiguous runs sharing the same (blend, texture).
-        u32 run_start = 0;
-        while (run_start < g_sdl.batch_count)
+        SDL_GPUGraphicsPipeline** pipe_set = render_to_offscreen ? g_sdl.pipelines_offscreen : g_sdl.pipelines;
+
+        u32 run_start = batch_start;
+        while (run_start < batch_end)
         {
-            EBlendMode run_blend = g_sdl.batch[run_start].sprite.blend;
-            u32        run_texid = (g_sdl.batch[run_start].sort_key & 0x3FFFFu);
+            EBlendMode run_blend = sprites[run_start].sprite.blend;
+            u32        run_texid = (sprites[run_start].sort_key & 0x3FFFFu);
+            const bs_glow_params* run_glow = sprites[run_start].sprite.glow_override;
 
             u32 run_end = run_start + 1;
-            while (run_end < g_sdl.batch_count)
+            while (run_end < batch_end)
             {
-                EBlendMode b = g_sdl.batch[run_end].sprite.blend;
-                u32        t = (g_sdl.batch[run_end].sort_key & 0x3FFFFu);
-                if (b != run_blend || t != run_texid) break;
+                EBlendMode b = sprites[run_end].sprite.blend;
+                u32        t = (sprites[run_end].sort_key & 0x3FFFFu);
+                const bs_glow_params* g = sprites[run_end].sprite.glow_override;
+                if (b != run_blend || t != run_texid || g != run_glow) break;
                 ++run_end;
             }
 
             u32 run_count = run_end - run_start;
 
-            // Resolve the texture for this run (fallback to white).
             gpu_texture* slot = &g_sdl.textures[run_texid - 1u];
             SDL_GPUTexture* tex = (slot->in_use && slot->tex) ? slot->tex
                 : g_sdl.textures[(g_sdl.white_texture.id & 0x3FFFFu) - 1u].tex;
 
-            SDL_BindGPUGraphicsPipeline(g_sdl.pass, g_sdl.pipelines[(u32)run_blend]);
+            SDL_BindGPUGraphicsPipeline(g_sdl.pass, pipe_set[(u32)run_blend]);
             SDL_PushGPUVertexUniformData(g_sdl.cmd, 0, &view_proj, sizeof(Mat4));
 
-            SDL_GPUTextureSamplerBinding tsb; SDL_zero(tsb);
-            tsb.texture = tex; tsb.sampler = g_sdl.sampler;
+            u32 run_layer = (sprites[run_start].sort_key >> 20) & 0xFFFu;
+            lit.params[1] = (g_sdl.light_count > 0 && run_layer < g_sdl.light_unlit_layer) ? 1.0f : 0.0f;
+            fill_glow(run_glow);
+            SDL_PushGPUFragmentUniformData(g_sdl.cmd, 0, &lit, sizeof(gpu_lights));
+
+            SDL_GPUTextureSamplerBinding tsb;
+            tsb.texture = tex;  tsb.sampler = g_sdl.sampler;
             SDL_BindGPUFragmentSamplers(g_sdl.pass, 0, &tsb, 1);
 
-            // 6 indices per sprite; first_index points into the shared index buffer.
             SDL_DrawGPUIndexedPrimitives(
                 g_sdl.pass,
-                run_count * 6u,  // num_indices
-                1,               // num_instances
-                run_start * 6u,  // first_index
-                0,               // vertex_offset
-                0);              // first_instance
+                run_count * 6u,
+                1,
+                (index_offset + run_start) * 6u,
+                0,
+                0);
 
-            ++draw_calls;
+            ++calls;
             run_start = run_end;
         }
-    }
+        return calls;
+    };
 
-    // Snapshot stats for the frame we are about to submit (read via renderer_get_frame_stats).
-    g_sdl.last_stats.sprite_count = g_sdl.batch_count;
-    g_sdl.last_stats.draw_calls   = draw_calls;
-
-    // Record ImGui's draw commands LAST, inside the same render pass, so the UI composites on
-    // top of the game scene. PrepareDrawData (above) already uploaded the geometry. Guarded on
-    // a non-empty draw list so an idle-UI frame skips the bind entirely.
-    if (g_sdl.imgui_active && imgui_draw_data && imgui_draw_data->TotalVtxCount > 0)
+    // Helper: draw all queued mapped sprites in the current render pass.
+    auto draw_mapped_batch = [&](b8 render_to_offscreen) -> u32
     {
-        ImGui_ImplSDLGPU3_RenderDrawData(imgui_draw_data, g_sdl.cmd, g_sdl.pass);
+        u32 calls = 0;
+        u32 count = g_sdl.mapped_batch_count;
+        if (count == 0) return calls;
+
+        Mat4 view_proj = camera2d_view_proj(&g_sdl.camera, (u16)g_sdl.swap_width, (u16)g_sdl.swap_height);
+
+        mapped_light lit;
+        SDL_zero(lit);
+        // Use the first mapped sprite's light direction for the whole batch (all ships share
+        // the same star direction this frame). Intensity 1.0, ambient from the scene floor.
+        const bs_mapped_sprite& first = g_sdl.mapped_batch[0];
+        lit.light_dir[0] = first.light_dir.x;
+        lit.light_dir[1] = first.light_dir.y;
+        lit.light_dir[2] = first.light_dir.z;
+        lit.light_dir[3] = 1.0f;
+        lit.ambient[0]   = g_sdl.light_ambient.r;
+        lit.ambient[1]   = g_sdl.light_ambient.g;
+        lit.ambient[2]   = g_sdl.light_ambient.b;
+        lit.ambient[3]   = 1.0f;
+        lit.tuning[0]    = 1.0f; // normal strength
+        lit.tuning[1]    = 0.02f; // depth parallax scale
+        lit.tuning[2]    = 0.0f;
+        lit.tuning[3]    = 0.0f;
+
+        SDL_GPUBufferBinding vbind; SDL_zero(vbind);
+        vbind.buffer = g_sdl.mapped_vbuffer; vbind.offset = 0;
+        SDL_BindGPUVertexBuffers(g_sdl.pass, 0, &vbind, 1);
+
+        SDL_GPUBufferBinding ibind; SDL_zero(ibind);
+        ibind.buffer = g_sdl.mapped_ibuffer; ibind.offset = 0;
+        SDL_BindGPUIndexBuffer(g_sdl.pass, &ibind, SDL_GPU_INDEXELEMENTSIZE_16BIT);
+
+        SDL_GPUGraphicsPipeline* pipe = render_to_offscreen ? g_sdl.pipeline_mapped_offscreen : g_sdl.pipeline_mapped;
+        SDL_BindGPUGraphicsPipeline(g_sdl.pass, pipe);
+        SDL_PushGPUVertexUniformData(g_sdl.cmd, 0, &view_proj, sizeof(Mat4));
+        SDL_PushGPUFragmentUniformData(g_sdl.cmd, 0, &lit, sizeof(mapped_light));
+
+        // Each mapped sprite is one draw with its own four textures. We can't merge them
+        // because each ship uses a different set of maps.
+        for (u32 i = 0; i < count; ++i)
+        {
+            const bs_mapped_sprite& s = g_sdl.mapped_batch[i];
+            gpu_texture* diffuse_slot  = pool_resolve_texture(s.diffuse_map);
+            gpu_texture* normal_slot   = pool_resolve_texture(s.normal_map);
+            gpu_texture* depth_slot    = pool_resolve_texture(s.depth_map);
+            gpu_texture* position_slot = pool_resolve_texture(s.position_map);
+
+            SDL_GPUTexture* white_tex = g_sdl.textures[(g_sdl.white_texture.id & 0x3FFFFu) - 1u].tex;
+            SDL_GPUTexture* diffuse_tex  = (diffuse_slot  && diffuse_slot->tex)  ? diffuse_slot->tex  : white_tex;
+            SDL_GPUTexture* normal_tex   = (normal_slot   && normal_slot->tex)   ? normal_slot->tex   : white_tex;
+            SDL_GPUTexture* depth_tex    = (depth_slot    && depth_slot->tex)    ? depth_slot->tex    : white_tex;
+            SDL_GPUTexture* position_tex = (position_slot && position_slot->tex) ? position_slot->tex : white_tex;
+
+            SDL_GPUTextureSamplerBinding tsb[4];
+            SDL_zero(tsb);
+            tsb[0].texture = diffuse_tex;  tsb[0].sampler = g_sdl.sampler;
+            tsb[1].texture = normal_tex;   tsb[1].sampler = g_sdl.sampler;
+            tsb[2].texture = depth_tex;    tsb[2].sampler = g_sdl.sampler;
+            tsb[3].texture = position_tex;   tsb[3].sampler = g_sdl.sampler;
+            SDL_BindGPUFragmentSamplers(g_sdl.pass, 0, tsb, 4);
+
+            SDL_DrawGPUIndexedPrimitives(g_sdl.pass, 6, 1, i * 6u, 0, 0);
+            ++calls;
+        }
+        return calls;
+    };
+
+    // Find the split between game-world sprites (below threshold -> bloom) and
+    // UI/debug overlays (at/above threshold -> draw after composite, bypass bloom).
+    u32 bloom_split = g_sdl.batch_count;
+    for (u32 i = 0; i < g_sdl.batch_count; ++i)
+    {
+        u32 layer = (g_sdl.batch[i].sort_key >> 20) & 0xFFFu;
+        if (layer >= BS_LAYER_BLOOM_THRESHOLD) { bloom_split = i; break; }
     }
 
-    SDL_EndGPURenderPass(g_sdl.pass);
-    g_sdl.pass = NULL;
+    u32 draw_calls = 0;
+
+    b8 use_offscreen = g_sdl.scene_rt && g_sdl.bloom_a && g_sdl.bloom_b;
+    b8 need_bloom    = g_sdl.bloom_enabled;
+    b8 need_streak   = g_sdl.streak_enabled && aux_count > 0;
+
+    if (use_offscreen && (need_bloom || need_streak))
+    {
+        // ---- PASS 1: game-world sprites -> scene_rt -------------------------------------------
+        SDL_GPUColorTargetInfo scene_target;
+        SDL_zero(scene_target);
+        scene_target.texture     = g_sdl.scene_rt;
+        scene_target.clear_color = SDL_FColor{ 0.0f, 0.0f, 0.0f, 1.0f };
+        scene_target.load_op     = SDL_GPU_LOADOP_CLEAR;
+        scene_target.store_op    = SDL_GPU_STOREOP_STORE;
+
+        g_sdl.pass = SDL_BeginGPURenderPass(g_sdl.cmd, &scene_target, 1, NULL);
+        // Draw queued procedural starfield layers behind all sprites.
+        for (u32 i = 0; i < g_sdl.starfield_queue_count; ++i)
+        {
+            if (!g_sdl.starfield_queue[i].active) continue;
+            const bs_starfield_params& p = g_sdl.starfield_queue[i].params;
+            if (g_sdl.pipeline_starfield_layer) {
+                SDL_BindGPUGraphicsPipeline(g_sdl.pass, g_sdl.pipeline_starfield_layer);
+                float layer_params[16];
+                layer_params[0]  = p.cam.position.x;
+                layer_params[1]  = p.cam.position.y;
+                layer_params[2]  = p.cam.zoom;
+                layer_params[3]  = (float)p.fb_w;
+                layer_params[4]  = (float)p.fb_h;
+                layer_params[5]  = p.density;
+                layer_params[6]  = p.size_mul;
+                layer_params[7]  = p.brightness_mul;
+                layer_params[8]  = (float)p.seed;
+                layer_params[9]  = 0.0f;
+                layer_params[10] = 0.0f;
+                layer_params[11] = 0.0f;
+                layer_params[12] = p.star_pos.x;
+                layer_params[13] = p.star_pos.y;
+                layer_params[14] = p.dazzle_inner;
+                layer_params[15] = p.dazzle_outer;
+                float dazzle_params[4] = { p.dazzle_intensity, 0.0f, 0.0f, 0.0f };
+                SDL_PushGPUFragmentUniformData(g_sdl.cmd, 0, layer_params, sizeof(layer_params));
+                SDL_PushGPUFragmentUniformData(g_sdl.cmd, 1, dazzle_params, sizeof(dazzle_params));
+                SDL_DrawGPUPrimitives(g_sdl.pass, 3, 1, 0, 0);
+            }
+        }
+        // Draw queued sunburst stars behind sprites.
+        for (u32 i = 0; i < g_sdl.sunburst_queue_count; ++i)
+        {
+            if (!g_sdl.sunburst_queue[i].active) continue;
+            const bs_sunburst_params& p = g_sdl.sunburst_queue[i].params;
+            SDL_BindGPUGraphicsPipeline(g_sdl.pass, g_sdl.pipeline_sunburst);
+            float u[16];
+            u[0] = p.screen_pos.x;   u[1] = p.screen_pos.y;   u[2] = p.body_radius;  u[3] = p.glow_radius;
+            u[4] = p.color.r;        u[5] = p.color.g;        u[6] = p.color.b;      u[7] = p.time;
+            u[8] = 16.0f;            u[9] = 1.0f;             u[10] = 2.5f;          u[11] = p.visibility;
+            u[12] = (float)p.fb_w;   u[13] = (float)p.fb_h;   u[14] = 0.0f;          u[15] = 0.0f;
+            SDL_PushGPUVertexUniformData(g_sdl.cmd, 0, u, sizeof(u));
+            SDL_PushGPUFragmentUniformData(g_sdl.cmd, 0, u, sizeof(u));
+            SDL_DrawGPUPrimitives(g_sdl.pass, 6, 1, 0, 0);
+        }
+        draw_calls = draw_sprite_batch(TRUE, g_sdl.batch, g_sdl.batch_count, aux_count, 0, bloom_split);
+        draw_calls += draw_mapped_batch(TRUE);
+        SDL_EndGPURenderPass(g_sdl.pass);
+        g_sdl.pass = NULL;
+
+        // ---- PASS 1b: aux sprites -> aux_bloom_a (clear black, additive) --------------------
+        if (aux_count > 0)
+        {
+            SDL_GPUColorTargetInfo aux_target;
+            SDL_zero(aux_target);
+            aux_target.texture     = g_sdl.aux_bloom_a;
+            aux_target.clear_color = SDL_FColor{ 0.0f, 0.0f, 0.0f, 1.0f };
+            aux_target.load_op     = SDL_GPU_LOADOP_CLEAR;
+            aux_target.store_op    = SDL_GPU_STOREOP_STORE;
+
+            g_sdl.pass = SDL_BeginGPURenderPass(g_sdl.cmd, &aux_target, 1, NULL);
+            draw_calls += draw_sprite_batch(TRUE, g_sdl.aux_batch, aux_count, 0, 0, aux_count);
+            SDL_EndGPURenderPass(g_sdl.pass);
+            g_sdl.pass = NULL;
+        }
+
+        // Common fullscreen sampler binding (LINEAR for smooth post-process sampling).
+        SDL_GPUTextureSamplerBinding tsb;
+        SDL_zero(tsb);
+        tsb.sampler = g_sdl.sampler_linear;
+
+        float bloom_params[4];
+
+        // ---- PASS 2-4: main bloom extract + blur (only if bloom is enabled) ------------------
+        if (need_bloom)
+        {
+            SDL_GPUColorTargetInfo bloom_target;
+            SDL_zero(bloom_target);
+            bloom_target.texture  = g_sdl.bloom_a;
+            bloom_target.load_op  = SDL_GPU_LOADOP_DONT_CARE;
+            bloom_target.store_op = SDL_GPU_STOREOP_STORE;
+
+            // PASS 2: brightness extract
+            g_sdl.pass = SDL_BeginGPURenderPass(g_sdl.cmd, &bloom_target, 1, NULL);
+            SDL_BindGPUGraphicsPipeline(g_sdl.pass, g_sdl.pipeline_extract);
+            tsb.texture = g_sdl.scene_rt;
+            SDL_BindGPUFragmentSamplers(g_sdl.pass, 0, &tsb, 1);
+            bloom_params[0] = g_sdl.bloom_threshold;
+            bloom_params[1] = 0.0f; bloom_params[2] = 0.0f; bloom_params[3] = 0.0f;
+            SDL_PushGPUFragmentUniformData(g_sdl.cmd, 0, bloom_params, sizeof(bloom_params));
+            SDL_DrawGPUPrimitives(g_sdl.pass, 3, 1, 0, 0);
+            SDL_EndGPURenderPass(g_sdl.pass);
+            g_sdl.pass = NULL;
+
+            // PASS 3: blur horizontal -> bloom_b
+            bloom_target.texture = g_sdl.bloom_b;
+            g_sdl.pass = SDL_BeginGPURenderPass(g_sdl.cmd, &bloom_target, 1, NULL);
+            SDL_BindGPUGraphicsPipeline(g_sdl.pass, g_sdl.pipeline_blur_h);
+            tsb.texture = g_sdl.bloom_a;
+            SDL_BindGPUFragmentSamplers(g_sdl.pass, 0, &tsb, 1);
+            bloom_params[0] = 1.0f / (f32)((g_sdl.bloom_width  / 2) > 1u ? (g_sdl.bloom_width  / 2) : 1u);
+            bloom_params[1] = 1.0f / (f32)((g_sdl.bloom_height / 2) > 1u ? (g_sdl.bloom_height / 2) : 1u);
+            bloom_params[2] = 0.0f; bloom_params[3] = 0.0f;
+            SDL_PushGPUFragmentUniformData(g_sdl.cmd, 0, bloom_params, sizeof(bloom_params));
+            SDL_DrawGPUPrimitives(g_sdl.pass, 3, 1, 0, 0);
+            SDL_EndGPURenderPass(g_sdl.pass);
+            g_sdl.pass = NULL;
+
+            // PASS 4: blur vertical -> bloom_a
+            bloom_target.texture = g_sdl.bloom_a;
+            g_sdl.pass = SDL_BeginGPURenderPass(g_sdl.cmd, &bloom_target, 1, NULL);
+            SDL_BindGPUGraphicsPipeline(g_sdl.pass, g_sdl.pipeline_blur_v);
+            tsb.texture = g_sdl.bloom_b;
+            SDL_BindGPUFragmentSamplers(g_sdl.pass, 0, &tsb, 1);
+            SDL_PushGPUFragmentUniformData(g_sdl.cmd, 0, bloom_params, sizeof(bloom_params));
+            SDL_DrawGPUPrimitives(g_sdl.pass, 3, 1, 0, 0);
+            SDL_EndGPURenderPass(g_sdl.pass);
+            g_sdl.pass = NULL;
+        }
+
+        // ---- PASS 5-7: aux blur + streak ------------------------------------------------------
+        if (aux_count > 0)
+        {
+            SDL_GPUColorTargetInfo bloom_target;
+            SDL_zero(bloom_target);
+            bloom_target.load_op  = SDL_GPU_LOADOP_DONT_CARE;
+            bloom_target.store_op = SDL_GPU_STOREOP_STORE;
+
+            // PASS 5: aux blur horizontal -> aux_bloom_b
+            bloom_target.texture = g_sdl.aux_bloom_b;
+            g_sdl.pass = SDL_BeginGPURenderPass(g_sdl.cmd, &bloom_target, 1, NULL);
+            SDL_BindGPUGraphicsPipeline(g_sdl.pass, g_sdl.pipeline_blur_h);
+            tsb.texture = g_sdl.aux_bloom_a;
+            SDL_BindGPUFragmentSamplers(g_sdl.pass, 0, &tsb, 1);
+            bloom_params[0] = 1.0f / (f32)((g_sdl.bloom_width  / 2) > 1u ? (g_sdl.bloom_width  / 2) : 1u);
+            bloom_params[1] = 1.0f / (f32)((g_sdl.bloom_height / 2) > 1u ? (g_sdl.bloom_height / 2) : 1u);
+            bloom_params[2] = 0.0f; bloom_params[3] = 0.0f;
+            SDL_PushGPUFragmentUniformData(g_sdl.cmd, 0, bloom_params, sizeof(bloom_params));
+            SDL_DrawGPUPrimitives(g_sdl.pass, 3, 1, 0, 0);
+            SDL_EndGPURenderPass(g_sdl.pass);
+            g_sdl.pass = NULL;
+
+            // PASS 6: aux blur vertical -> aux_bloom_a
+            bloom_target.texture = g_sdl.aux_bloom_a;
+            g_sdl.pass = SDL_BeginGPURenderPass(g_sdl.cmd, &bloom_target, 1, NULL);
+            SDL_BindGPUGraphicsPipeline(g_sdl.pass, g_sdl.pipeline_blur_v);
+            tsb.texture = g_sdl.aux_bloom_b;
+            SDL_BindGPUFragmentSamplers(g_sdl.pass, 0, &tsb, 1);
+            SDL_PushGPUFragmentUniformData(g_sdl.cmd, 0, bloom_params, sizeof(bloom_params));
+            SDL_DrawGPUPrimitives(g_sdl.pass, 3, 1, 0, 0);
+            SDL_EndGPURenderPass(g_sdl.pass);
+            g_sdl.pass = NULL;
+
+            // PASS 7: streak -> aux_bloom_b
+            if (g_sdl.streak_enabled)
+            {
+                bloom_target.texture = g_sdl.aux_bloom_b;
+                g_sdl.pass = SDL_BeginGPURenderPass(g_sdl.cmd, &bloom_target, 1, NULL);
+                SDL_BindGPUGraphicsPipeline(g_sdl.pass, g_sdl.pipeline_streak);
+                tsb.texture = g_sdl.aux_bloom_a;
+                SDL_BindGPUFragmentSamplers(g_sdl.pass, 0, &tsb, 1);
+                bloom_params[0] = 1.0f / (f32)((g_sdl.bloom_width  / 2) > 1u ? (g_sdl.bloom_width  / 2) : 1u);
+                bloom_params[1] = 1.0f / (f32)((g_sdl.bloom_height / 2) > 1u ? (g_sdl.bloom_height / 2) : 1u);
+                bloom_params[2] = g_sdl.streak_angle;
+                bloom_params[3] = g_sdl.streak_length;
+                SDL_PushGPUFragmentUniformData(g_sdl.cmd, 0, bloom_params, sizeof(bloom_params));
+                SDL_DrawGPUPrimitives(g_sdl.pass, 3, 1, 0, 0);
+                SDL_EndGPURenderPass(g_sdl.pass);
+                g_sdl.pass = NULL;
+
+                // PASS 7b: lens-flare ghosts -> aux_bloom_a
+                bloom_target.texture = g_sdl.aux_bloom_a;
+                g_sdl.pass = SDL_BeginGPURenderPass(g_sdl.cmd, &bloom_target, 1, NULL);
+                SDL_BindGPUGraphicsPipeline(g_sdl.pass, g_sdl.pipeline_flare);
+                tsb.texture = g_sdl.aux_bloom_b;
+                SDL_BindGPUFragmentSamplers(g_sdl.pass, 0, &tsb, 1);
+                float flare_source_u = g_sdl.streak_source_set ? g_sdl.streak_source.x / (f32)g_sdl.swap_width : 0.5f;
+                float flare_source_v = g_sdl.streak_source_set ? g_sdl.streak_source.y / (f32)g_sdl.swap_height : 0.5f;
+                bloom_params[0] = flare_source_u;
+                bloom_params[1] = flare_source_v;
+                bloom_params[2] = g_sdl.streak_flare_intensity;
+                bloom_params[3] = (g_sdl.swap_height > 0)
+                                  ? (f32)g_sdl.swap_width / (f32)g_sdl.swap_height : (16.0f / 9.0f);
+                SDL_PushGPUFragmentUniformData(g_sdl.cmd, 0, bloom_params, sizeof(bloom_params));
+                SDL_DrawGPUPrimitives(g_sdl.pass, 3, 1, 0, 0);
+                SDL_EndGPURenderPass(g_sdl.pass);
+                g_sdl.pass = NULL;
+            }
+        }
+
+        // ---- PASS 8: composite -> swapchain -------------------------------------------------
+        SDL_GPUColorTargetInfo swap_target;
+        SDL_zero(swap_target);
+        swap_target.texture     = g_sdl.swapchain_texture;
+        swap_target.clear_color = SDL_FColor{ 0.0f, 0.0f, 0.0f, 1.0f };
+        swap_target.load_op     = SDL_GPU_LOADOP_CLEAR;
+        swap_target.store_op    = SDL_GPU_STOREOP_STORE;
+
+        g_sdl.pass = SDL_BeginGPURenderPass(g_sdl.cmd, &swap_target, 1, NULL);
+        SDL_BindGPUGraphicsPipeline(g_sdl.pass, g_sdl.pipeline_composite);
+        SDL_GPUTextureSamplerBinding tsb2[4];
+        SDL_zero(tsb2);
+        tsb2[0].texture = g_sdl.scene_rt;     tsb2[0].sampler = g_sdl.sampler_linear;
+        tsb2[1].texture = g_sdl.bloom_a;      tsb2[1].sampler = g_sdl.sampler_linear;
+        tsb2[2].texture = (aux_count > 0 && g_sdl.streak_enabled) ? g_sdl.aux_bloom_b : g_sdl.aux_bloom_a;
+        tsb2[2].sampler = g_sdl.sampler_linear;
+        tsb2[3].texture = (aux_count > 0 && g_sdl.streak_enabled) ? g_sdl.aux_bloom_a : g_sdl.aux_bloom_b;
+        tsb2[3].sampler = g_sdl.sampler_linear;
+        SDL_BindGPUFragmentSamplers(g_sdl.pass, 0, tsb2, 4);
+        bloom_params[0] = need_bloom ? g_sdl.bloom_intensity : 0.0f;
+        bloom_params[1] = (aux_count > 0) ? g_sdl.streak_intensity : 0.0f;
+        bloom_params[2] = (aux_count > 0 && g_sdl.streak_enabled) ? g_sdl.streak_flare_intensity : 0.0f;
+        bloom_params[3] = 0.0f;
+        SDL_PushGPUFragmentUniformData(g_sdl.cmd, 0, bloom_params, sizeof(bloom_params));
+        SDL_DrawGPUPrimitives(g_sdl.pass, 3, 1, 0, 0);
+
+        // ---- PASS 8b: debug / UI overlays directly on swapchain (bypass bloom) ------------
+        if (bloom_split < g_sdl.batch_count)
+            draw_calls += draw_sprite_batch(FALSE, g_sdl.batch, g_sdl.batch_count, aux_count, bloom_split, g_sdl.batch_count);
+
+        // ImGui on top of everything.
+        if (g_sdl.imgui_active && imgui_draw_data && imgui_draw_data->TotalVtxCount > 0)
+            ImGui_ImplSDLGPU3_RenderDrawData(imgui_draw_data, g_sdl.cmd, g_sdl.pass);
+
+        SDL_EndGPURenderPass(g_sdl.pass);
+        g_sdl.pass = NULL;
+    }
+    else
+    {
+        // ---- Bloom and streak disabled: single pass directly to swapchain -------------------
+        SDL_GPUColorTargetInfo color_target;
+        SDL_zero(color_target);
+        color_target.texture     = g_sdl.swapchain_texture;
+        color_target.clear_color = SDL_FColor{ 0.0f, 0.0f, 0.0f, 1.0f };
+        color_target.load_op     = SDL_GPU_LOADOP_CLEAR;
+        color_target.store_op    = SDL_GPU_STOREOP_STORE;
+
+        g_sdl.pass = SDL_BeginGPURenderPass(g_sdl.cmd, &color_target, 1, NULL);
+        // Draw queued procedural starfield layers behind all sprites.
+        for (u32 i = 0; i < g_sdl.starfield_queue_count; ++i)
+        {
+            if (!g_sdl.starfield_queue[i].active) continue;
+            const bs_starfield_params& p = g_sdl.starfield_queue[i].params;
+            if (g_sdl.pipeline_starfield_layer_swapchain) {
+                SDL_BindGPUGraphicsPipeline(g_sdl.pass, g_sdl.pipeline_starfield_layer_swapchain);
+                float layer_params[16];
+                layer_params[0]  = p.cam.position.x;
+                layer_params[1]  = p.cam.position.y;
+                layer_params[2]  = p.cam.zoom;
+                layer_params[3]  = (float)p.fb_w;
+                layer_params[4]  = (float)p.fb_h;
+                layer_params[5]  = p.density;
+                layer_params[6]  = p.size_mul;
+                layer_params[7]  = p.brightness_mul;
+                layer_params[8]  = (float)p.seed;
+                layer_params[9]  = 0.0f;
+                layer_params[10] = 0.0f;
+                layer_params[11] = 0.0f;
+                layer_params[12] = p.star_pos.x;
+                layer_params[13] = p.star_pos.y;
+                layer_params[14] = p.dazzle_inner;
+                layer_params[15] = p.dazzle_outer;
+                float dazzle_params[4] = { p.dazzle_intensity, 0.0f, 0.0f, 0.0f };
+                SDL_PushGPUFragmentUniformData(g_sdl.cmd, 0, layer_params, sizeof(layer_params));
+                SDL_PushGPUFragmentUniformData(g_sdl.cmd, 1, dazzle_params, sizeof(dazzle_params));
+                SDL_DrawGPUPrimitives(g_sdl.pass, 3, 1, 0, 0);
+            }
+        }
+        // Draw queued sunburst stars behind sprites.
+        for (u32 i = 0; i < g_sdl.sunburst_queue_count; ++i)
+        {
+            if (!g_sdl.sunburst_queue[i].active) continue;
+            const bs_sunburst_params& p = g_sdl.sunburst_queue[i].params;
+            SDL_BindGPUGraphicsPipeline(g_sdl.pass, g_sdl.pipeline_sunburst_swapchain);
+            float u[16];
+            u[0] = p.screen_pos.x;   u[1] = p.screen_pos.y;   u[2] = p.body_radius;  u[3] = p.glow_radius;
+            u[4] = p.color.r;        u[5] = p.color.g;        u[6] = p.color.b;      u[7] = p.time;
+            u[8] = 16.0f;            u[9] = 1.0f;             u[10] = 2.5f;          u[11] = p.visibility;
+            u[12] = (float)p.fb_w;   u[13] = (float)p.fb_h;   u[14] = 0.0f;          u[15] = 0.0f;
+            SDL_PushGPUVertexUniformData(g_sdl.cmd, 0, u, sizeof(u));
+            SDL_PushGPUFragmentUniformData(g_sdl.cmd, 0, u, sizeof(u));
+            SDL_DrawGPUPrimitives(g_sdl.pass, 6, 1, 0, 0);
+        }
+        draw_calls = draw_sprite_batch(FALSE, g_sdl.batch, g_sdl.batch_count, aux_count, 0, g_sdl.batch_count);
+        draw_calls += draw_mapped_batch(FALSE);
+
+        if (g_sdl.imgui_active && imgui_draw_data && imgui_draw_data->TotalVtxCount > 0)
+            ImGui_ImplSDLGPU3_RenderDrawData(imgui_draw_data, g_sdl.cmd, g_sdl.pass);
+
+        SDL_EndGPURenderPass(g_sdl.pass);
+        g_sdl.pass = NULL;
+    }
+
+    g_sdl.last_stats.sprite_count = g_sdl.batch_count + aux_count + g_sdl.mapped_batch_count;
+    g_sdl.last_stats.draw_calls   = draw_calls;
 
     SDL_SubmitGPUCommandBuffer(g_sdl.cmd);
     g_sdl.cmd               = NULL;
     g_sdl.swapchain_texture = NULL;
+    g_sdl.aux_bloom_mode  = FALSE;
+    g_sdl.aux_batch_count = 0;
     return TRUE;
 }
