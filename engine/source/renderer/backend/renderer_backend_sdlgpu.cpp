@@ -219,6 +219,16 @@ typedef struct sdlgpu_state
     SDL_GPUTexture* aux_bloom_a;
     SDL_GPUTexture* aux_bloom_b;
 
+    // Half-resolution nebula target. The nebula FBM shader is fill-rate bound (~50-75 noise
+    // evals/pixel), so it is rendered once into this half-size target (premultiplied alpha) and
+    // bilinearly upscaled during compositing — ~4x fewer shader invocations, near-invisible loss.
+    SDL_GPUTexture* nebula_rt;
+
+    // Half-resolution radiation heat map target. The heat_map shader is fill-rate bound (per-pixel
+    // loop over up to BS_MAX_HEAT_SOURCES sources + domain-warp noise), so it is rendered into this
+    // half-size target (premultiplied alpha) and upscaled during compositing — same pattern as nebula.
+    SDL_GPUTexture* heat_rt;
+
     // Post-process pipelines (fullscreen triangle, no blending except where noted).
     SDL_GPUGraphicsPipeline* pipeline_extract;
     SDL_GPUGraphicsPipeline* pipeline_blur_h;
@@ -230,9 +240,29 @@ typedef struct sdlgpu_state
     SDL_GPUGraphicsPipeline* pipeline_starfield_layer;          // -> offscreen (bloom path)
     SDL_GPUGraphicsPipeline* pipeline_starfield_layer_swapchain; // -> swapchain (non-bloom)
 
+    // Procedural nebula/dust cloud layer, rendered half-res then composited (see below).
+    // Half-res nebula: render into nebula_rt (premultiply-on-write), then composite (premult-over).
+    SDL_GPUGraphicsPipeline* pipeline_nebula_halfres;              // nebula FBM -> nebula_rt
+    SDL_GPUGraphicsPipeline* pipeline_nebula_composite;           // nebula_rt -> scene_rt (bloom path)
+    SDL_GPUGraphicsPipeline* pipeline_nebula_composite_swapchain; // nebula_rt -> swapchain (non-bloom)
+
     // Sunburst star pipeline (additive blend — ONE/ONE).
     SDL_GPUGraphicsPipeline* pipeline_sunburst;          // -> offscreen (bloom path)
     SDL_GPUGraphicsPipeline* pipeline_sunburst_swapchain; // -> swapchain (non-bloom)
+
+    // Real-time star surface pipeline (premult-over blend — occluding photosphere + corona glow).
+    SDL_GPUGraphicsPipeline* pipeline_starsurface;           // -> offscreen (bloom path)
+    SDL_GPUGraphicsPipeline* pipeline_starsurface_swapchain; // -> swapchain (non-bloom)
+
+    // Procedural radiation heat map. Rendered half-res into heat_rt (premultiply-on-write), then
+    // composited (premult-over) via the shared nebula composite pipelines — see composite_halfres.
+    SDL_GPUGraphicsPipeline* pipeline_heat_map_halfres;  // heat_map -> heat_rt (half-res)
+    bs_heat_map_params       heat_map_params;
+    b8                       heat_map_set;
+
+    // Procedural nebula/dust cloud layer state.
+    bs_nebula_params         nebula_params;
+    b8                       nebula_set;
 
     // Bloom tuning (editor-settable; defaults give a subtle glow).
     b8  bloom_enabled;
@@ -271,6 +301,14 @@ typedef struct sdlgpu_state
         bs_sunburst_params params;
     } sunburst_queue[BS_MAX_SUNBURST_STARS];
     u32 sunburst_queue_count;
+
+    // Star surface queue: the close-up hero star(s) rendered with the procedural surface shader.
+    #define BS_MAX_STARSURFACE_STARS 4
+    struct {
+        b8               active;
+        bs_starsurface_params params;
+    } starsurface_queue[BS_MAX_STARSURFACE_STARS];
+    u32 starsurface_queue_count;
 } sdlgpu_state;
 
 static sdlgpu_state g_sdl;
@@ -760,6 +798,37 @@ static b8 create_bloom_targets(u32 width, u32 height)
     g_sdl.aux_bloom_b = SDL_CreateGPUTexture(g_sdl.device, &info);
     if (!g_sdl.aux_bloom_b) { BS_LOG_FATAL("create_bloom_targets: aux_bloom_b failed: %s", SDL_GetError()); return FALSE; }
 
+    // Half-resolution nebula target (cleared transparent each frame; premultiplied-alpha content).
+    // Same half-res dimensions as the bloom ping-pong. Cleared to (0,0,0,0) so the D3D12 clear hint
+    // uses alpha 0 (distinct from scene_rt's opaque-black hint).
+    {
+        SDL_PropertiesID neb_props = SDL_CreateProperties();
+        SDL_SetFloatProperty(neb_props, SDL_PROP_GPU_TEXTURE_CREATE_D3D12_CLEAR_R_FLOAT, 0.0f);
+        SDL_SetFloatProperty(neb_props, SDL_PROP_GPU_TEXTURE_CREATE_D3D12_CLEAR_G_FLOAT, 0.0f);
+        SDL_SetFloatProperty(neb_props, SDL_PROP_GPU_TEXTURE_CREATE_D3D12_CLEAR_B_FLOAT, 0.0f);
+        SDL_SetFloatProperty(neb_props, SDL_PROP_GPU_TEXTURE_CREATE_D3D12_CLEAR_A_FLOAT, 0.0f);
+        info.props = neb_props;
+        g_sdl.nebula_rt = SDL_CreateGPUTexture(g_sdl.device, &info);
+        SDL_DestroyProperties(neb_props);
+        info.props = 0;
+        if (!g_sdl.nebula_rt) { BS_LOG_FATAL("create_bloom_targets: nebula_rt failed: %s", SDL_GetError()); return FALSE; }
+    }
+
+    // Half-resolution radiation heat map target (cleared transparent each frame; premultiplied-alpha
+    // content). Same half-res dimensions and transparent D3D12 clear hint as nebula_rt.
+    {
+        SDL_PropertiesID heat_props = SDL_CreateProperties();
+        SDL_SetFloatProperty(heat_props, SDL_PROP_GPU_TEXTURE_CREATE_D3D12_CLEAR_R_FLOAT, 0.0f);
+        SDL_SetFloatProperty(heat_props, SDL_PROP_GPU_TEXTURE_CREATE_D3D12_CLEAR_G_FLOAT, 0.0f);
+        SDL_SetFloatProperty(heat_props, SDL_PROP_GPU_TEXTURE_CREATE_D3D12_CLEAR_B_FLOAT, 0.0f);
+        SDL_SetFloatProperty(heat_props, SDL_PROP_GPU_TEXTURE_CREATE_D3D12_CLEAR_A_FLOAT, 0.0f);
+        info.props = heat_props;
+        g_sdl.heat_rt = SDL_CreateGPUTexture(g_sdl.device, &info);
+        SDL_DestroyProperties(heat_props);
+        info.props = 0;
+        if (!g_sdl.heat_rt) { BS_LOG_FATAL("create_bloom_targets: heat_rt failed: %s", SDL_GetError()); return FALSE; }
+    }
+
     return TRUE;
 }
 
@@ -822,6 +891,93 @@ static SDL_GPUGraphicsPipeline* create_additive_postprocess_pipeline(
     ct.blend_state.dst_color_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
     ct.blend_state.src_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
     ct.blend_state.dst_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
+
+    info.target_info.color_target_descriptions = &ct;
+    info.target_info.num_color_targets         = 1;
+    info.target_info.has_depth_stencil_target  = false;
+
+    info.vertex_input_state.num_vertex_buffers  = 0;
+    info.vertex_input_state.vertex_buffer_descriptions = NULL;
+    info.vertex_input_state.num_vertex_attributes = 0;
+    info.vertex_input_state.vertex_attributes    = NULL;
+
+    info.rasterizer_state.fill_mode  = SDL_GPU_FILLMODE_FILL;
+    info.rasterizer_state.cull_mode  = SDL_GPU_CULLMODE_NONE;
+    info.rasterizer_state.front_face = SDL_GPU_FRONTFACE_COUNTER_CLOCKWISE;
+
+    info.depth_stencil_state.enable_depth_test   = false;
+    info.depth_stencil_state.enable_depth_write  = false;
+    info.depth_stencil_state.enable_stencil_test = false;
+
+    return SDL_CreateGPUGraphicsPipeline(g_sdl.device, &info);
+}
+
+// Fullscreen pipeline that PREMULTIPLIES the shader output on write into a cleared-transparent
+// target: rgb_out = src.rgb*src.a, a_out = src.a. Used to render the (straight-alpha) nebula FBM
+// into nebula_rt so the half-res result can be bilinearly upscaled without dark edge fringing.
+static SDL_GPUGraphicsPipeline* create_premult_write_postprocess_pipeline(
+    SDL_GPUShader* vs, SDL_GPUShader* fs,
+    SDL_GPUTextureFormat color_fmt)
+{
+    SDL_GPUGraphicsPipelineCreateInfo info;
+    SDL_zero(info);
+    info.vertex_shader   = vs;
+    info.fragment_shader = fs;
+    info.primitive_type  = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST;
+
+    SDL_GPUColorTargetDescription ct;
+    SDL_zero(ct);
+    ct.format = color_fmt;
+    ct.blend_state.enable_blend = true;
+    ct.blend_state.color_blend_op = SDL_GPU_BLENDOP_ADD;
+    ct.blend_state.alpha_blend_op = SDL_GPU_BLENDOP_ADD;
+    ct.blend_state.src_color_blendfactor = SDL_GPU_BLENDFACTOR_SRC_ALPHA;
+    ct.blend_state.dst_color_blendfactor = SDL_GPU_BLENDFACTOR_ZERO;
+    ct.blend_state.src_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
+    ct.blend_state.dst_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ZERO;
+
+    info.target_info.color_target_descriptions = &ct;
+    info.target_info.num_color_targets         = 1;
+    info.target_info.has_depth_stencil_target  = false;
+
+    info.vertex_input_state.num_vertex_buffers  = 0;
+    info.vertex_input_state.vertex_buffer_descriptions = NULL;
+    info.vertex_input_state.num_vertex_attributes = 0;
+    info.vertex_input_state.vertex_attributes    = NULL;
+
+    info.rasterizer_state.fill_mode  = SDL_GPU_FILLMODE_FILL;
+    info.rasterizer_state.cull_mode  = SDL_GPU_CULLMODE_NONE;
+    info.rasterizer_state.front_face = SDL_GPU_FRONTFACE_COUNTER_CLOCKWISE;
+
+    info.depth_stencil_state.enable_depth_test   = false;
+    info.depth_stencil_state.enable_depth_write  = false;
+    info.depth_stencil_state.enable_stencil_test = false;
+
+    return SDL_CreateGPUGraphicsPipeline(g_sdl.device, &info);
+}
+
+// Fullscreen pipeline that composites a PREMULTIPLIED-alpha source over the destination:
+// out = src + dst*(1-src.a). Used to upscale + composite nebula_rt over the scene/swapchain.
+static SDL_GPUGraphicsPipeline* create_premult_over_postprocess_pipeline(
+    SDL_GPUShader* vs, SDL_GPUShader* fs,
+    SDL_GPUTextureFormat color_fmt)
+{
+    SDL_GPUGraphicsPipelineCreateInfo info;
+    SDL_zero(info);
+    info.vertex_shader   = vs;
+    info.fragment_shader = fs;
+    info.primitive_type  = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST;
+
+    SDL_GPUColorTargetDescription ct;
+    SDL_zero(ct);
+    ct.format = color_fmt;
+    ct.blend_state.enable_blend = true;
+    ct.blend_state.color_blend_op = SDL_GPU_BLENDOP_ADD;
+    ct.blend_state.alpha_blend_op = SDL_GPU_BLENDOP_ADD;
+    ct.blend_state.src_color_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
+    ct.blend_state.dst_color_blendfactor = SDL_GPU_BLENDFACTOR_ONE_MINUS_SRC_ALPHA;
+    ct.blend_state.src_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
+    ct.blend_state.dst_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE_MINUS_SRC_ALPHA;
 
     info.target_info.color_target_descriptions = &ct;
     info.target_info.num_color_targets         = 1;
@@ -911,6 +1067,25 @@ static b8 create_postprocess_pipelines(void)
     SDL_ReleaseGPUShader(g_sdl.device, fs_starfield_layer);
     if (!g_sdl.pipeline_starfield_layer_swapchain) { BS_LOG_FATAL("create_postprocess_pipelines: starfield_layer_swapchain failed"); SDL_ReleaseGPUShader(g_sdl.device, vs); return FALSE; }
 
+    // nebula half-res: nebula FBM -> nebula_rt (RGBA8), premultiply-on-write so the half-res result
+    // upscales cleanly. Reuses the nebula_layer fragment shader (resolution-independent).
+    SDL_GPUShader* fs_nebula_layer = load_shader(g_sdl.device, "nebula_layer", "frag",
+                                                 SDL_GPU_SHADERSTAGE_FRAGMENT, 0, 1);
+    if (!fs_nebula_layer) { SDL_ReleaseGPUShader(g_sdl.device, vs); return FALSE; }
+    g_sdl.pipeline_nebula_halfres = create_premult_write_postprocess_pipeline(vs, fs_nebula_layer, offscreen_fmt);
+    SDL_ReleaseGPUShader(g_sdl.device, fs_nebula_layer);
+    if (!g_sdl.pipeline_nebula_halfres) { BS_LOG_FATAL("create_postprocess_pipelines: nebula_halfres failed"); SDL_ReleaseGPUShader(g_sdl.device, vs); return FALSE; }
+
+    // nebula composite: nebula_rt -> scene_rt (bloom path) and -> swapchain (non-bloom), premult-over.
+    SDL_GPUShader* fs_nebula_composite = load_shader(g_sdl.device, "nebula_composite", "frag",
+                                                     SDL_GPU_SHADERSTAGE_FRAGMENT, 1, 0);
+    if (!fs_nebula_composite) { SDL_ReleaseGPUShader(g_sdl.device, vs); return FALSE; }
+    g_sdl.pipeline_nebula_composite = create_premult_over_postprocess_pipeline(vs, fs_nebula_composite, offscreen_fmt);
+    if (!g_sdl.pipeline_nebula_composite) { BS_LOG_FATAL("create_postprocess_pipelines: nebula_composite failed"); SDL_ReleaseGPUShader(g_sdl.device, fs_nebula_composite); SDL_ReleaseGPUShader(g_sdl.device, vs); return FALSE; }
+    g_sdl.pipeline_nebula_composite_swapchain = create_premult_over_postprocess_pipeline(vs, fs_nebula_composite, swap_fmt);
+    SDL_ReleaseGPUShader(g_sdl.device, fs_nebula_composite);
+    if (!g_sdl.pipeline_nebula_composite_swapchain) { BS_LOG_FATAL("create_postprocess_pipelines: nebula_composite_swapchain failed"); SDL_ReleaseGPUShader(g_sdl.device, vs); return FALSE; }
+
     // sunburst -> offscreen (bloom path) — additive blend, custom quad shader
     SDL_GPUShader* vs_sunburst = load_shader(g_sdl.device, "sunburst", "vert",
                                               SDL_GPU_SHADERSTAGE_VERTEX, 0, 1);
@@ -935,6 +1110,30 @@ static b8 create_postprocess_pipelines(void)
     SDL_ReleaseGPUShader(g_sdl.device, vs_sunburst);
     if (!g_sdl.pipeline_sunburst_swapchain) { BS_LOG_FATAL("create_postprocess_pipelines: sunburst_swapchain failed"); SDL_ReleaseGPUShader(g_sdl.device, vs); return FALSE; }
 
+    // star_surface -> offscreen (bloom path) — premult-over blend so the disc occludes the scene.
+    SDL_GPUShader* vs_starsurf = load_shader(g_sdl.device, "star_surface", "vert",
+                                              SDL_GPU_SHADERSTAGE_VERTEX, 0, 1);
+    if (!vs_starsurf) { SDL_ReleaseGPUShader(g_sdl.device, vs); return FALSE; }
+    SDL_GPUShader* fs_starsurf = load_shader(g_sdl.device, "star_surface", "frag",
+                                              SDL_GPU_SHADERSTAGE_FRAGMENT, 0, 1);
+    if (!fs_starsurf) { SDL_ReleaseGPUShader(g_sdl.device, vs); SDL_ReleaseGPUShader(g_sdl.device, vs_starsurf); return FALSE; }
+    g_sdl.pipeline_starsurface = create_premult_over_postprocess_pipeline(vs_starsurf, fs_starsurf, offscreen_fmt);
+    SDL_ReleaseGPUShader(g_sdl.device, fs_starsurf);
+    SDL_ReleaseGPUShader(g_sdl.device, vs_starsurf);
+    if (!g_sdl.pipeline_starsurface) { BS_LOG_FATAL("create_postprocess_pipelines: star_surface failed"); SDL_ReleaseGPUShader(g_sdl.device, vs); return FALSE; }
+
+    // star_surface -> swapchain (non-bloom direct-to-screen path)
+    vs_starsurf = load_shader(g_sdl.device, "star_surface", "vert",
+                               SDL_GPU_SHADERSTAGE_VERTEX, 0, 1);
+    if (!vs_starsurf) { SDL_ReleaseGPUShader(g_sdl.device, vs); return FALSE; }
+    fs_starsurf = load_shader(g_sdl.device, "star_surface", "frag",
+                               SDL_GPU_SHADERSTAGE_FRAGMENT, 0, 1);
+    if (!fs_starsurf) { SDL_ReleaseGPUShader(g_sdl.device, vs); SDL_ReleaseGPUShader(g_sdl.device, vs_starsurf); return FALSE; }
+    g_sdl.pipeline_starsurface_swapchain = create_premult_over_postprocess_pipeline(vs_starsurf, fs_starsurf, swap_fmt);
+    SDL_ReleaseGPUShader(g_sdl.device, fs_starsurf);
+    SDL_ReleaseGPUShader(g_sdl.device, vs_starsurf);
+    if (!g_sdl.pipeline_starsurface_swapchain) { BS_LOG_FATAL("create_postprocess_pipelines: star_surface_swapchain failed"); SDL_ReleaseGPUShader(g_sdl.device, vs); return FALSE; }
+
     // composite -> swapchain (must match swapchain format); 4 samplers (scene + bloom + streak + flare)
     SDL_GPUShader* fs_composite = load_shader(g_sdl.device, "bloom_composite", "frag",
                                                SDL_GPU_SHADERSTAGE_FRAGMENT, 4, 1);
@@ -942,6 +1141,16 @@ static b8 create_postprocess_pipelines(void)
     g_sdl.pipeline_composite = create_postprocess_pipeline(vs, fs_composite, swap_fmt);
     SDL_ReleaseGPUShader(g_sdl.device, fs_composite);
     if (!g_sdl.pipeline_composite) { BS_LOG_FATAL("create_postprocess_pipelines: composite failed"); SDL_ReleaseGPUShader(g_sdl.device, vs); return FALSE; }
+
+    // heat_map -> heat_rt (half-res, premultiply-on-write). Rendered once at half resolution then
+    // upscaled + composited (premult-over) via the shared nebula composite pipelines. The shader
+    // still returns straight-alpha float4; the premult-write blend premultiplies it into heat_rt.
+    SDL_GPUShader* fs_heat_map = load_shader(g_sdl.device, "heat_map", "frag",
+                                              SDL_GPU_SHADERSTAGE_FRAGMENT, 0, 1);
+    if (!fs_heat_map) { BS_LOG_FATAL("create_postprocess_pipelines: heat_map shader failed"); SDL_ReleaseGPUShader(g_sdl.device, vs); return FALSE; }
+    g_sdl.pipeline_heat_map_halfres = create_premult_write_postprocess_pipeline(vs, fs_heat_map, offscreen_fmt);
+    SDL_ReleaseGPUShader(g_sdl.device, fs_heat_map);
+    if (!g_sdl.pipeline_heat_map_halfres) { BS_LOG_FATAL("create_postprocess_pipelines: heat_map halfres pipeline failed"); SDL_ReleaseGPUShader(g_sdl.device, vs); return FALSE; }
 
     SDL_ReleaseGPUShader(g_sdl.device, vs);
     return TRUE;
@@ -1188,6 +1397,8 @@ void sdlgpu_backend_shutdown(struct renderer_backend* backend)
     if (g_sdl.bloom_b)    SDL_ReleaseGPUTexture(g_sdl.device, g_sdl.bloom_b);
     if (g_sdl.aux_bloom_a) SDL_ReleaseGPUTexture(g_sdl.device, g_sdl.aux_bloom_a);
     if (g_sdl.aux_bloom_b) SDL_ReleaseGPUTexture(g_sdl.device, g_sdl.aux_bloom_b);
+    if (g_sdl.nebula_rt)  SDL_ReleaseGPUTexture(g_sdl.device, g_sdl.nebula_rt);
+    if (g_sdl.heat_rt)    SDL_ReleaseGPUTexture(g_sdl.device, g_sdl.heat_rt);
     if (g_sdl.pipeline_extract)   SDL_ReleaseGPUGraphicsPipeline(g_sdl.device, g_sdl.pipeline_extract);
     if (g_sdl.pipeline_blur_h)    SDL_ReleaseGPUGraphicsPipeline(g_sdl.device, g_sdl.pipeline_blur_h);
     if (g_sdl.pipeline_blur_v)    SDL_ReleaseGPUGraphicsPipeline(g_sdl.device, g_sdl.pipeline_blur_v);
@@ -1195,9 +1406,15 @@ void sdlgpu_backend_shutdown(struct renderer_backend* backend)
     if (g_sdl.pipeline_flare)     SDL_ReleaseGPUGraphicsPipeline(g_sdl.device, g_sdl.pipeline_flare);
     if (g_sdl.pipeline_starfield_layer)          SDL_ReleaseGPUGraphicsPipeline(g_sdl.device, g_sdl.pipeline_starfield_layer);
     if (g_sdl.pipeline_starfield_layer_swapchain) SDL_ReleaseGPUGraphicsPipeline(g_sdl.device, g_sdl.pipeline_starfield_layer_swapchain);
+    if (g_sdl.pipeline_nebula_halfres)             SDL_ReleaseGPUGraphicsPipeline(g_sdl.device, g_sdl.pipeline_nebula_halfres);
+    if (g_sdl.pipeline_nebula_composite)           SDL_ReleaseGPUGraphicsPipeline(g_sdl.device, g_sdl.pipeline_nebula_composite);
+    if (g_sdl.pipeline_nebula_composite_swapchain) SDL_ReleaseGPUGraphicsPipeline(g_sdl.device, g_sdl.pipeline_nebula_composite_swapchain);
     if (g_sdl.pipeline_sunburst)          SDL_ReleaseGPUGraphicsPipeline(g_sdl.device, g_sdl.pipeline_sunburst);
     if (g_sdl.pipeline_sunburst_swapchain) SDL_ReleaseGPUGraphicsPipeline(g_sdl.device, g_sdl.pipeline_sunburst_swapchain);
+    if (g_sdl.pipeline_starsurface)          SDL_ReleaseGPUGraphicsPipeline(g_sdl.device, g_sdl.pipeline_starsurface);
+    if (g_sdl.pipeline_starsurface_swapchain) SDL_ReleaseGPUGraphicsPipeline(g_sdl.device, g_sdl.pipeline_starsurface_swapchain);
     if (g_sdl.pipeline_composite) SDL_ReleaseGPUGraphicsPipeline(g_sdl.device, g_sdl.pipeline_composite);
+    if (g_sdl.pipeline_heat_map_halfres) SDL_ReleaseGPUGraphicsPipeline(g_sdl.device, g_sdl.pipeline_heat_map_halfres);
     if (g_sdl.pipeline_mapped) SDL_ReleaseGPUGraphicsPipeline(g_sdl.device, g_sdl.pipeline_mapped);
     if (g_sdl.pipeline_mapped_offscreen) SDL_ReleaseGPUGraphicsPipeline(g_sdl.device, g_sdl.pipeline_mapped_offscreen);
 
@@ -1229,11 +1446,15 @@ void sdlgpu_backend_on_resize(struct renderer_backend* backend, u16 width, u16 h
         if (g_sdl.bloom_b)  SDL_ReleaseGPUTexture(g_sdl.device, g_sdl.bloom_b);
         if (g_sdl.aux_bloom_a) SDL_ReleaseGPUTexture(g_sdl.device, g_sdl.aux_bloom_a);
         if (g_sdl.aux_bloom_b) SDL_ReleaseGPUTexture(g_sdl.device, g_sdl.aux_bloom_b);
+        if (g_sdl.nebula_rt)  SDL_ReleaseGPUTexture(g_sdl.device, g_sdl.nebula_rt);
+        if (g_sdl.heat_rt)    SDL_ReleaseGPUTexture(g_sdl.device, g_sdl.heat_rt);
         g_sdl.scene_rt = NULL;
         g_sdl.bloom_a  = NULL;
         g_sdl.bloom_b  = NULL;
         g_sdl.aux_bloom_a = NULL;
         g_sdl.aux_bloom_b = NULL;
+        g_sdl.nebula_rt   = NULL;
+        g_sdl.heat_rt     = NULL;
 
         if (!create_bloom_targets((u32)width, (u32)height))
             BS_LOG_ERROR("on_resize: failed to recreate bloom targets (%ux%u).", (u32)width, (u32)height);
@@ -1266,6 +1487,9 @@ b8 sdlgpu_backend_begin_frame(struct renderer_backend* backend, f32 dt)
     g_sdl.mapped_batch_count = 0; // reset mapped sprite queue
     g_sdl.starfield_queue_count = 0; // reset starfield layer queue
     g_sdl.sunburst_queue_count  = 0; // reset sunburst star queue
+    g_sdl.starsurface_queue_count = 0; // reset star surface queue
+    g_sdl.heat_map_set          = FALSE; // reset heat map; game must re-submit each frame
+    g_sdl.nebula_set            = FALSE; // reset nebula layer; game must re-submit each frame
     g_sdl.streak_source_set     = FALSE; // source must be resubmitted each frame
 
     // Begin the ImGui frame here, AFTER a command buffer is secured, so the game can build
@@ -1286,6 +1510,39 @@ b8 sdlgpu_backend_begin_frame(struct renderer_backend* backend, f32 dt)
 // =====================================================================================
 // Texture create / destroy.
 // =====================================================================================
+// Uploads RGBA8 pixel data to an already-created SDL GPU texture. Handles the transient
+// upload transfer buffer and command buffer. Returns FALSE if any GPU resource fails.
+static b8 sdlgpu_upload_texture_pixels(SDL_GPUTexture* tex, const u8* pixels, u32 width, u32 height, const char* ctx)
+{
+    u32 byte_count = width * height * 4u;
+
+    SDL_GPUTransferBufferCreateInfo tinfo;
+    SDL_zero(tinfo);
+    tinfo.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
+    tinfo.size  = byte_count;
+    SDL_GPUTransferBuffer* tb = SDL_CreateGPUTransferBuffer(g_sdl.device, &tinfo);
+    if (!tb) { BS_LOG_ERROR("%s: transfer buffer failed: %s", ctx, SDL_GetError()); return FALSE; }
+
+    void* map = SDL_MapGPUTransferBuffer(g_sdl.device, tb, false);
+    SDL_memcpy(map, pixels, byte_count);
+    SDL_UnmapGPUTransferBuffer(g_sdl.device, tb);
+
+    SDL_GPUCommandBuffer* up = SDL_AcquireGPUCommandBuffer(g_sdl.device);
+    if (!up) { BS_LOG_ERROR("%s: command buffer failed: %s", ctx, SDL_GetError()); SDL_ReleaseGPUTransferBuffer(g_sdl.device, tb); return FALSE; }
+
+    SDL_GPUCopyPass* cp = SDL_BeginGPUCopyPass(up);
+    SDL_GPUTextureTransferInfo src; SDL_zero(src);
+    src.transfer_buffer = tb; src.offset = 0; src.pixels_per_row = width; src.rows_per_layer = height;
+    SDL_GPUTextureRegion dst; SDL_zero(dst);
+    dst.texture = tex; dst.w = width; dst.h = height; dst.d = 1;
+    SDL_UploadToGPUTexture(cp, &src, &dst, false);
+    SDL_EndGPUCopyPass(cp);
+    SDL_SubmitGPUCommandBuffer(up);
+    SDL_ReleaseGPUTransferBuffer(g_sdl.device, tb);
+
+    return TRUE;
+}
+
 bs_texture sdlgpu_backend_create_texture(struct renderer_backend* backend, const u8* pixels, u32 width, u32 height)
 {
     (void)backend;
@@ -1306,35 +1563,33 @@ bs_texture sdlgpu_backend_create_texture(struct renderer_backend* backend, const
     SDL_GPUTexture* tex = SDL_CreateGPUTexture(g_sdl.device, &info);
     if (!tex) { BS_LOG_ERROR("create_texture: SDL_CreateGPUTexture failed: %s", SDL_GetError()); return invalid; }
 
-    u32 byte_count = width * height * 4u;
-
-    SDL_GPUTransferBufferCreateInfo tinfo;
-    SDL_zero(tinfo);
-    tinfo.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
-    tinfo.size  = byte_count;
-    SDL_GPUTransferBuffer* tb = SDL_CreateGPUTransferBuffer(g_sdl.device, &tinfo);
-    if (!tb) { BS_LOG_ERROR("create_texture: transfer buffer failed: %s", SDL_GetError()); SDL_ReleaseGPUTexture(g_sdl.device, tex); return invalid; }
-
-    void* map = SDL_MapGPUTransferBuffer(g_sdl.device, tb, false);
-    SDL_memcpy(map, pixels, byte_count);
-    SDL_UnmapGPUTransferBuffer(g_sdl.device, tb);
-
-    SDL_GPUCommandBuffer* up = SDL_AcquireGPUCommandBuffer(g_sdl.device);
-    SDL_GPUCopyPass* cp = SDL_BeginGPUCopyPass(up);
-    SDL_GPUTextureTransferInfo src; SDL_zero(src);
-    src.transfer_buffer = tb; src.offset = 0; src.pixels_per_row = width; src.rows_per_layer = height;
-    SDL_GPUTextureRegion dst; SDL_zero(dst);
-    dst.texture = tex; dst.w = width; dst.h = height; dst.d = 1;
-    SDL_UploadToGPUTexture(cp, &src, &dst, false);
-    SDL_EndGPUCopyPass(cp);
-    SDL_SubmitGPUCommandBuffer(up);
-    SDL_ReleaseGPUTransferBuffer(g_sdl.device, tb);
+    if (!sdlgpu_upload_texture_pixels(tex, pixels, width, height, "create_texture"))
+    {
+        SDL_ReleaseGPUTexture(g_sdl.device, tex);
+        return invalid;
+    }
 
     bs_texture handle = pool_alloc_texture(tex, width, height);
     if (handle.id == BS_INVALID_HANDLE) { SDL_ReleaseGPUTexture(g_sdl.device, tex); return invalid; }
 
     BS_LOG_DEBUG("create_texture: %ux%u -> id 0x%x.", width, height, handle.id);
     return handle;
+}
+
+b8 sdlgpu_backend_update_texture(struct renderer_backend* backend, bs_texture texture, const u8* pixels, u32 width, u32 height)
+{
+    (void)backend;
+    if (!pixels || width == 0 || height == 0) { BS_LOG_ERROR("update_texture: invalid args."); return FALSE; }
+
+    gpu_texture* slot = pool_resolve_texture(texture);
+    if (!slot) { BS_LOG_ERROR("update_texture: invalid texture handle."); return FALSE; }
+    if (slot->width != width || slot->height != height)
+    {
+        BS_LOG_ERROR("update_texture: size mismatch (handle %ux%u, update %ux%u).", slot->width, slot->height, width, height);
+        return FALSE;
+    }
+
+    return sdlgpu_upload_texture_pixels(slot->tex, pixels, width, height, "update_texture");
 }
 
 void sdlgpu_backend_destroy_texture(struct renderer_backend* backend, bs_texture texture)
@@ -1449,7 +1704,8 @@ void sdlgpu_backend_draw_starfield(struct renderer_backend* backend, const bs_st
 
     if (g_sdl.starfield_queue_count >= BS_MAX_STARFIELD_LAYERS)
     {
-        BS_LOG_WARN("draw_starfield: queue full (%u); dropping layer.", (u32)BS_MAX_STARFIELD_LAYERS);
+        // Queue is a fixed-size safety net; the caller is expected to submit within budget.
+        // Silently drop extras (logging here spams every frame).
         return;
     }
     auto& slot = g_sdl.starfield_queue[g_sdl.starfield_queue_count++];
@@ -1464,7 +1720,8 @@ void sdlgpu_backend_draw_sunburst(struct renderer_backend* backend, const bs_sun
 
     if (g_sdl.sunburst_queue_count >= BS_MAX_SUNBURST_STARS)
     {
-        BS_LOG_WARN("draw_sunburst: queue full (%u); dropping star.", (u32)BS_MAX_SUNBURST_STARS);
+        // Queue is a fixed-size safety net; the caller caps submissions to the brightest stars.
+        // Silently drop extras (logging here spams every frame).
         return;
     }
     auto& slot = g_sdl.sunburst_queue[g_sdl.sunburst_queue_count++];
@@ -1497,6 +1754,61 @@ void sdlgpu_backend_draw_sunburst(struct renderer_backend* backend, const bs_sun
         a->sprite   = proxy;
         a->sort_key = sort_key;
     }
+}
+
+void sdlgpu_backend_draw_starsurface(struct renderer_backend* backend, const bs_starsurface_params* params)
+{
+    (void)backend;
+    if (!params) return;
+
+    if (g_sdl.starsurface_queue_count >= BS_MAX_STARSURFACE_STARS)
+        return; // fixed-size safety net; silently drop extras
+
+    auto& slot = g_sdl.starsurface_queue[g_sdl.starsurface_queue_count++];
+    slot.active = TRUE;
+    slot.params = *params;
+
+    // Aux-bloom proxy: the surface shader is not captured by the sprite batch, so emit a bright
+    // additive proxy sprite into the aux batch when this star should streak (mirrors sunburst).
+    if (params->aux_bloom && g_sdl.aux_bloom_mode && g_sdl.aux_batch_count < BS_MAX_SPRITES)
+    {
+        bs_sprite proxy{};
+        proxy.position  = bs_math::Vec2{ params->aux_bloom_world_pos.x, params->aux_bloom_world_pos.y };
+        f32 world_body  = params->body_radius / g_sdl.camera.zoom;
+        proxy.size      = bs_math::Vec2{ world_body * 2.0f, world_body * 2.0f };
+        proxy.origin    = bs_math::Vec2{ 0.5f, 0.5f };
+        proxy.rotation  = 0.0f;
+        proxy.uv        = bs_rect{ 0.0f, 0.0f, 1.0f, 1.0f };
+        proxy.tint      = params->color;
+        proxy.tint.a    = params->visibility;
+        proxy.texture   = g_sdl.circle_texture;
+        proxy.blend     = BLEND_ADDITIVE;
+        proxy.layer     = params->layer;
+        proxy.glow_override = nullptr;
+
+        u32 tex_index = (g_sdl.circle_texture.id & 0x3FFFFu);
+        u32 sort_key  = make_sort_key(proxy.layer, proxy.blend, tex_index);
+
+        batched_sprite* a = &g_sdl.aux_batch[g_sdl.aux_batch_count++];
+        a->sprite   = proxy;
+        a->sort_key = sort_key;
+    }
+}
+
+void sdlgpu_backend_draw_heat_map(struct renderer_backend* backend, const bs_heat_map_params* params)
+{
+    (void)backend;
+    if (!params) return;
+    g_sdl.heat_map_params = *params;
+    g_sdl.heat_map_set    = TRUE;
+}
+
+void sdlgpu_backend_draw_nebula(struct renderer_backend* backend, const bs_nebula_params* params)
+{
+    (void)backend;
+    if (!params) return;
+    g_sdl.nebula_params = *params;
+    g_sdl.nebula_set    = TRUE;
 }
 
 void sdlgpu_backend_draw_sprite(struct renderer_backend* backend, const bs_sprite* sprite)
@@ -1553,6 +1865,31 @@ void sdlgpu_backend_get_frame_stats(struct renderer_backend* backend, bs_frame_s
     (void)backend;
     if (!out_stats) return;
     *out_stats = g_sdl.last_stats;
+}
+
+void sdlgpu_backend_set_present_mode(struct renderer_backend* backend, b8 immediate)
+{
+    (void)backend;
+    if (!g_sdl.device || !g_sdl.window) return;
+
+    SDL_GPUPresentMode mode = immediate ? SDL_GPU_PRESENTMODE_IMMEDIATE : SDL_GPU_PRESENTMODE_VSYNC;
+
+    // IMMEDIATE is optional per SDL; fall back to VSYNC if the driver does not support it.
+    if (mode == SDL_GPU_PRESENTMODE_IMMEDIATE &&
+        !SDL_WindowSupportsGPUPresentMode(g_sdl.device, g_sdl.window, SDL_GPU_PRESENTMODE_IMMEDIATE))
+    {
+        BS_LOG_WARN("IMMEDIATE present mode unsupported by this driver; staying on VSYNC.");
+        return;
+    }
+
+    if (!SDL_SetGPUSwapchainParameters(g_sdl.device, g_sdl.window,
+                                       SDL_GPU_SWAPCHAINCOMPOSITION_SDR, mode))
+    {
+        BS_LOG_WARN("SDL_SetGPUSwapchainParameters failed: %s", SDL_GetError());
+        return;
+    }
+
+    BS_LOG_INFO("Present mode set to %s.", immediate ? "IMMEDIATE" : "VSYNC");
 }
 
 // =====================================================================================
@@ -2017,6 +2354,120 @@ b8 sdlgpu_backend_end_frame(struct renderer_backend* backend, f32 dt)
 
     u32 draw_calls = 0;
 
+    // ---- PASS 0: render the nebula FBM once into the half-resolution target (premultiplied) ----
+    // The nebula fragment shader is fill-rate bound; rendering at half resolution cuts its shader
+    // invocations ~4x. It is later bilinearly upscaled and composited over the scene/swapchain in
+    // whichever main pass runs below. Skipped entirely when no nebula is queued this frame.
+    b8 nebula_ready = FALSE;
+    if (g_sdl.nebula_set && g_sdl.pipeline_nebula_halfres && g_sdl.nebula_rt)
+    {
+        SDL_GPUColorTargetInfo neb_target;
+        SDL_zero(neb_target);
+        neb_target.texture     = g_sdl.nebula_rt;
+        neb_target.clear_color = SDL_FColor{ 0.0f, 0.0f, 0.0f, 0.0f };
+        neb_target.load_op     = SDL_GPU_LOADOP_CLEAR;
+        neb_target.store_op    = SDL_GPU_STOREOP_STORE;
+
+        g_sdl.pass = SDL_BeginGPURenderPass(g_sdl.cmd, &neb_target, 1, NULL);
+        const bs_nebula_params& p = g_sdl.nebula_params;
+        SDL_BindGPUGraphicsPipeline(g_sdl.pass, g_sdl.pipeline_nebula_halfres);
+        float ubo[40];
+        ubo[0]  = p.cam_cell.x;
+        ubo[1]  = p.cam_cell.y;
+        ubo[2]  = p.cam.zoom;
+        ubo[3]  = (float)p.fb_w;
+        ubo[4]  = (float)p.fb_h;
+        ubo[5]  = p.intensity;
+        ubo[6]  = p.dust_intensity;
+        ubo[7]  = (float)p.seed;
+        ubo[8]  = p.gas_color_a.r; ubo[9]  = p.gas_color_a.g; ubo[10] = p.gas_color_a.b; ubo[11] = p.lod_target;
+        ubo[12] = p.gas_color_b.r; ubo[13] = p.gas_color_b.g; ubo[14] = p.gas_color_b.b; ubo[15] = p.parallax;
+        ubo[16] = p.gas_color_c.r; ubo[17] = p.gas_color_c.g; ubo[18] = p.gas_color_c.b; ubo[19] = 0.0f;
+        ubo[20] = p.dust_color.r;  ubo[21] = p.dust_color.g;  ubo[22] = p.dust_color.b;  ubo[23] = 0.0f;
+        ubo[24] = p.gas_brightness_mul;
+        ubo[25] = p.highlight_power;
+        ubo[26] = p.palette_shift;
+        ubo[27] = p.swirl_strength;
+        ubo[28] = p.falloff_radius;
+        ubo[29] = p.band_strength;
+        ubo[30] = p.cam_local.x;
+        ubo[31] = p.cam_local.y;
+        // biome0 = (strength, scale, hue_spread, zoom_detail); biome1 = (zoom_saturation, _, _, _)
+        ubo[32] = p.biome_strength;
+        ubo[33] = p.biome_scale;
+        ubo[34] = p.biome_hue_spread;
+        ubo[35] = p.zoom_detail;
+        ubo[36] = p.zoom_saturation;
+        ubo[37] = 0.0f;
+        ubo[38] = 0.0f;
+        ubo[39] = 0.0f;
+        SDL_PushGPUFragmentUniformData(g_sdl.cmd, 0, ubo, sizeof(ubo));
+        SDL_DrawGPUPrimitives(g_sdl.pass, 3, 1, 0, 0);
+        SDL_EndGPURenderPass(g_sdl.pass);
+        g_sdl.pass = NULL;
+        nebula_ready = TRUE;
+    }
+
+    // ---- PASS 0b: render the radiation heat map once into the half-resolution target ------------
+    // Same rationale as the nebula: the heat_map fragment shader loops over every source per pixel
+    // plus a domain-warp noise, so it is fill-rate bound. Render it at half resolution (premultiply-
+    // on-write into a cleared-transparent target), then upscale + composite below. The UBO packing is
+    // identical to the old inline full-res draw: viewport spans the full framebuffer, so uv 0..1 across
+    // the half-res target maps world positions exactly as before.
+    b8 heat_ready = FALSE;
+    if (g_sdl.heat_map_set && g_sdl.pipeline_heat_map_halfres && g_sdl.heat_rt)
+    {
+        SDL_GPUColorTargetInfo heat_target;
+        SDL_zero(heat_target);
+        heat_target.texture     = g_sdl.heat_rt;
+        heat_target.clear_color = SDL_FColor{ 0.0f, 0.0f, 0.0f, 0.0f };
+        heat_target.load_op     = SDL_GPU_LOADOP_CLEAR;
+        heat_target.store_op    = SDL_GPU_STOREOP_STORE;
+
+        g_sdl.pass = SDL_BeginGPURenderPass(g_sdl.cmd, &heat_target, 1, NULL);
+        const bs_heat_map_params& p = g_sdl.heat_map_params;
+        SDL_BindGPUGraphicsPipeline(g_sdl.pass, g_sdl.pipeline_heat_map_halfres);
+        float ubo[4 + 4 + 4 + 4 + 4 + BS_MAX_HEAT_SOURCES * 4];
+        ubo[0] = p.camera_pos.x; ubo[1] = p.camera_pos.y; ubo[2] = p.viewport_w; ubo[3] = p.viewport_h;
+        ubo[4] = p.base_radius;  ubo[5] = p.heat_warp_strength; ubo[6] = p.threshold; ubo[7] = p.intensity;
+        ubo[8] = (float)p.source_count; ubo[9] = p.venn_sharpness; ubo[10] = p.heat_signature_radius; ubo[11] = p.color_falloff_power;
+        ubo[12] = (float)p.palette; ubo[13] = p.color_low.r; ubo[14] = p.color_low.g; ubo[15] = p.color_low.b;
+        ubo[16] = p.color_high.r; ubo[17] = p.color_high.g; ubo[18] = p.color_high.b; ubo[19] = 0.0f;
+        for (u32 i = 0; i < p.source_count; ++i) {
+            ubo[20 + i*4]   = p.sources[i].x;
+            ubo[20 + i*4+1] = p.sources[i].y;
+            ubo[20 + i*4+2] = p.is_detector[i] ? 1.0f : 0.0f;
+            ubo[20 + i*4+3] = p.emissions[i];
+        }
+        SDL_PushGPUFragmentUniformData(g_sdl.cmd, 0, ubo, sizeof(ubo));
+        SDL_DrawGPUPrimitives(g_sdl.pass, 3, 1, 0, 0);
+        SDL_EndGPURenderPass(g_sdl.pass);
+        g_sdl.pass = NULL;
+        heat_ready = TRUE;
+    }
+
+    // Bind + draw the upscale/composite of nebula_rt into the CURRENT pass (premultiplied over).
+    auto composite_nebula = [&](SDL_GPUGraphicsPipeline* pipe) {
+        if (!nebula_ready || !pipe) return;
+        SDL_BindGPUGraphicsPipeline(g_sdl.pass, pipe);
+        SDL_GPUTextureSamplerBinding nb; SDL_zero(nb);
+        nb.texture = g_sdl.nebula_rt;
+        nb.sampler = g_sdl.sampler_linear;
+        SDL_BindGPUFragmentSamplers(g_sdl.pass, 0, &nb, 1);
+        SDL_DrawGPUPrimitives(g_sdl.pass, 3, 1, 0, 0);
+    };
+
+    // Same for the half-res heat map (shares the nebula composite pipelines: premult-over copy).
+    auto composite_heat = [&](SDL_GPUGraphicsPipeline* pipe) {
+        if (!heat_ready || !pipe) return;
+        SDL_BindGPUGraphicsPipeline(g_sdl.pass, pipe);
+        SDL_GPUTextureSamplerBinding hb; SDL_zero(hb);
+        hb.texture = g_sdl.heat_rt;
+        hb.sampler = g_sdl.sampler_linear;
+        SDL_BindGPUFragmentSamplers(g_sdl.pass, 0, &hb, 1);
+        SDL_DrawGPUPrimitives(g_sdl.pass, 3, 1, 0, 0);
+    };
+
     b8 use_offscreen = g_sdl.scene_rt && g_sdl.bloom_a && g_sdl.bloom_b;
     b8 need_bloom    = g_sdl.bloom_enabled;
     b8 need_streak   = g_sdl.streak_enabled && aux_count > 0;
@@ -2040,8 +2491,8 @@ b8 sdlgpu_backend_end_frame(struct renderer_backend* backend, f32 dt)
             if (g_sdl.pipeline_starfield_layer) {
                 SDL_BindGPUGraphicsPipeline(g_sdl.pass, g_sdl.pipeline_starfield_layer);
                 float layer_params[16];
-                layer_params[0]  = p.cam.position.x;
-                layer_params[1]  = p.cam.position.y;
+                layer_params[0]  = p.cam_cell.x;
+                layer_params[1]  = p.cam_cell.y;
                 layer_params[2]  = p.cam.zoom;
                 layer_params[3]  = (float)p.fb_w;
                 layer_params[4]  = (float)p.fb_h;
@@ -2049,19 +2500,22 @@ b8 sdlgpu_backend_end_frame(struct renderer_backend* backend, f32 dt)
                 layer_params[6]  = p.size_mul;
                 layer_params[7]  = p.brightness_mul;
                 layer_params[8]  = (float)p.seed;
-                layer_params[9]  = 0.0f;
-                layer_params[10] = 0.0f;
-                layer_params[11] = 0.0f;
-                layer_params[12] = p.star_pos.x;
-                layer_params[13] = p.star_pos.y;
+                layer_params[9]  = p.cam_local.x;
+                layer_params[10] = p.cam_local.y;
+                layer_params[11] = p.base_cell;
+                layer_params[12] = p.star_rel.x;
+                layer_params[13] = p.star_rel.y;
                 layer_params[14] = p.dazzle_inner;
                 layer_params[15] = p.dazzle_outer;
-                float dazzle_params[4] = { p.dazzle_intensity, 0.0f, 0.0f, 0.0f };
+                float dazzle_params[8] = { p.dazzle_intensity, p.target_px, p.lod_levels, p.lod_factor,
+                                           p.parallax_near, p.parallax_falloff, 0.0f, 0.0f };
                 SDL_PushGPUFragmentUniformData(g_sdl.cmd, 0, layer_params, sizeof(layer_params));
                 SDL_PushGPUFragmentUniformData(g_sdl.cmd, 1, dazzle_params, sizeof(dazzle_params));
                 SDL_DrawGPUPrimitives(g_sdl.pass, 3, 1, 0, 0);
             }
         }
+        // Composite the half-res nebula (upscaled) in front of the starfield but behind sunburst/sprites.
+        composite_nebula(g_sdl.pipeline_nebula_composite);
         // Draw queued sunburst stars behind sprites.
         for (u32 i = 0; i < g_sdl.sunburst_queue_count; ++i)
         {
@@ -2077,6 +2531,25 @@ b8 sdlgpu_backend_end_frame(struct renderer_backend* backend, f32 dt)
             SDL_PushGPUFragmentUniformData(g_sdl.cmd, 0, u, sizeof(u));
             SDL_DrawGPUPrimitives(g_sdl.pass, 6, 1, 0, 0);
         }
+        // Draw queued procedural star surfaces (occluding photosphere + corona) behind sprites.
+        for (u32 i = 0; i < g_sdl.starsurface_queue_count; ++i)
+        {
+            if (!g_sdl.starsurface_queue[i].active) continue;
+            const bs_starsurface_params& p = g_sdl.starsurface_queue[i].params;
+            SDL_BindGPUGraphicsPipeline(g_sdl.pass, g_sdl.pipeline_starsurface);
+            float u[24];
+            u[0]  = p.screen_pos.x;  u[1]  = p.screen_pos.y;  u[2]  = p.body_radius;     u[3]  = p.glow_radius;
+            u[4]  = p.color.r;       u[5]  = p.color.g;       u[6]  = p.color.b;         u[7]  = p.time;
+            u[8]  = p.noise_scale;   u[9]  = p.flow_speed;    u[10] = p.granule_contrast;u[11] = p.visibility;
+            u[12] = (float)p.fb_w;   u[13] = (float)p.fb_h;   u[14] = p.hotspot_gain;    u[15] = p.sunspot_density;
+            u[16] = p.limb_darkening;u[17] = p.brightness;    u[18] = p.corona_strength; u[19] = p.dark_radius;
+            u[20] = 0.0f; u[21] = 0.0f; u[22] = 0.0f; u[23] = 0.0f;
+            SDL_PushGPUVertexUniformData(g_sdl.cmd, 0, u, sizeof(u));
+            SDL_PushGPUFragmentUniformData(g_sdl.cmd, 0, u, sizeof(u));
+            SDL_DrawGPUPrimitives(g_sdl.pass, 6, 1, 0, 0);
+        }
+        // Composite the half-res radiation heat map behind the sprite batch (upscaled, premult-over).
+        composite_heat(g_sdl.pipeline_nebula_composite);
         draw_calls = draw_sprite_batch(TRUE, g_sdl.batch, g_sdl.batch_count, aux_count, 0, bloom_split);
         draw_calls += draw_mapped_batch(TRUE);
         SDL_EndGPURenderPass(g_sdl.pass);
@@ -2278,8 +2751,8 @@ b8 sdlgpu_backend_end_frame(struct renderer_backend* backend, f32 dt)
             if (g_sdl.pipeline_starfield_layer_swapchain) {
                 SDL_BindGPUGraphicsPipeline(g_sdl.pass, g_sdl.pipeline_starfield_layer_swapchain);
                 float layer_params[16];
-                layer_params[0]  = p.cam.position.x;
-                layer_params[1]  = p.cam.position.y;
+                layer_params[0]  = p.cam_cell.x;
+                layer_params[1]  = p.cam_cell.y;
                 layer_params[2]  = p.cam.zoom;
                 layer_params[3]  = (float)p.fb_w;
                 layer_params[4]  = (float)p.fb_h;
@@ -2287,19 +2760,22 @@ b8 sdlgpu_backend_end_frame(struct renderer_backend* backend, f32 dt)
                 layer_params[6]  = p.size_mul;
                 layer_params[7]  = p.brightness_mul;
                 layer_params[8]  = (float)p.seed;
-                layer_params[9]  = 0.0f;
-                layer_params[10] = 0.0f;
-                layer_params[11] = 0.0f;
-                layer_params[12] = p.star_pos.x;
-                layer_params[13] = p.star_pos.y;
+                layer_params[9]  = p.cam_local.x;
+                layer_params[10] = p.cam_local.y;
+                layer_params[11] = p.base_cell;
+                layer_params[12] = p.star_rel.x;
+                layer_params[13] = p.star_rel.y;
                 layer_params[14] = p.dazzle_inner;
                 layer_params[15] = p.dazzle_outer;
-                float dazzle_params[4] = { p.dazzle_intensity, 0.0f, 0.0f, 0.0f };
+                float dazzle_params[8] = { p.dazzle_intensity, p.target_px, p.lod_levels, p.lod_factor,
+                                           p.parallax_near, p.parallax_falloff, 0.0f, 0.0f };
                 SDL_PushGPUFragmentUniformData(g_sdl.cmd, 0, layer_params, sizeof(layer_params));
                 SDL_PushGPUFragmentUniformData(g_sdl.cmd, 1, dazzle_params, sizeof(dazzle_params));
                 SDL_DrawGPUPrimitives(g_sdl.pass, 3, 1, 0, 0);
             }
         }
+        // Composite the half-res nebula (upscaled) in front of the starfield but behind sunburst/sprites.
+        composite_nebula(g_sdl.pipeline_nebula_composite_swapchain);
         // Draw queued sunburst stars behind sprites.
         for (u32 i = 0; i < g_sdl.sunburst_queue_count; ++i)
         {
@@ -2315,6 +2791,25 @@ b8 sdlgpu_backend_end_frame(struct renderer_backend* backend, f32 dt)
             SDL_PushGPUFragmentUniformData(g_sdl.cmd, 0, u, sizeof(u));
             SDL_DrawGPUPrimitives(g_sdl.pass, 6, 1, 0, 0);
         }
+        // Draw queued procedural star surfaces (occluding photosphere + corona) behind sprites.
+        for (u32 i = 0; i < g_sdl.starsurface_queue_count; ++i)
+        {
+            if (!g_sdl.starsurface_queue[i].active) continue;
+            const bs_starsurface_params& p = g_sdl.starsurface_queue[i].params;
+            SDL_BindGPUGraphicsPipeline(g_sdl.pass, g_sdl.pipeline_starsurface_swapchain);
+            float u[24];
+            u[0]  = p.screen_pos.x;  u[1]  = p.screen_pos.y;  u[2]  = p.body_radius;     u[3]  = p.glow_radius;
+            u[4]  = p.color.r;       u[5]  = p.color.g;       u[6]  = p.color.b;         u[7]  = p.time;
+            u[8]  = p.noise_scale;   u[9]  = p.flow_speed;    u[10] = p.granule_contrast;u[11] = p.visibility;
+            u[12] = (float)p.fb_w;   u[13] = (float)p.fb_h;   u[14] = p.hotspot_gain;    u[15] = p.sunspot_density;
+            u[16] = p.limb_darkening;u[17] = p.brightness;    u[18] = p.corona_strength; u[19] = p.dark_radius;
+            u[20] = 0.0f; u[21] = 0.0f; u[22] = 0.0f; u[23] = 0.0f;
+            SDL_PushGPUVertexUniformData(g_sdl.cmd, 0, u, sizeof(u));
+            SDL_PushGPUFragmentUniformData(g_sdl.cmd, 0, u, sizeof(u));
+            SDL_DrawGPUPrimitives(g_sdl.pass, 6, 1, 0, 0);
+        }
+        // Composite the half-res radiation heat map behind the sprite batch (upscaled, premult-over).
+        composite_heat(g_sdl.pipeline_nebula_composite_swapchain);
         draw_calls = draw_sprite_batch(FALSE, g_sdl.batch, g_sdl.batch_count, aux_count, 0, g_sdl.batch_count);
         draw_calls += draw_mapped_batch(FALSE);
 

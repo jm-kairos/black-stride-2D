@@ -14,7 +14,7 @@ struct Weapon {
     // fire at the given origin in the given direction (unit or non-unit).
     // `ship_velocity` is the owning ship's current world velocity (added to projectile).
     // `projectiles` is the global projectile manager to spawn into.
-    virtual void fire(bs_math::Vec2 origin, bs_math::Vec2 direction,
+    virtual void fire(bs_math::HierPos2 origin, bs_math::Vec2 direction,
                       bs_math::Vec2 ship_velocity,
                       ProjectileSystem* projectiles) = 0;
     // per-frame update (cooldowns, charge states, etc.)
@@ -35,6 +35,7 @@ struct BallisticWeapon : Weapon {
     f32 projectile_speed_value;  // world units per second
     f32 projectile_lifetime;// seconds before auto-cleanup
     f32 projectile_radius;  // visual radius (world units)
+    f32 projectile_emission; // 0..1 radiation heat-source strength for the projectile
     // runtime state
     f32 cooldown_remaining; // seconds until next shot
     f32 cooldown_duration;  // 1.0f / fire_rate (cached)
@@ -42,8 +43,9 @@ struct BallisticWeapon : Weapon {
                     f32 rate,
                     f32 speed,
                     f32 lifetime,
-                    f32 radius);
-    void fire(bs_math::Vec2 origin, bs_math::Vec2 direction,
+                    f32 radius,
+                    f32 emission = 0.5f);
+    void fire(bs_math::HierPos2 origin, bs_math::Vec2 direction,
               bs_math::Vec2 ship_velocity,
               ProjectileSystem* projectiles) override;
     void update(f32 dt) override;

@@ -21,12 +21,16 @@ void sdlgpu_backend_set_clear_color(struct renderer_backend* backend, bs_color c
 
 // Phase 3: textures, camera, sprite batch.
 bs_texture sdlgpu_backend_create_texture(struct renderer_backend* backend, const u8* pixels, u32 width, u32 height);
+b8         sdlgpu_backend_update_texture(struct renderer_backend* backend, bs_texture texture, const u8* pixels, u32 width, u32 height);
 void       sdlgpu_backend_destroy_texture(struct renderer_backend* backend, bs_texture texture);
 void       sdlgpu_backend_set_camera(struct renderer_backend* backend, Camera2D camera);
 void       sdlgpu_backend_draw_sprite(struct renderer_backend* backend, const bs_sprite* sprite);
 void       sdlgpu_backend_draw_mapped_sprite(struct renderer_backend* backend, const bs_mapped_sprite* sprite);
 void       sdlgpu_backend_draw_starfield(struct renderer_backend* backend, const bs_starfield_params* params);
 void       sdlgpu_backend_draw_sunburst(struct renderer_backend* backend, const bs_sunburst_params* params);
+void       sdlgpu_backend_draw_starsurface(struct renderer_backend* backend, const bs_starsurface_params* params);
+void       sdlgpu_backend_draw_heat_map(struct renderer_backend* backend, const bs_heat_map_params* params);
+void       sdlgpu_backend_draw_nebula(struct renderer_backend* backend, const bs_nebula_params* params);
 
 // 2D point lights: stored backend-side, packed and pushed as a fragment uniform per draw-run in
 // end_frame. `ambient` is the scene-global floor; `unlit_layer` is the sprite-layer threshold at/
@@ -48,3 +52,7 @@ void       sdlgpu_backend_set_aux_bloom_mode(struct renderer_backend* backend, b
 
 // Phase 4: frame statistics (snapshotted at end of end_frame).
 void       sdlgpu_backend_get_frame_stats(struct renderer_backend* backend, bs_frame_stats* out_stats);
+
+// Runtime swapchain present mode: FALSE = VSYNC (default), TRUE = IMMEDIATE (uncapped, for
+// GPU-cost profiling). Falls back to VSYNC if IMMEDIATE is unsupported.
+void       sdlgpu_backend_set_present_mode(struct renderer_backend* backend, b8 immediate);

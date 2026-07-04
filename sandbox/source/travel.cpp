@@ -15,9 +15,9 @@ static f32 travel_ease(f32 t, TravelEaseMode mode) {
         return t;
     }
 }
-void travel_init(TravelState* ts, Vec2 ship_origin, Vec2 dest_world) {
+void travel_init(TravelState* ts, HierPos2 ship_origin, Vec2 dest_world) {
     if (!ts) return;
-    ts->origin      = hierpos_from_vec2(ship_origin, BS_HIERPOS_CELL_SIZE);
+    ts->origin      = ship_origin;
     ts->destination = hierpos_from_vec2(dest_world,  BS_HIERPOS_CELL_SIZE);
     ts->current     = ts->origin;
     ts->progress    = 0.0f;

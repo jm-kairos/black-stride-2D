@@ -53,6 +53,10 @@ bs__api__ bs_texture renderer_load_texture(const char* path);
 // Like renderer_load_texture, create these in the game's init(), not per frame.
 bs__api__ bs_texture renderer_create_texture(const u8* pixels, u32 width, u32 height);
 
+// Re-upload pixels to an existing texture created by renderer_create_texture. Width and height
+// must match the original dimensions. Safe to call with an invalid handle; returns TRUE on success.
+bs__api__ b8 renderer_update_texture(bs_texture texture, const u8* pixels, u32 width, u32 height);
+
 // Release a texture created by renderer_load_texture. Safe to call with an invalid handle.
 bs__api__ void renderer_destroy_texture(bs_texture texture);
 
@@ -66,6 +70,13 @@ bs__api__ void renderer_set_camera(Camera2D camera);
 // flushes the batch (sort -> upload -> draw). Sprites with texture id 0 use the engine's 1x1
 // white texture (solid-color fill via the tint).
 bs__api__ void renderer_draw_sprite(const bs_sprite* sprite);
+
+// Global alpha multiplier applied to every subsequent sprite/line/circle/quad tint until
+// changed or the next frame (reset to 1.0 at begin_frame). Use it to cross-fade whole render
+// passes (e.g. blending the arena and galaxy-map looks). Clamped to [0,1]. Does NOT affect
+// sunbursts/starfields/nebula (those carry their own visibility params).
+bs__api__ void renderer_set_draw_alpha(f32 alpha);
+bs__api__ f32  renderer_get_draw_alpha();
 
 // Append a 4-map mapped sprite to the current frame. Rendered inside the same scene pass as
 // regular sprites so it participates in bloom. MUST be called between begin_frame and end_frame.
@@ -81,6 +92,18 @@ bs__api__ void renderer_draw_starfield(const bs_starfield_params* params);
 // `params` carries the screen-space position, radii, colour, and time.
 // The backend queues the parameters and renders during end_frame.
 bs__api__ void renderer_draw_sunburst(const bs_sunburst_params* params);
+
+// Draw a real-time procedural star surface (animated photosphere + corona) using a custom
+// GPU pipeline. The backend queues the parameters and renders during end_frame.
+bs__api__ void renderer_draw_starsurface(const bs_starsurface_params* params);
+
+// Draw a procedural radiation heat map using a custom GPU pipeline.
+// The backend queues the parameters and renders as a fullscreen alpha-blended overlay during end_frame.
+bs__api__ void renderer_draw_heat_map(const bs_heat_map_params* params);
+
+// Draw a procedural alpha-blended nebula/dust cloud layer using a custom GPU pipeline.
+// The backend stores the parameters and renders them as a fullscreen alpha-blended overlay during end_frame.
+bs__api__ void renderer_draw_nebula(const bs_nebula_params* params);
 
 // Set the movable 2D point lights applied per-pixel by the sprite shader. The renderer copies the
 // list; re-submit each frame (or whenever it changes). `count == 0` renders the scene fullbright
@@ -147,3 +170,17 @@ bs__api__ void renderer_draw_grid(bs_math::Vec2 min, bs_math::Vec2 max, f32 spac
 
 // Snapshot of the most recently completed frame's draw statistics (see bs_frame_stats).
 bs__api__ bs_frame_stats renderer_get_frame_stats();
+
+// Frame CPU timing (milliseconds), reported by the application loop each frame:
+//   render_ms  = time spent in the game's render(dt)
+//   present_ms = time spent in end_frame (submit + present, includes the VSYNC wait)
+// The game/sandbox can read these to display a CPU-vs-present breakdown.
+bs__api__ void renderer_report_frame_timing(f32 render_ms, f32 present_ms);
+bs__api__ void renderer_get_frame_timing(f32* out_render_ms, f32* out_present_ms);
+
+// Runtime swapchain present mode. FALSE = VSYNC (default, capped to refresh), TRUE = IMMEDIATE
+// (uncapped) for GPU-cost profiling. When IMMEDIATE is active the application loop skips its
+// software frame cap so present_ms reflects GPU submit+execute time. Falls back to VSYNC if the
+// driver does not support IMMEDIATE.
+bs__api__ void renderer_set_present_mode(b8 immediate);
+bs__api__ b8   renderer_is_present_immediate();

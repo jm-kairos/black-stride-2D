@@ -64,20 +64,22 @@ void ProjectileSystem::init() {
         flash_texture = renderer_create_texture(pixels, 128, 128);
     }
 }
-b8 ProjectileSystem::spawn(Vec2 origin, Vec2 velocity,
-                           f32 lifetime, f32 radius, bs_color color, VesselFaction owner)
+b8 ProjectileSystem::spawn(HierPos2 origin, Vec2 velocity,
+                           f32 lifetime, f32 radius, bs_color color, VesselFaction owner,
+                           f32 radiation_emission)
 {
     // find first free slot
     for (i32 i = 0; i < MAX_PROJECTILES; ++i) {
         if (!pool[i].active) {
-            pool[i].active   = TRUE;
-            pool[i].position = origin;
-            pool[i].velocity = velocity;
-            pool[i].lifetime = lifetime;
-            pool[i].age      = 0.0f;
-            pool[i].radius   = radius;
-            pool[i].color    = color;
-            pool[i].owner    = owner;
+            pool[i].active             = TRUE;
+            pool[i].position           = origin;
+            pool[i].velocity           = velocity;
+            pool[i].lifetime           = lifetime;
+            pool[i].age                = 0.0f;
+            pool[i].radius             = radius;
+            pool[i].color              = color;
+            pool[i].owner              = owner;
+            pool[i].radiation_emission = radiation_emission;
             ++count;
             return TRUE;
         }
@@ -89,7 +91,7 @@ void ProjectileSystem::update(f32 dt) {
     for (i32 i = 0; i < MAX_PROJECTILES; ++i) {
         Projectile& p = pool[i];
         if (!p.active) continue;
-        p.position = vec2_add(p.position, vec2_scale(p.velocity, dt));
+        p.position = hierpos_add_vec2(&p.position, vec2_scale(p.velocity, dt));
         p.lifetime -= dt;
         p.age      += dt;
         if (p.lifetime <= 0.0f) {
@@ -100,18 +102,19 @@ void ProjectileSystem::update(f32 dt) {
     }
     count = active_count;
 }
-void ProjectileSystem::render(u32 layer) const {
+void ProjectileSystem::render(u32 layer, const bs_math::HierPos2* camera, f32 comp) const {
     for (i32 i = 0; i < MAX_PROJECTILES; ++i) {
         const Projectile& p = pool[i];
         if (!p.active) continue;
+        bs_math::Vec2 draw_pos = vec2_scale(hierpos_diff(&p.position, camera), comp);
         f32 speed = vec2_length(p.velocity);
         f32 trail_length = speed * 0.04f;
         if (trail_length < p.radius * 4.0f)
             trail_length = p.radius * 4.0f;
         // ---- Streak (velocity-aligned) ------------------------------------------------------
         bs_sprite streak{};
-        streak.position = p.position;
-        streak.size     = Vec2{ p.radius * 3.0f, trail_length };
+        streak.position = draw_pos;
+        streak.size     = Vec2{ p.radius * 3.0f * comp, trail_length * comp };
         streak.origin   = Vec2{ 0.5f, 1.0f }; // anchor bottom edge (head) at position
         streak.rotation = atan2f(p.velocity.y, p.velocity.x) + 3.14159265f / 2.0f;
         streak.uv       = bs_rect{ 0.0f, 0.0f, 1.0f, 1.0f };
@@ -127,8 +130,8 @@ void ProjectileSystem::render(u32 layer) const {
             f32 flash_alpha = 1.0f - (p.age / 0.05f);
             f32 flash_scale = 4.0f + 6.0f * flash_alpha;
             bs_sprite flash{};
-            flash.position = p.position;
-            flash.size     = Vec2{ p.radius * flash_scale, p.radius * flash_scale };
+            flash.position = draw_pos;
+            flash.size     = Vec2{ p.radius * flash_scale * comp, p.radius * flash_scale * comp };
             flash.origin   = Vec2{ 0.5f, 0.5f };
             flash.rotation = 0.0f;
             flash.uv       = bs_rect{ 0.0f, 0.0f, 1.0f, 1.0f };

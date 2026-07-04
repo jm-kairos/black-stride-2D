@@ -9,17 +9,19 @@ BallisticWeapon::BallisticWeapon(const char* name,
                                  f32 rate,
                                  f32 speed,
                                  f32 lifetime,
-                                 f32 radius)
+                                 f32 radius,
+                                 f32 emission)
     : Weapon(name)
     , fire_rate(rate)
     , projectile_speed_value(speed)
     , projectile_lifetime(lifetime)
     , projectile_radius(radius)
+    , projectile_emission(emission)
     , cooldown_remaining(0.0f)
 {
     cooldown_duration = (fire_rate > 0.0f) ? (1.0f / fire_rate) : 1.0f;
 }
-void BallisticWeapon::fire(Vec2 origin, Vec2 direction, Vec2 ship_velocity,
+void BallisticWeapon::fire(HierPos2 origin, Vec2 direction, Vec2 ship_velocity,
                            ProjectileSystem* projectiles) {
     if (!projectiles || !ready()) return;
     Vec2 dir = direction;
@@ -38,7 +40,8 @@ void BallisticWeapon::fire(Vec2 origin, Vec2 direction, Vec2 ship_velocity,
         default: break;
     }
     projectiles->spawn(origin, vel, projectile_lifetime,
-                       projectile_radius, col, owner_faction);
+                       projectile_radius, col, owner_faction,
+                       projectile_emission);
     cooldown_remaining = cooldown_duration;
 }
 void BallisticWeapon::update(f32 dt) {
@@ -64,9 +67,10 @@ Weapon* weapon_create_ballistic_cannon(VesselFaction owner) {
     BallisticWeapon* w = new BallisticWeapon(
         "Ballistic Cannon",
         5.0f,      // 5 shots/sec
-        1200.0f,   // 1200 units/s
-        2.0f,      // 2 second lifetime
-        4.0f       // 4 unit radius
+        12000.0f,   // 12000 units/s
+        20.0f,     // 20 second lifetime
+        4.0f,      // 4 unit radius
+        0.6f       // 0..1 radiation emission
     );
     w->owner_faction = owner;
     return w;

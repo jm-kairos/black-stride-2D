@@ -28,53 +28,6 @@ static bs_texture make_radial_texture(u32 size, f32 (*falloff_fn)(f32 t))
 static f32 falloff_core(f32 t)   { return 1.0f - t * t * t * t; }
 static f32 falloff_corona(f32 t) { return 1.0f - t * t; }
 static f32 falloff_halo(f32 t)   { return 1.0f - t; }
-// ---- Sphere texture: ray-march a lit sphere into an RGBA buffer ------------------------
-static bs_texture make_sphere_texture(u32 size)
-{
-    const u32 half = size / 2;
-    static u8 pixels[256 * 256 * 4];
-    for (u32 y = 0; y < size; ++y) {
-        for (u32 x = 0; x < size; ++x) {
-            f32 dx = ((f32)x - half + 0.5f) / (f32)half;
-            f32 dy = ((f32)y - half + 0.5f) / (f32)half;
-            f32 r2 = dx * dx + dy * dy;
-            u32 i = (y * size + x) * 4;
-            if (r2 > 1.0f) {
-                pixels[i + 0] = 0;
-                pixels[i + 1] = 0;
-                pixels[i + 2] = 0;
-                pixels[i + 3] = 0;
-                continue;
-            }
-            // --- Limb darkening: stars are brighter in center, dimmer at edge ---
-            f32 limb = sqrtf(1.0f - r2);
-            f32 limb_dark = powf(limb, 0.7f); // <1 makes edges darker
-            // --- Solar granulation: layered sine waves for organic surface detail ---
-            f32 n1 = sinf(dx *  8.3f + dy *  5.7f);
-            f32 n2 = sinf(dx * 15.1f - dy * 12.3f);
-            f32 n3 = sinf(dx * 23.7f + dy * 19.4f);
-            f32 noise = (n1 * 0.50f + n2 * 0.30f + n3 * 0.20f) * 0.5f + 0.5f;
-            // --- Brightness: base luminosity * limb darkening * surface texture ---
-            f32 bright = limb_dark * (0.55f + 0.45f * noise);
-            if (bright > 1.0f) bright = 1.0f;
-            // --- Color temperature: center is hotter (bluer-white), edge cooler (yellow-white) ---
-            f32 t = 1.0f - limb_dark; // 0 at center, 1 at edge
-            f32 r = 1.0f;
-            f32 g = 1.0f - t * 0.15f;
-            f32 b = 1.0f - t * 0.30f;
-            // --- Alpha: full disk, soft edge fade at perimeter ---
-            f32 alpha = 1.0f - (r2 - 0.82f) / 0.18f;
-            if (alpha > 1.0f) alpha = 1.0f;
-            if (alpha < 0.0f) alpha = 0.0f;
-            // Premultiply RGB by brightness so shadow pixels are genuinely dark
-            pixels[i + 0] = (u8)(r * bright * 255.0f);
-            pixels[i + 1] = (u8)(g * bright * 255.0f);
-            pixels[i + 2] = (u8)(b * bright * 255.0f);
-            pixels[i + 3] = (u8)(alpha * 255.0f);
-        }
-    }
-    return renderer_create_texture(pixels, size, size);
-}
 // ---- Lifetime -------------------------------------------------------------------------
 void StarFxSystem::init()
 {
@@ -89,26 +42,54 @@ void StarFxSystem::init()
     streak_intensity_mul = 1.0f;
     star_3d_mode       = FALSE;
     star_rotation_speed = 5.0f;
+    star_body_scale    = 8.0f;
+    // GPU procedural star-surface defaults (sun-like photosphere)
+    surf_noise_scale      = 7.0f;
+    surf_flow_speed       = 0.15f;
+    surf_granule_contrast = 1.4f;
+    surf_hotspot_gain     = 0.6f;
+    surf_sunspot_density  = 0.4f;
+    surf_limb_darkening   = 0.9f;
+    surf_brightness       = 1.0f;
+    surf_corona_strength  = 0.5f;
+    surf_corona_ratio     = 1.9f;
+    surf_dark_radius      = 5.0f;
     const u32 STAR_TEX_SIZE = 256;
     tex_core   = make_radial_texture(STAR_TEX_SIZE, falloff_core);
     tex_corona = make_radial_texture(STAR_TEX_SIZE, falloff_corona);
     tex_halo   = make_radial_texture(STAR_TEX_SIZE, falloff_halo);
-    tex_sphere = make_sphere_texture(STAR_TEX_SIZE);
 }
 void StarFxSystem::shutdown()
 {
     renderer_destroy_texture(tex_core);
     renderer_destroy_texture(tex_corona);
     renderer_destroy_texture(tex_halo);
-    renderer_destroy_texture(tex_sphere);
 }
 // ---- Rendering ------------------------------------------------------------------------
+void StarFxSystem::apply_streak_state(f32 scale, f32 time) const
+{
+    renderer_set_streak_enabled(streak_enabled);
+    if (!streak_enabled) return;
+    f32 scaled_streak_length = streak_length * scale * streak_length_mul;
+    if (scaled_streak_length > 50.0f) scaled_streak_length = 50.0f;
+    f32 effective_angle = streak_angle + streak_rotation_speed * time;
+    renderer_set_streak_params(effective_angle * bs_math::BS_DEG2RAD, scaled_streak_length);
+    f32 effective_intensity = streak_intensity * streak_intensity_mul;
+    if (streak_pulse_speed > 0.001f)
+    {
+        f32 pulse = 0.7f + 0.3f * sinf(time * streak_pulse_speed * 6.28318530718f);
+        effective_intensity *= pulse;
+    }
+    renderer_set_streak_intensity(effective_intensity);
+    renderer_set_streak_flare_intensity(streak_flare_intensity * streak_intensity_mul);
+}
 void StarFxSystem::draw_star(StarSystem& ss, bs_math::Vec2 world_pos, bs_math::Vec2 screen_pos,
                              f32 base_r, f32 screen_radius, f32 vis, f32 time, u32 layer,
                              u16 fb_w, u16 fb_h, f32 scale, bs_math::Vec2 aux_world_pos) const
 {
     if (star_3d_mode)
-        draw_star_3d(ss, world_pos, base_r, vis, time, layer, scale);
+        draw_star_3d(ss, world_pos, screen_pos, base_r, screen_radius, vis, time, layer,
+                     fb_w, fb_h, scale, aux_world_pos);
     else
         draw_star_classic(ss, world_pos, screen_pos, aux_world_pos, screen_radius, vis,
                           time, layer, fb_w, fb_h, scale);
@@ -120,18 +101,7 @@ void StarFxSystem::draw_star_classic(StarSystem& ss, bs_math::Vec2 world_pos, bs
     renderer_set_streak_enabled(streak_enabled);
     if (streak_enabled)
     {
-        f32 scaled_streak_length = streak_length * scale * streak_length_mul;
-        if (scaled_streak_length > 50.0f) scaled_streak_length = 50.0f;
-        f32 effective_angle = streak_angle + streak_rotation_speed * time;
-        renderer_set_streak_params(effective_angle * bs_math::BS_DEG2RAD, scaled_streak_length);
-        f32 effective_intensity = streak_intensity * streak_intensity_mul;
-        if (streak_pulse_speed > 0.001f)
-        {
-            f32 pulse = 0.7f + 0.3f * sinf(time * streak_pulse_speed * 6.28318530718f);
-            effective_intensity *= pulse;
-        }
-        renderer_set_streak_intensity(effective_intensity);
-        renderer_set_streak_flare_intensity(streak_flare_intensity * streak_intensity_mul);
+        apply_streak_state(scale, time);
     }
     // ---- Procedural sunburst shader (replaces 3-sprite classic stack) -------------------
     bs_sunburst_params params{};
@@ -152,25 +122,30 @@ void StarFxSystem::draw_star_classic(StarSystem& ss, bs_math::Vec2 world_pos, bs
     params.fb_w        = fb_w;
     params.fb_h        = fb_h;
     params.aux_bloom   = streak_enabled; // allow classic sunburst to generate streaks
-    // ---- Safety guards: reject draw if parameters are pathological -----------------------
+    // ---- Safety guards: silently reject draw if parameters are pathological ---------------
+    // These are normal cull cases (e.g. an off-screen star), not errors, so they must not log:
+    // logging here spams the console every frame while panning/zooming the galaxy map.
     b8 params_ok = TRUE;
     auto is_nan_inf = [](f32 v) { return v != v || v > 1e9f || v < -1e9f; };
     if (is_nan_inf(glow_r) || glow_r < 1.0f || glow_r > 500.0f)
-    { BS_LOG_WARN("SUNBURST: glow_r bad: %.2f", glow_r); params_ok = FALSE; }
+        params_ok = FALSE;
     if (is_nan_inf(body_r) || body_r < 0.5f || body_r > 300.0f)
-    { BS_LOG_WARN("SUNBURST: body_r bad: %.2f", body_r); params_ok = FALSE; }
+        params_ok = FALSE;
     if (is_nan_inf(screen_pos.x) || is_nan_inf(screen_pos.y) ||
         screen_pos.x < -2000.0f || screen_pos.x > 10000.0f ||
         screen_pos.y < -2000.0f || screen_pos.y > 10000.0f)
-    { BS_LOG_WARN("SUNBURST: screen_pos bad: (%.2f, %.2f)", screen_pos.x, screen_pos.y); params_ok = FALSE; }
-    if (fb_w == 0 || fb_h == 0) { BS_LOG_WARN("SUNBURST: fb size zero"); params_ok = FALSE; }
-    if (is_nan_inf(vis) || vis < 0.0f || vis > 1.0f) { BS_LOG_WARN("SUNBURST: vis bad: %.3f", vis); params_ok = FALSE; }
+        params_ok = FALSE;
+    if (fb_w == 0 || fb_h == 0) params_ok = FALSE;
+    if (is_nan_inf(vis) || vis < 0.0f || vis > 1.0f) params_ok = FALSE;
     if (params_ok)
         renderer_draw_sunburst(&params);
 }
-void StarFxSystem::draw_star_3d(StarSystem& ss, bs_math::Vec2 pos, f32 base_r, f32 vis,
-                                f32 time, u32 layer, f32 scale) const
+void StarFxSystem::draw_star_3d(StarSystem& ss, bs_math::Vec2 pos, bs_math::Vec2 screen_pos,
+                                f32 base_r, f32 screen_radius, f32 vis, f32 time, u32 layer,
+                                u16 fb_w, u16 fb_h, f32 scale, bs_math::Vec2 aux_world_pos) const
 {
+    (void)base_r;
+    // Anamorphic streaks are driven the same way as the classic path.
     renderer_set_streak_enabled(streak_enabled);
     if (streak_enabled)
     {
@@ -187,82 +162,40 @@ void StarFxSystem::draw_star_3d(StarSystem& ss, bs_math::Vec2 pos, f32 base_r, f
         renderer_set_streak_intensity(effective_intensity);
         renderer_set_streak_flare_intensity(streak_flare_intensity * streak_intensity_mul);
     }
-    // ---- Layer 0: Lit Sphere Body -------------------------------------------------------
-    // Texture has limb darkening + surface noise baked into RGB. Dark spots are dim
-    // (low RGB), not transparent — they add little light in additive blending.
-    {
-        f32 rotation = star_rotation_speed * time * bs_math::BS_DEG2RAD;
-        f32 body_r = base_r * 0.80f;
-        bs_color body_tint = ss.star.color;
-        body_tint.a = vis;
-        bs_sprite sp{};
-        sp.position      = pos;
-        sp.size          = bs_math::Vec2{ body_r * 2.0f, body_r * 2.0f };
-        sp.origin        = bs_math::Vec2{ 0.5f, 0.5f };
-        sp.rotation      = rotation;
-        sp.uv            = bs_rect{ 0.0f, 0.0f, 1.0f, 1.0f };
-        sp.tint          = body_tint;
-        sp.texture       = tex_sphere;
-        sp.blend         = BLEND_ADDITIVE;
-        sp.layer         = layer;
-        sp.glow_override = nullptr;
-        renderer_draw_sprite(&sp);
-    }
-    // ---- Layer 1: Subtle Corona Atmosphere ----------------------------------------------
-    {
-        f32 corona_pulse = 1.0f + 0.05f * sinf(time * 1.2f + ss.corona_pulse_phase);
-        f32 corona_r = base_r * 0.55f * corona_pulse;
-        bs_glow_params& g1 = ss.glow[1];
-        g1.intensity    = 1.5f;  g1.falloff      = 1.5f;
-        g1.head_mult    = 0.0f;  g1.head_falloff = 1.0f;
-        g1.head_range   = 0.0f;  g1.distort_amp  = 0.0f;
-        g1.wave_speed   = 0.0f;  g1.wave_freq    = 0.0f;
-        g1.jitter_speed = 0.0f;  g1.jitter_freq  = 0.0f;
-        g1.glow_tint    = ss.star.color;
-        bs_color corona_tint = ss.star.color;
-        corona_tint.a = vis * 0.6f;
-        bs_sprite sp{};
-        sp.position      = pos;
-        sp.size          = bs_math::Vec2{ corona_r * 2.0f, corona_r * 2.0f };
-        sp.origin        = bs_math::Vec2{ 0.5f, 0.5f };
-        sp.rotation      = 0.0f;
-        sp.uv            = bs_rect{ 0.0f, 0.0f, 1.0f, 1.0f };
-        sp.tint          = corona_tint;
-        sp.custom        = bs_color{ corona_pulse, 0.0f, 0.0f, 0.0f };
-        sp.texture       = tex_corona;
-        sp.blend         = BLEND_ADDITIVE;
-        sp.layer         = layer;
-        sp.glow_override = &g1;
-        renderer_draw_sprite(&sp);
-    }
-    // ---- Layer 2: Very Faint Outer Halo -------------------------------------------------
-    {
-        f32 halo_pulse = 1.0f + 0.08f * sinf(time * 0.7f + ss.halo_pulse_phase);
-        f32 halo_r = base_r * 1.10f * halo_pulse;
-        bs_glow_params& g2 = ss.glow[2];
-        g2.intensity    = 0.6f;  g2.falloff      = 0.8f;
-        g2.head_mult    = 0.0f;  g2.head_falloff = 1.0f;
-        g2.head_range   = 0.0f;  g2.distort_amp  = 0.0f;
-        g2.wave_speed   = 0.0f;  g2.wave_freq    = 0.0f;
-        g2.jitter_speed = 0.0f;  g2.jitter_freq  = 0.0f;
-        g2.glow_tint    = ss.star.color;
-        bs_color halo_tint = ss.star.color;
-        halo_tint.a = vis * 0.20f;
-        bs_sprite sp{};
-        sp.position      = pos;
-        sp.size          = bs_math::Vec2{ halo_r * 2.0f, halo_r * 2.0f };
-        sp.origin        = bs_math::Vec2{ 0.5f, 0.5f };
-        sp.rotation      = 0.0f;
-        sp.uv            = bs_rect{ 0.0f, 0.0f, 1.0f, 1.0f };
-        sp.tint          = halo_tint;
-        sp.custom        = bs_color{ halo_pulse, 0.0f, 0.0f, 0.0f };
-        sp.texture       = tex_halo;
-        sp.blend         = BLEND_ADDITIVE;
-        sp.layer         = layer;
-        sp.glow_override = &g2;
-        renderer_draw_sprite(&sp);
-    }
+
+    // ---- Real-time GPU procedural photosphere -------------------------------------------
+    // A dedicated screen-space quad shader draws the star's surface (granulation, hotspots,
+    // sunspots, limb darkening) plus a corona glow, all animated on the GPU. It renders
+    // before the sprite batch so ships/planets occlude it correctly.
+    f32 body_r_screen = screen_radius * star_body_scale;
+    f32 glow_r_screen = body_r_screen * (surf_dark_radius + 0.5f);
+
+    bs_starsurface_params params{};
+    params.screen_pos         = screen_pos;
+    params.world_pos          = pos;
+    params.aux_bloom_world_pos = aux_world_pos;
+    params.body_radius        = body_r_screen;
+    params.glow_radius        = glow_r_screen;
+    params.color              = ss.star.color;
+    params.time               = time;
+    params.visibility         = vis;
+    params.noise_scale        = surf_noise_scale;
+    params.flow_speed         = surf_flow_speed;
+    params.granule_contrast   = surf_granule_contrast;
+    params.hotspot_gain       = surf_hotspot_gain;
+    params.sunspot_density    = surf_sunspot_density;
+    params.limb_darkening     = surf_limb_darkening;
+    params.brightness         = surf_brightness;
+    params.corona_strength    = surf_corona_strength;
+    params.dark_radius        = surf_dark_radius;
+    params.layer              = layer;
+    params.fb_w               = fb_w;
+    params.fb_h               = fb_h;
+    params.aux_bloom          = streak_enabled ? TRUE : FALSE;
+
+    renderer_draw_starsurface(&params);
 }
+
 // ---- Editor UI ------------------------------------------------------------------------
 void StarFxSystem::build_ui()
 {
@@ -287,6 +220,17 @@ void StarFxSystem::build_ui()
     star_3d_mode = mode_3d ? TRUE : FALSE;
     if (star_3d_mode)
     {
+        bs_ui_slider_float("Sphere radius",  &star_body_scale,     0.5f, 60.0f);
         bs_ui_slider_float("Rotation speed", &star_rotation_speed, 0.0f, 30.0f);
+        bs_ui_text_colored(SP[0], SP[1], SP[2], SP[3], "Surface (GPU)");
+        bs_ui_slider_float("Noise scale",      &surf_noise_scale,      1.0f, 20.0f);
+        bs_ui_slider_float("Flow speed",       &surf_flow_speed,       0.0f, 1.0f);
+        bs_ui_slider_float("Granule contrast", &surf_granule_contrast, 0.0f, 3.0f);
+        bs_ui_slider_float("Hotspot gain",     &surf_hotspot_gain,     0.0f, 2.0f);
+        bs_ui_slider_float("Sunspot density",  &surf_sunspot_density,  0.0f, 1.0f);
+        bs_ui_slider_float("Limb darkening",   &surf_limb_darkening,   0.1f, 2.0f);
+        bs_ui_slider_float("Brightness",       &surf_brightness,       0.2f, 2.0f);
+        bs_ui_slider_float("Rim brightness",   &surf_corona_strength,  0.0f, 2.0f);
+        bs_ui_slider_float("Black radius",     &surf_dark_radius,      1.0f, 16.0f);
     }
 }

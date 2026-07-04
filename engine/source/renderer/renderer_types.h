@@ -187,6 +187,20 @@ typedef struct bs_starfield_params
     f32      dazzle_inner;             // world units: fully suppressed inside
     f32      dazzle_outer;             // world units: no suppression outside
     f32      dazzle_intensity;         // 0..1 suppression strength
+
+    // ---- Virtual-quadtree LOD (precision-safe multi-scale starfield) --------------------
+    // The camera center is passed as a HierPos2 split (integer cell + local offset) so the
+    // shader can reduce coordinates per LOD level without the ~256-unit f32 snapping that a
+    // single combined world Vec2 suffers billions of units from the origin.
+    bs_math::Vec2 cam_cell;            // camera-center HierPos2 cell index (exact integers as f32)
+    bs_math::Vec2 cam_local;           // camera-center local offset within its cell (world units)
+    bs_math::Vec2 star_rel;            // hero-star position relative to camera center (world units)
+    f32      base_cell;                // finest LOD cell size in world units (e.g. 64)
+    f32      lod_factor;               // cell-size ratio between adjacent LOD levels (e.g. 4)
+    f32      target_px;                // desired on-screen cell size in pixels (LOD selection)
+    f32      lod_levels;               // number of LOD slots to accumulate (e.g. 4)
+    f32      parallax_near;            // finest-level parallax 0..1 (1 == world-locked)
+    f32      parallax_falloff;         // per-level slowdown ratio (coarser levels move slower)
 } bs_starfield_params;
 
 // Parameters for a procedural sunburst star drawn via custom GPU pipeline.
@@ -206,3 +220,105 @@ typedef struct bs_sunburst_params
     u16      fb_h;                   // viewport height in pixels
     b8       aux_bloom;              // when TRUE, emit a proxy sprite for the aux-bloom/streak pass
 } bs_sunburst_params;
+
+// Parameters for a real-time procedural star SURFACE drawn via a custom GPU pipeline.
+// Passed to renderer_draw_starsurface; the backend queues them and renders during end_frame
+// (premult-over blend: the opaque photosphere disc occludes the scene, the corona glows).
+typedef struct bs_starsurface_params
+{
+    bs_math::Vec2 screen_pos;        // star centre in screen pixels (top-left origin)
+    bs_math::Vec2 world_pos;         // star centre in world space (main camera)
+    bs_math::Vec2 aux_bloom_world_pos; // proxy world position matching the aux-pass camera
+    f32      body_radius;            // photosphere disc radius in screen pixels
+    f32      glow_radius;            // outer corona extent in screen pixels (quad half-size)
+    bs_color color;                  // intrinsic star colour tint
+    f32      time;                   // elapsed time for animation
+    f32      visibility;             // 0..1 fade (sensor range, etc.)
+    // Surface look tunables (editor-driven):
+    f32      noise_scale;            // granulation cell frequency
+    f32      flow_speed;             // convection animation speed
+    f32      granule_contrast;       // granulation contrast around mid-grey
+    f32      hotspot_gain;           // emissive bright-spot strength
+    f32      sunspot_density;        // dark-spot coverage
+    f32      limb_darkening;         // limb darkening exponent
+    f32      brightness;             // overall surface brightness
+    f32      corona_strength;        // outer glow intensity
+    f32      dark_radius;            // radius (in body radii) of the opaque black surround
+    u32      layer;                  // render sort key (e.g. LAYER_CELESTIAL)
+    u16      fb_w;                   // viewport width in pixels
+    u16      fb_h;                   // viewport height in pixels
+    b8       aux_bloom;              // when TRUE, emit a proxy sprite for the aux-bloom/streak pass
+} bs_starsurface_params;
+
+// Available heat-map color palettes.
+typedef enum bs_heat_palette
+{
+    BS_HEAT_PALETTE_RAINBOW = 0,
+    BS_HEAT_PALETTE_THERMAL,
+    BS_HEAT_PALETTE_BLACKBODY,
+    BS_HEAT_PALETTE_CUSTOM,
+    BS_HEAT_PALETTE_COUNT,
+} bs_heat_palette;
+
+// Parameters for the single-pass procedural radiation heat map.
+// Passed to renderer_draw_heat_map; the backend queues one fullscreen draw during end_frame.
+#define BS_MAX_HEAT_SOURCES 256
+typedef struct bs_heat_map_params
+{
+    bs_math::Vec2 camera_pos;        // world-space camera center
+    f32           viewport_w;        // world-space viewport width
+    f32           viewport_h;        // world-space viewport height
+    f32           base_radius;       // detector base radius
+    f32           heat_warp_strength; // world units of domain warp displacement
+    f32           venn_sharpness;  // 0.0 = organic soft Venn boundary, 1.0 = hard-edged sensor circle
+    f32           threshold;         // scalar field threshold
+    f32           intensity;         // global opacity multiplier
+    u32           source_count;      // number of valid entries in sources
+    f32           heat_tail_length;  // max number of active trail points
+    f32           heat_tail_fade;    // falloff exponent for trail emission
+    f32           heat_signature_radius; // visual radius of the heat signature blob around emitters
+    u32           palette;           // bs_heat_palette index
+    f32           color_falloff_power; // power applied to normalized value before gradient lookup
+    bs_color      color_low;         // custom edge color
+    bs_color      color_high;        // custom center color
+    bs_math::Vec2 sources[BS_MAX_HEAT_SOURCES]; // world-space positions
+    f32           emissions[BS_MAX_HEAT_SOURCES]; // 0..1 emission per source
+    b8            is_detector[BS_MAX_HEAT_SOURCES]; // TRUE = player detector source, FALSE = heat emitter
+} bs_heat_map_params;
+
+// Parameters for a procedural alpha-blended nebula/dust cloud layer.
+// Passed to renderer_draw_nebula; the backend stores one set of parameters and renders it
+// as a fullscreen alpha-blended overlay during end_frame.
+typedef struct bs_nebula_params
+{
+    Camera2D      cam;          // virtual camera (position * parallax, zoom * zoom_scale)
+    f32           zoom_scale;   // layer depth-cue multiplier
+    u32           layer_id;     // render sort key
+    u32           seed;         // deterministic hash seed
+    u16           fb_w;         // viewport width in pixels
+    u16           fb_h;         // viewport height in pixels
+    bs_math::Vec2 blur;         // reserved for future motion blur
+    f32           intensity;     // global nebula opacity multiplier
+    f32           dust_intensity;// dust cloud opacity multiplier
+    // Editor-tunable colors for the nebula/dust shader.
+    bs_color      gas_color_a;      // deep base gas
+    bs_color      gas_color_b;      // mid gas
+    bs_color      gas_color_c;      // bright highlight core
+    bs_color      dust_color;       // dark dust silhouette
+    f32           gas_brightness_mul; // extra luminance multiplier for gas
+    f32           highlight_power;  // how much the bright core is emphasized
+    f32           palette_shift;    // rotates the cosine palette index
+    f32           swirl_strength;   // domain rotation strength
+    f32           falloff_radius;   // controls radial/band fade
+    f32           band_strength;    // how much Milky Way band falloff is applied
+    f32           lod_target;       // world units per noise unit at zoom==1 (LOD feature scale)
+    f32           parallax;         // 0..1 parallax factor (1 == world-locked, <1 == distant/slower)
+    f32           biome_strength;   // 0..1 galaxy-wide biome modulation amount
+    f32           biome_scale;      // world units per biome noise unit (region size)
+    f32           biome_hue_spread; // 0..1 color-family rotation between biomes
+    f32           zoom_detail;      // 0..1 extra fine detail emerging as you zoom in
+    f32           zoom_saturation;  // 0..1 extra saturation/contrast as you zoom in
+    bs_math::Vec2 cam_cell;   // camera-center HierPos2 cell index (exact integers as f32)
+    bs_math::Vec2 cam_local;  // camera-center local offset within its cell (world units)
+} bs_nebula_params;
+

@@ -156,6 +156,7 @@ b8 application_run(){
                 f64 t2 = platform_get_absolute_time();
                 f32 render_ms = (f32)((t1 - t0) * 1000.0);
                 f32 present_ms = (f32)((t2 - t1) * 1000.0);
+                renderer_report_frame_timing(render_ms, present_ms);
                 if (render_ms > 100.0f || present_ms > 100.0f)
                 {
                     BS_LOG_WARN("SLOW FRAME: render=%.1fms present=%.1fms", render_ms, present_ms);
@@ -164,7 +165,26 @@ b8 application_run(){
 
             input_update(delta);
         }
-        
+
+        // ---- Frame rate cap ----
+        // The swapchain defaults to VSYNC, which already limits presentation to the
+        // monitor's refresh rate. This limiter enforces a fixed target regardless of
+        // refresh rate (e.g. holds 60 FPS on a 144 Hz display) and prevents the loop
+        // from running unthrottled if VSYNC is ever disabled or while suspended.
+        // Skipped in IMMEDIATE present mode so GPU-cost profiling sees the true frame time.
+        if (!renderer_is_present_immediate())
+        {
+            const real target_frame_seconds = 1.0 / 60.0;
+            real frame_elapsed = platform_get_absolute_time() - current_time;
+            if (frame_elapsed < target_frame_seconds)
+            {
+                real remaining_ms = (target_frame_seconds - frame_elapsed) * 1000.0;
+                if (remaining_ms >= 1.0)
+                {
+                    platform_sleep((u64)remaining_ms);
+                }
+            }
+        }
     }
 
     event_unregister(EVENT_CODE_APPLICATION_QUIT, 0, application_on_event);

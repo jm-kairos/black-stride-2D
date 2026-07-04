@@ -29,6 +29,12 @@ struct RendererState
                                    // thickness a constant SCREEN width regardless of zoom
     b8               frame_active; // TRUE between a successful begin_frame and its end_frame
     b8               initialized;
+    f32              draw_alpha_mul; // global alpha multiplier applied to sprite/line/circle/quad
+                                    // tints (1.0 = opaque). Reset to 1.0 each frame; used to
+                                    // cross-fade whole render passes (e.g. arena<->galaxy map).
+    f32              last_render_ms;  // CPU time of the game's render(dt) (application loop)
+    f32              last_present_ms; // CPU time of end_frame incl. present/vsync wait
+    b8               present_immediate; // TRUE when the swapchain is in IMMEDIATE (uncapped) mode
 };
 
 static RendererState state;
@@ -117,6 +123,7 @@ b8 renderer_begin_frame(f32 dt)
     }
 
     state.frame_active = TRUE;
+    state.draw_alpha_mul = 1.0f; // opaque by default; passes opt into fading per frame
     return TRUE;
 }
 
@@ -230,6 +237,23 @@ bs_texture renderer_create_texture(const u8* pixels, u32 width, u32 height)
     return tex;
 }
 
+b8 renderer_update_texture(bs_texture texture, const u8* pixels, u32 width, u32 height)
+{
+    if (!state.initialized || texture.id == BS_INVALID_HANDLE || !pixels || width == 0 || height == 0)
+    {
+        BS_LOG_ERROR("renderer_update_texture: invalid arguments or renderer not initialized.");
+        return FALSE;
+    }
+
+    if (!state.backend.update_texture)
+    {
+        BS_LOG_ERROR("renderer_update_texture: backend does not support texture updates.");
+        return FALSE;
+    }
+
+    return state.backend.update_texture(&state.backend, texture, pixels, width, height);
+}
+
 void renderer_destroy_texture(bs_texture texture)
 {
     if (!state.initialized || texture.id == BS_INVALID_HANDLE)
@@ -249,10 +273,30 @@ void renderer_set_camera(Camera2D camera)
     state.backend.set_camera(&state.backend, camera);
 }
 
+void renderer_set_draw_alpha(f32 alpha)
+{
+    if (!state.initialized) return;
+    state.draw_alpha_mul = (alpha < 0.0f) ? 0.0f : (alpha > 1.0f ? 1.0f : alpha);
+}
+
+f32 renderer_get_draw_alpha()
+{
+    return state.initialized ? state.draw_alpha_mul : 1.0f;
+}
+
 void renderer_draw_sprite(const bs_sprite* sprite)
 {
     if (!state.initialized || !state.frame_active || !sprite)
     {
+        return;
+    }
+    if (state.draw_alpha_mul < 0.999f)
+    {
+        bs_sprite faded = *sprite;
+        faded.tint.a *= state.draw_alpha_mul;
+        // An opaque draw must switch to alpha blending to actually fade.
+        if (faded.blend == BLEND_NONE) faded.blend = BLEND_ALPHA;
+        state.backend.draw_sprite(&state.backend, &faded);
         return;
     }
     state.backend.draw_sprite(&state.backend, sprite);
@@ -284,6 +328,33 @@ void renderer_draw_sunburst(const bs_sunburst_params* params)
         return;
     }
     state.backend.draw_sunburst(&state.backend, params);
+}
+
+void renderer_draw_starsurface(const bs_starsurface_params* params)
+{
+    if (!state.initialized || !state.frame_active || !params || !state.backend.draw_starsurface)
+    {
+        return;
+    }
+    state.backend.draw_starsurface(&state.backend, params);
+}
+
+void renderer_draw_heat_map(const bs_heat_map_params* params)
+{
+    if (!state.initialized || !state.frame_active || !params || !state.backend.draw_heat_map)
+    {
+        return;
+    }
+    state.backend.draw_heat_map(&state.backend, params);
+}
+
+void renderer_draw_nebula(const bs_nebula_params* params)
+{
+    if (!state.initialized || !state.frame_active || !params || !state.backend.draw_nebula)
+    {
+        return;
+    }
+    state.backend.draw_nebula(&state.backend, params);
 }
 
 void renderer_set_lights(const bs_light2d* lights, u32 count, bs_color ambient, u32 unlit_layer)
@@ -376,16 +447,17 @@ void renderer_draw_line(bs_math::Vec2 a, bs_math::Vec2 b, f32 thickness,
 
     // Center the quad on the segment midpoint; size = (length, thickness); rotate to the
     // segment's direction. origin {0.5,0.5} keeps rotation about the midpoint.
+    f32 eff_a = color.a * state.draw_alpha_mul;
     bs_sprite s;
     s.position = bs_math::Vec2{ (a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f };
     s.size     = bs_math::Vec2{ len, world_thickness };
     s.origin   = bs_math::Vec2{ 0.5f, 0.5f };
     s.rotation = atan2f(d.y, d.x);
     s.uv       = bs_rect{ 0.0f, 0.0f, 1.0f, 1.0f };
-    s.tint     = color;
+    s.tint     = color; s.tint.a = eff_a;
     s.custom   = bs_color{ 0.0f, 0.0f, 0.0f, 0.0f };
     s.texture  = bs_texture{ BS_INVALID_HANDLE }; // white texture => solid color
-    s.blend          = (color.a < 0.999f) ? BLEND_ALPHA : BLEND_NONE;
+    s.blend          = (eff_a < 0.999f) ? BLEND_ALPHA : BLEND_NONE;
     s.layer          = layer;
     s.glow_override  = nullptr;
     state.backend.draw_sprite(&state.backend, &s);
@@ -396,16 +468,17 @@ void renderer_draw_quad(bs_math::Vec2 center, bs_math::Vec2 size,
 {
     if (!state.initialized || !state.frame_active) return;
 
+    f32 eff_a = color.a * state.draw_alpha_mul;
     bs_sprite s;
     s.position = center;
     s.size     = size;
     s.origin   = bs_math::Vec2{ 0.5f, 0.5f };
     s.rotation = 0.0f;
     s.uv       = bs_rect{ 0.0f, 0.0f, 1.0f, 1.0f };
-    s.tint     = color;
+    s.tint     = color; s.tint.a = eff_a;
     s.custom   = bs_color{ 0.0f, 0.0f, 0.0f, 0.0f };
     s.texture  = bs_texture{ BS_INVALID_HANDLE };
-    s.blend          = (color.a < 0.999f) ? BLEND_ALPHA : BLEND_NONE;
+    s.blend          = (eff_a < 0.999f) ? BLEND_ALPHA : BLEND_NONE;
     s.layer          = layer;
     s.glow_override  = nullptr;
     state.backend.draw_sprite(&state.backend, &s);
@@ -473,4 +546,28 @@ bs_frame_stats renderer_get_frame_stats()
     if (!state.initialized || !state.backend.get_frame_stats) return stats;
     state.backend.get_frame_stats(&state.backend, &stats);
     return stats;
+}
+
+void renderer_report_frame_timing(f32 render_ms, f32 present_ms)
+{
+    state.last_render_ms  = render_ms;
+    state.last_present_ms = present_ms;
+}
+
+void renderer_get_frame_timing(f32* out_render_ms, f32* out_present_ms)
+{
+    if (out_render_ms)  *out_render_ms  = state.last_render_ms;
+    if (out_present_ms) *out_present_ms = state.last_present_ms;
+}
+
+void renderer_set_present_mode(b8 immediate)
+{
+    if (!state.initialized || !state.backend.set_present_mode) return;
+    state.backend.set_present_mode(&state.backend, immediate);
+    state.present_immediate = immediate;
+}
+
+b8 renderer_is_present_immediate()
+{
+    return state.present_immediate;
 }

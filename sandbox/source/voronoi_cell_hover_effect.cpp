@@ -1,6 +1,7 @@
 #include "voronoi_cell_hover_effect.h"
 #include "voronoi_galaxy.h"
 #include "game.h"
+#include "core/view_transform.h" // compression_factor, cosmetic_compress
 #include <math/bs_hierpos.h>
 #include <math/math_utils.h>
 #include <renderer/renderer.h>
@@ -8,17 +9,8 @@ using namespace bs_math;
 // =====================================================================================
 // Internal helpers
 // =====================================================================================
-// Scalar compression factor (must match game.cpp)
-static f32 compression_factor(f32 zoom) {
-    const f32 threshold = 0.02f;
-    const f32 min_zoom  = 0.000004f;
-    if (zoom >= threshold) return 1.0f;
-    f32 t = (zoom - min_zoom) / (threshold - min_zoom);
-    return 0.15f + 0.85f * t;
-}
-static Vec2 cosmetic_compress(Vec2 pos, f32 zoom) {
-    return vec2_scale(pos, compression_factor(zoom));
-}
+// compression_factor / cosmetic_compress now come from core/view_transform.h (via game.h),
+// sharing the same smoothstep curve as stars/ships (this file previously used a linear ramp).
 static i32 pick_voronoi_cell(const Vec2& mouse_rel,
                              const HierPos2* camera_hierpos,
                              f32 zoom,
@@ -92,10 +84,10 @@ void draw_cell_hover_effect(const GalaxyVoronoi* v,
         Vec2 vb = cell.verts[(i + 1) % cell.vert_count];
         HierPos2 h0 = hierpos_from_vec2(va, BS_HIERPOS_CELL_SIZE);
         HierPos2 h1 = hierpos_from_vec2(vb, BS_HIERPOS_CELL_SIZE);
-        Vec2 p0 = hierpos_diff(&h0, &s->camera_hierpos, BS_HIERPOS_CELL_SIZE);
-        Vec2 p1 = hierpos_diff(&h1, &s->camera_hierpos, BS_HIERPOS_CELL_SIZE);
-        p0 = cosmetic_compress(p0, s->camera.zoom);
-        p1 = cosmetic_compress(p1, s->camera.zoom);
+        Vec2 p0 = hierpos_diff(&h0, &s->camera_state.camera_hierpos, BS_HIERPOS_CELL_SIZE);
+        Vec2 p1 = hierpos_diff(&h1, &s->camera_state.camera_hierpos, BS_HIERPOS_CELL_SIZE);
+        p0 = cosmetic_compress(p0, s->camera_state.camera.zoom);
+        p1 = cosmetic_compress(p1, s->camera_state.camera.zoom);
         renderer_draw_line(p0, p1, thickness, col, VORONOI_LAYER_CELESTIAL);
     }
 }

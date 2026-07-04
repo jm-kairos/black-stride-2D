@@ -39,9 +39,20 @@ namespace bs_math
     // Add a high-precision delta (in world units) to a hierarchical position.
     bs__api__ HierPos2 hierpos_add_f64(const HierPos2* hp, f64 dx, f64 dy, f32 cell_size);
 
+    // Convenience: add a small f32 Vec2 delta to a hierarchical position (re-canonicalizes).
+    // Uses the default game cell size. For velocity integration and local offsets.
+    inline HierPos2 hierpos_add_vec2(const HierPos2* hp, Vec2 d) {
+        return hierpos_add_f64(hp, (f64)d.x, (f64)d.y, BS_HIERPOS_CELL_SIZE);
+    }
+
     // High-precision subtraction: compute (a - b) as a small Vec2.
     // Safe for rendering when a and b are near each other (floating origin).
     bs__api__ Vec2 hierpos_diff(const HierPos2* a, const HierPos2* b, f32 cell_size);
+
+    // Convenience wrappers that bind the default game cell size (BS_HIERPOS_CELL_SIZE).
+    inline HierPos2 hierpos_from_vec2(Vec2 world) { return hierpos_from_vec2(world, BS_HIERPOS_CELL_SIZE); }
+    inline Vec2     hierpos_to_vec2(const HierPos2* hp) { return hierpos_to_vec2(hp, BS_HIERPOS_CELL_SIZE); }
+    inline Vec2     hierpos_diff(const HierPos2* a, const HierPos2* b) { return hierpos_diff(a, b, BS_HIERPOS_CELL_SIZE); }
 
     // Self-test: round-trip a suite of coordinates and assert exact recovery.
     // Returns FALSE if any invariant is violated.

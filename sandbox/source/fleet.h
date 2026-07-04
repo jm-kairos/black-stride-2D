@@ -19,6 +19,12 @@
 // Forward declaration: game_state is defined in game.h (autopilot needs projectiles +
 // combat entities for attack orders).
 struct game_state;
+// Ship type identifier used for combat-mode emblems. Only DRONE is populated today;
+// EXTRACTOR is reserved for future implementation.
+enum ShipType {
+    SHIP_TYPE_DRONE = 0,
+    SHIP_TYPE_EXTRACTOR,
+};
 // Global-mode inertial flight dynamics (Starsector-style). The ship's POSE (origin, angle)
 // lives in Ship; these are the integrators that drive it. The ship coasts -- there is no
 // passive linear drag, only the active brake (C) / reverse (S).
@@ -26,27 +32,29 @@ struct ShipFlight {
     bs_math::Vec2 velocity;          // world-space linear velocity
     f32           angular_velocity;  // rad/s, CCW positive; auto-stabilizes when A/D released
 };
-// What a single fleet ship is currently doing under RTS command.
-enum class FleetOrder {
-    None = 0,
-    Move,    // autopilot to move_target (formation slot)
-    Attack,  // pursue + fire on attack_target
-};
 // One player ship: pose + dynamics + selection + per-ship order state.
+// Move and attack targets are independent: a ship can strafe toward a destination while its
+// nose tracks and fires at a designated target.
 struct FleetShip {
     Ship          ship;
     ShipFlight    flight;
+    ShipType      ship_type;
     b8            selected;
-    FleetOrder    order;
-    bs_math::Vec2 move_target;     // world-space formation slot (Move)
-    Ship*         attack_target;   // validated against combat entities each frame (Attack)
+    b8            has_move_target;   // TRUE when a move order is active
+    b8            has_attack_target; // TRUE when an attack order is active
+    bs_math::HierPos2 move_target;   // world-space formation slot / destination
+    Ship*         attack_target;     // validated against combat entities each frame
     // Integrate the rigid-body pose from the flight velocities. Mirrors the legacy
     // simulate_ship: auto-stabilizes residual spin when turn_commanded is FALSE.
     void simulate(f32 dt, b8 turn_commanded);
-    // Autopilot a Move order: rotate-to-face then thrust/brake toward move_target.
+    // Autopilot a Move order: strafe/thrust toward move_target.
     void update_move(f32 dt);
-    // Autopilot an Attack order: approach to engagement range and fire on attack_target.
+    // Autopilot an Attack order: rotate nose toward attack_target and fire when aligned.
+    // If no move target is set, this also approaches the target to maintain engagement range.
     void update_attack(game_state* s, f32 dt);
+    // Clear a single order type.
+    void clear_move_target();
+    void clear_attack_target();
 };
 class Fleet {
 public:
@@ -73,14 +81,14 @@ public:
     void set_selected(i32 idx, b8 selected);
     b8   any_selected() const;
     // Select every ship whose origin lies inside the world-space box. Returns count selected.
-    i32  select_in_box(bs_math::Vec2 p0, bs_math::Vec2 p1);
+    i32  select_in_box(bs_math::HierPos2 p0, bs_math::HierPos2 p1);
     // Select the single ship under the world point (nearest hit). Clears others. Returns TRUE
     // when a ship was hit, FALSE when the point was empty (selection cleared).
-    b8   select_at_point(bs_math::Vec2 world);
+    b8   select_at_point(bs_math::HierPos2 world);
     i32  selected_count() const;
     i32  first_selected() const;   // index of the first selected ship, or -1
     // ---- Orders (formation-aware) ----------------------------------------------------
-    void order_move(bs_math::Vec2 target);   // selected ships -> formation slots around target
+    void order_move(bs_math::HierPos2 target);   // selected ships -> formation slots around target
     void order_attack(Ship* target);          // selected ships -> attack target
     void clear_order(i32 idx);                 // cancel a ship's order (e.g. when piloted)
     // ---- Simulation ------------------------------------------------------------------

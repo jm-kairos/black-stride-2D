@@ -27,7 +27,7 @@ b8 ship_load(Ship* out_ship, const char* path) {
     }
     new (out_ship) Ship();
     out_ship->world_scale  = 1.0f;
-    out_ship->origin       = Vec2{ 0.0f, 0.0f };
+    out_ship->origin       = HierPos2{};
     out_ship->angle        = 0.0f;
     out_ship->faction      = VESSEL_NEUTRAL;
     out_ship->vessel_name  = "Unnamed Vessel";
@@ -147,11 +147,15 @@ const char* vessel_faction_desc(VesselFaction f) {
         default:                return "No data available.";
     }
 }
-Vec2 ship_local_to_world(const Ship* ship, Vec2 local) {
-    return vec2_add(ship->origin, vec2_rotate(vec2_scale(local, ship->world_scale), ship->angle));
+Vec2 ship_local_dir(const Ship* ship, Vec2 local) {
+    return vec2_rotate(vec2_scale(local, ship->world_scale), ship->angle);
 }
-Vec2 ship_world_to_local(const Ship* ship, Vec2 world) {
-    return vec2_scale(vec2_rotate(vec2_sub(world, ship->origin), -ship->angle), 1.0f / ship->world_scale);
+HierPos2 ship_local_to_world(const Ship* ship, Vec2 local) {
+    return hierpos_add_vec2(&ship->origin, ship_local_dir(ship, local));
+}
+Vec2 ship_world_to_local(const Ship* ship, HierPos2 world) {
+    Vec2 rel = hierpos_diff(&world, &ship->origin);
+    return vec2_scale(vec2_rotate(rel, -ship->angle), 1.0f / ship->world_scale);
 }
 f32 ship_bounding_radius(const Ship* ship) {
     if (!ship || ship->collider_count <= 0) return 0.0f;
@@ -165,7 +169,7 @@ f32 ship_bounding_radius(const Ship* ship) {
 }
 b8 ships_overlap(const Ship* a, const Ship* b) {
     if (!a || !b) return FALSE;
-    f32 d  = vec2_length(vec2_sub(a->origin, b->origin));
+    f32 d  = vec2_length(hierpos_diff(&a->origin, &b->origin));
     f32 rr = ship_bounding_radius(a) + ship_bounding_radius(b);
     return (d < rr) ? TRUE : FALSE;
 }
@@ -192,10 +196,14 @@ b8 ships_collide(const Ship* a, const Ship* b, Vec2* out_mtv) {
     if (!a || !b) return FALSE;
     if (!ships_overlap(a, b)) return FALSE;
     if (a->collider_count < 3 || b->collider_count < 3) return FALSE;
+    // Work in a frame relative to a->origin: a's verts are direction-only offsets, b's verts
+    // are offset by the small (a-relative) difference of the two origins. SAT overlap and the
+    // resulting MTV direction/magnitude are frame-independent, so this is exact at any distance.
+    Vec2 b_rel = hierpos_diff(&b->origin, &a->origin);
     Vec2 aw[SHIP_MAX_COLLIDER_VERTS];
     Vec2 bw[SHIP_MAX_COLLIDER_VERTS];
-    for (i32 i = 0; i < a->collider_count; ++i) aw[i] = ship_local_to_world(a, a->collider_verts[i]);
-    for (i32 i = 0; i < b->collider_count; ++i) bw[i] = ship_local_to_world(b, b->collider_verts[i]);
+    for (i32 i = 0; i < a->collider_count; ++i) aw[i] = ship_local_dir(a, a->collider_verts[i]);
+    for (i32 i = 0; i < b->collider_count; ++i) bw[i] = vec2_add(b_rel, ship_local_dir(b, b->collider_verts[i]));
     f32 min_overlap = 1.0e30f;
     Vec2 min_axis = Vec2{ 0.0f, 0.0f };
     for (i32 s = 0; s < 2; ++s) {
@@ -211,8 +219,7 @@ b8 ships_collide(const Ship* a, const Ship* b, Vec2* out_mtv) {
         }
     }
     if (out_mtv) {
-        Vec2 d = vec2_sub(b->origin, a->origin);
-        f32 sign = (vec2_dot(d, min_axis) > 0.0f) ? -1.0f : 1.0f;
+        f32 sign = (vec2_dot(b_rel, min_axis) > 0.0f) ? -1.0f : 1.0f;
         *out_mtv = vec2_scale(min_axis, sign * min_overlap);
     }
     return TRUE;
@@ -220,6 +227,6 @@ b8 ships_collide(const Ship* a, const Ship* b, Vec2* out_mtv) {
 b8 ship_collider_corners(const Ship* ship, Vec2 out_corners[SHIP_MAX_COLLIDER_VERTS]) {
     if (!ship || ship->collider_count <= 0) return FALSE;
     for (i32 i = 0; i < ship->collider_count; ++i)
-        out_corners[i] = ship_local_to_world(ship, ship->collider_verts[i]);
+        out_corners[i] = ship_local_dir(ship, ship->collider_verts[i]);
     return TRUE;
 }

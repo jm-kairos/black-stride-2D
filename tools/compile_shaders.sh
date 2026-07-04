@@ -44,15 +44,35 @@ compile() {
     "$DXC" -T "$profile" -E "$entry" "${SPV_COMMON[@]}" "$in" -Fo "$OUT_SPV/${name}.${stage}.spv"
 }
 
+# Stage -> profile mapping.
+profile_for_stage() {
+    case "$1" in
+        vert) echo "vs_6_0" ;;
+        frag) echo "ps_6_0" ;;
+        comp) echo "cs_6_0" ;;
+        *)    echo "" ;;
+    esac
+}
+
 echo "Compiling shaders with $($DXC --version 2>&1 | head -1)"
-compile quad vert vs_6_0
-compile quad frag ps_6_0
-compile sprite vert vs_6_0
-compile sprite frag ps_6_0
-compile mapped_sprite vert vs_6_0
-compile mapped_sprite frag ps_6_0
-compile starfield vert vs_6_0
-compile starfield frag ps_6_0
+
+# AUTO-DISCOVER every <name>.<stage>.hlsl in the src folder. Deriving the compile list
+# from the filesystem means this script can never go stale when a shader is added --
+# the historical failure mode of the old hand-maintained list.
+for f in "$SRC"/*.hlsl; do
+    [ -e "$f" ] || continue
+    fname="$(basename "$f" .hlsl)"   # e.g. starfield_layer.frag
+    stage="${fname##*.}"             # frag
+    name="${fname%.*}"               # starfield_layer
+    profile="$(profile_for_stage "$stage")"
+    if [ -z "$profile" ]; then
+        echo "  SKIP $fname: unknown stage '$stage'"
+        continue
+    fi
+    compile "$name" "$stage" "$profile"
+done
+
 echo "Shaders compiled to:"
 echo "  $OUT_DXIL"
 echo "  $OUT_SPV"
+echo "NOTE: run build-all.bat next to stage the new blobs into bin/assets/shaders/."

@@ -2,3 +2,23 @@
 
 #Ignore vscode AI rules
 .github\instructions\codacy.instructions.md
+
+# Build output & binaries (all throwaway artifacts live here)
+bin/
+obj/
+*.exe
+*.ilk
+*.pdb
+*.o
+*.obj
+
+# Root-level build & diagnostic logs
+/*.log
+/build_*.txt
+/*_out.txt
+/*_err.txt
+/diag_log.txt
+
+# Root-level throwaway screenshots & ImGui layout
+/*.png
+/imgui.ini

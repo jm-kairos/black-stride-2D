@@ -1,6 +1,6 @@
 #include "global_background.h"
-#include "parallax_layer.h"
 #include "mapped_system_layer.h"
+#include "nebula_layer.h"
 #include "starfield_layer.h"
 #include "starfield_generator.h"
 #include "game.h"
@@ -14,28 +14,50 @@
 void GlobalBackground::init(game_state* gs, StarFxSystem* star_fx)
 {
     this->gs = gs;
-    layer_count = 3;
-    // Layer 0: far decorative starfield (procedural shader, parallax 0.008, zoom_scale 0.70)
-    auto* layer0 = new StarfieldLayer(0, 0.008f, 0.70f, 0xDEADBEEFu);
-    layer0->set_game_state(gs);
-    layers[0] = layer0;
-    // Layer 1: mid-distance decorative starfield (procedural shader, parallax 0.02, zoom_scale 0.90)
-    auto* layer1 = new StarfieldLayer(1, 0.02f, 0.90f, 0xCAFEBABEu);
-    layer1->set_game_state(gs);
-    layers[1] = layer1;
-    // Layer 2: mapped system star + planets (parallax 0.30, more distant than foreground)
-    layers[2] = new MappedSystemLayer(gs, star_fx);
+    // Starfield: single virtual-quadtree starfield (procedural multi-LOD shader). World-locked
+    // (parallax 1.0, zoom_scale 1.0) — the LOD levels themselves provide apparent depth, so the
+    // old far/mid parallax pair is collapsed into this one continuous field that renders across
+    // BOTH the arena and galaxy-map zoom ranges.
+    starfield = new StarfieldLayer(0, 1.0f, 1.0f, 0xDEADBEEFu);
+    starfield->set_game_state(gs);
+    // Nebula: alpha-blended nebula/dust clouds (parallax 0.02, zoom_scale 0.90)
+    nebula = new NebulaLayer(1, 0.02f, 0.90f, 0xBADDCAFEu);
+    nebula->set_game_state(gs);
+    // Mapped system star + planets
+    mapped_system = new MappedSystemLayer(gs, star_fx);
 }
 // =====================================================================================
 void GlobalBackground::shutdown()
 {
-    for (i32 i = 0; i < layer_count; ++i) {
-        if (layers[i]) {
-            delete layers[i];
-            layers[i] = nullptr;
-        }
+    delete starfield;      starfield = nullptr;
+    delete nebula;         nebula = nullptr;
+    delete mapped_system;  mapped_system = nullptr;
+}
+// =====================================================================================
+void GlobalBackground::notify_system_changed(i32 system_idx)
+{
+    if (mapped_system) mapped_system->on_system_changed(system_idx);
+}
+// =====================================================================================
+template <typename LayerT>
+static void draw_bg_layer(LayerT* layer, const Camera2D& cam, u16 fb_w, u16 fb_h,
+                          f32 dt, f32 elapsed_time, const bs_math::Vec2& baseBlur)
+{
+    // Compute virtual camera for this layer.
+    Camera2D layer_cam = cam;
+    layer_cam.position.x = cam.position.x * layer->parallax;
+    layer_cam.position.y = cam.position.y * layer->parallax;
+    layer_cam.zoom *= layer->zoom_scale;
+    // Blur is stronger for distant (low-parallax) layers.
+    float parallaxFactor = 1.0f - layer->parallax;
+    bs_math::Vec2 layerBlur = bs_math::Vec2{
+        baseBlur.x * parallaxFactor / (layer_cam.zoom > 0.0001f ? layer_cam.zoom : 1.0f),
+        baseBlur.y * parallaxFactor / (layer_cam.zoom > 0.0001f ? layer_cam.zoom : 1.0f)
+    };
+    if (!layer->is_custom_gpu) {
+        renderer_set_camera(layer_cam);
     }
-    layer_count = 0;
+    layer->draw(layer_cam, fb_w, fb_h, dt, elapsed_time, layerBlur);
 }
 // =====================================================================================
 void GlobalBackground::draw(const Camera2D& cam, u16 fb_w, u16 fb_h,
@@ -50,32 +72,16 @@ void GlobalBackground::draw(const Camera2D& cam, u16 fb_w, u16 fb_h,
             gs->player_flight().velocity.y * dt
         };
     }
-    for (i32 i = 0; i < layer_count; ++i) {
-        if (!layers[i]) continue;
-        // Respect editor-panel debug toggles.
-        if (gs) {
-            if (i == 0 && !gs->bg_layer0_enabled) continue;
-            if (i == 1 && !gs->bg_layer1_enabled) continue;
-            if (i == 2 && !gs->bg_layer2_enabled) continue;
-        }
-        ParallaxLayer* layer = layers[i];
-        // Compute virtual camera for this layer.
-        Camera2D layer_cam = cam;
-        layer_cam.position.x = cam.position.x * layer->parallax;
-        layer_cam.position.y = cam.position.y * layer->parallax;
-        layer_cam.zoom *= layer->zoom_scale;
-        // Blur is stronger for distant (low-parallax) layers.
-        float parallaxFactor = 1.0f - layer->parallax;
-        bs_math::Vec2 layerBlur = bs_math::Vec2{
-            baseBlur.x * parallaxFactor / (layer_cam.zoom > 0.0001f ? layer_cam.zoom : 1.0f),
-            baseBlur.y * parallaxFactor / (layer_cam.zoom > 0.0001f ? layer_cam.zoom : 1.0f)
-        };
-        if (layer->is_custom_gpu) {
-            layer->draw(layer_cam, fb_w, fb_h, dt, elapsed_time, layerBlur);
-        } else {
-            renderer_set_camera(layer_cam);
-            layer->draw(layer_cam, fb_w, fb_h, dt, elapsed_time, layerBlur);
-        }
+    // Back-to-front, respecting editor-panel debug toggles.
+    if (starfield && (!gs || gs->render.bg_layer0_enabled)) {
+        draw_bg_layer(starfield, cam, fb_w, fb_h, dt, elapsed_time, baseBlur);
+    }
+    if (nebula && (!gs || gs->render.bg_nebula_enabled)) {
+        draw_bg_layer(nebula, cam, fb_w, fb_h, dt, elapsed_time, baseBlur);
+    }
+    if (mapped_system && (!gs || gs->render.bg_layer2_enabled)) {
+        draw_bg_layer(mapped_system, cam, fb_w, fb_h, dt, elapsed_time, baseBlur);
     }
     renderer_set_camera(cam);
 }
+

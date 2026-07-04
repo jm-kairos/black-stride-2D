@@ -20,11 +20,22 @@ struct StarFxSystem {
     // 3D sphere vs classic glow toggle
     b8  star_3d_mode;
     f32 star_rotation_speed;  // deg/s, 0 = static
+    f32 star_body_scale;      // 3D sphere radius multiplier on base_r (large = close to surface)
+    // Real-time GPU procedural star-surface tunables (3D mode uses the star_surface shader)
+    f32 surf_noise_scale;      // granulation cell frequency
+    f32 surf_flow_speed;       // convection animation speed
+    f32 surf_granule_contrast; // granulation contrast around mid-grey
+    f32 surf_hotspot_gain;     // emissive bright-spot strength
+    f32 surf_sunspot_density;  // dark-spot coverage
+    f32 surf_limb_darkening;   // limb darkening exponent
+    f32 surf_brightness;       // overall surface brightness
+    f32 surf_corona_strength;  // outer corona glow intensity
+    f32 surf_corona_ratio;     // outer glow radius / body radius (quad margin)
+    f32 surf_dark_radius;      // radius (in body radii) of the opaque black surround
     // ---- Procedural textures (owned) ----------------------------------------------------
     bs_texture tex_core;    // quartic falloff — sharp central disk
     bs_texture tex_corona;  // quadratic falloff — soft mid-glow
     bs_texture tex_halo;    // linear falloff — wide outer aura
-    bs_texture tex_sphere;  // procedural lit sphere for 3D mode
     // ---- Lifetime -----------------------------------------------------------------------
     void init();
     void shutdown();
@@ -41,12 +52,19 @@ struct StarFxSystem {
                    f32 base_r, f32 screen_radius, f32 vis, f32 time, u32 layer,
                    u16 fb_w, u16 fb_h, f32 scale = 1.0f,
                    bs_math::Vec2 aux_world_pos = bs_math::Vec2{0.0f, 0.0f}) const;
+    // Apply the single-source anamorphic streak/flare renderer state (length, angle,
+    // intensity, flare) for the given draw `scale` and `time`. Does NOT set the streak
+    // source position (the caller owns that via renderer_set_streak_source). Because the
+    // streak is a single global post-process, the last caller wins; call this last for the
+    // star that should own the streak (e.g. the current system's hero star).
+    void apply_streak_state(f32 scale, f32 time) const;
     // Internal render paths.
     void draw_star_classic(StarSystem& ss, bs_math::Vec2 world_pos, bs_math::Vec2 screen_pos,
                            bs_math::Vec2 aux_world_pos, f32 screen_radius, f32 vis,
                            f32 time, u32 layer, u16 fb_w, u16 fb_h, f32 scale) const;
-    void draw_star_3d(StarSystem& ss, bs_math::Vec2 world_pos, f32 base_r, f32 vis,
-                      f32 time, u32 layer, f32 scale) const;
+    void draw_star_3d(StarSystem& ss, bs_math::Vec2 world_pos, bs_math::Vec2 screen_pos,
+                      f32 base_r, f32 screen_radius, f32 vis, f32 time, u32 layer,
+                      u16 fb_w, u16 fb_h, f32 scale, bs_math::Vec2 aux_world_pos) const;
     // ---- Editor UI ----------------------------------------------------------------------
     void build_ui();
 };

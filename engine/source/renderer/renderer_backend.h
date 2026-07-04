@@ -34,6 +34,10 @@ typedef struct renderer_backend
     // (stb_image) and hands raw bytes here so this stays the only TU touching the GPU.
     bs_texture (*create_texture)(struct renderer_backend* backend, const u8* pixels, u32 width, u32 height);
 
+    // Re-upload pixels to a texture previously returned by create_texture. Width and height must
+    // match the original texture dimensions. Returns TRUE on success.
+    b8 (*update_texture)(struct renderer_backend* backend, bs_texture texture, const u8* pixels, u32 width, u32 height);
+
     // Release a texture previously returned by create_texture. No-op on an invalid handle.
     void (*destroy_texture)(struct renderer_backend* backend, bs_texture texture);
 
@@ -55,6 +59,18 @@ typedef struct renderer_backend
     // Draw a procedural sunburst star via custom GPU pipeline.
     // Parameters are queued and rendered during end_frame.
     void (*draw_sunburst)(struct renderer_backend* backend, const bs_sunburst_params* params);
+
+    // Draw a real-time procedural star surface via custom GPU pipeline.
+    // Parameters are queued and rendered during end_frame.
+    void (*draw_starsurface)(struct renderer_backend* backend, const bs_starsurface_params* params);
+
+    // Draw a procedural radiation heat map via custom GPU pipeline.
+    // Parameters are queued and rendered during end_frame.
+    void (*draw_heat_map)(struct renderer_backend* backend, const bs_heat_map_params* params);
+
+    // Draw a procedural alpha-blended nebula/dust cloud layer via custom GPU pipeline.
+    // Parameters are stored and rendered during end_frame.
+    void (*draw_nebula)(struct renderer_backend* backend, const bs_nebula_params* params);
 
     // Store the editable list of 2D point lights (+ scene-global ambient and the unlit-layer
     // threshold) used by the sprite fragment shader. The backend copies them and pushes the packed
@@ -87,6 +103,10 @@ typedef struct renderer_backend
     // *out_stats. The backend snapshots these at the end of end_frame. May be NULL on a backend
     // that does not track stats; the frontend checks before calling.
     void (*get_frame_stats)(struct renderer_backend* backend, bs_frame_stats* out_stats);
+
+    // Set the swapchain present mode at runtime (FALSE = VSYNC, TRUE = IMMEDIATE). Used for
+    // GPU-cost profiling; falls back to VSYNC if IMMEDIATE is unsupported.
+    void (*set_present_mode)(struct renderer_backend* backend, b8 immediate);
 } renderer_backend;
 
 // Factory: wire up the function pointers for the requested backend type.

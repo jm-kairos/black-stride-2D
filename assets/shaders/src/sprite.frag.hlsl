@@ -72,12 +72,15 @@ float4 main(PSInput input) : SV_Target0
     // ---- Base procedural glow (radial, all sprites) ---------------------------------------
     float2 uv_center = uv - float2(0.5, 0.5);
     float dist_sq = dot(uv_center, uv_center);
-    float glow_val = exp(-dist_sq * g_falloff) * g_intensity * input.custom.x;
+    float glow_val = exp(-dist_sq * g_falloff) * g_intensity * (input.custom.x + input.custom.w);
     texel.rgb += g_glow_tint * glow_val;
 
     float3 lighting = float3(1.0f, 1.0f, 1.0f);
     float3 volumetric = float3(0.0f, 0.0f, 0.0f);
-    if (light_params.y > 0.5f)
+    // custom.z >= 0.5 flags a self-emissive sprite (e.g. a star body that already bakes its
+    // own shading). Such sprites skip scene point-light shading so the volumetric star light
+    // + bright ambient cannot wash their baked surface out to white.
+    if (light_params.y > 0.5f && input.custom.z < 0.5f)
     {
         float3 acc   = ambient_color.rgb;
         int    count = (int)light_params.x;

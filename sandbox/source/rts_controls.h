@@ -6,12 +6,14 @@
 // Forward declaration: game_state is defined in game.h.
 struct game_state;
 
-inline b8 ship_inside_world_box(const Ship* ship, bs_math::Vec2 min_world, bs_math::Vec2 max_world) {
+inline b8 ship_inside_world_box(const Ship* ship, bs_math::HierPos2 min_world, bs_math::HierPos2 max_world) {
     if (!ship) return FALSE;
-    bs_math::Vec2 p = ship->origin;
-    if (min_world.x > max_world.x) { f32 t = min_world.x; min_world.x = max_world.x; max_world.x = t; }
-    if (min_world.y > max_world.y) { f32 t = min_world.y; min_world.y = max_world.y; max_world.y = t; }
-    return (p.x >= min_world.x && p.x <= max_world.x && p.y >= min_world.y && p.y <= max_world.y) ? TRUE : FALSE;
+    // Work in a min-relative frame so the test stays precise far from the galaxy origin.
+    bs_math::Vec2 p  = bs_math::hierpos_diff(&ship->origin, &min_world, bs_math::BS_HIERPOS_CELL_SIZE);
+    bs_math::Vec2 mx = bs_math::hierpos_diff(&max_world,    &min_world, bs_math::BS_HIERPOS_CELL_SIZE);
+    f32 lo_x = 0.0f, hi_x = mx.x; if (lo_x > hi_x) { f32 t = lo_x; lo_x = hi_x; hi_x = t; }
+    f32 lo_y = 0.0f, hi_y = mx.y; if (lo_y > hi_y) { f32 t = lo_y; lo_y = hi_y; hi_y = t; }
+    return (p.x >= lo_x && p.x <= hi_x && p.y >= lo_y && p.y <= hi_y) ? TRUE : FALSE;
 }
 // =====================================================================================
 // RTS controls module.
@@ -48,12 +50,12 @@ private:
     // Camera transition from free-camera to piloted ship.
     b8 m_camera_transitioning;
     f32 m_camera_transition_t;
-    bs_math::Vec2 m_camera_transition_from;
+    bs_math::HierPos2 m_camera_transition_from;
     // Free camera movement state.
     bs_math::Vec2 m_free_camera_vel;
-    bs_math::Vec2 m_free_camera_drag_target;
+    bs_math::HierPos2 m_free_camera_drag_target;
     bs_math::Vec2 m_free_camera_drag_start_mouse;
-    bs_math::Vec2 m_free_camera_drag_start_pos;
+    bs_math::HierPos2 m_free_camera_drag_start_pos;
     b8 m_free_camera_dragging;
     // Helpers.
     void clear_fleet_orders();
@@ -62,7 +64,7 @@ private:
                             bs_color color, u32 layer);
     void draw_rect_from_screen_box(const RtsSelectionBox& box, f32 thickness,
                                    bs_color color, u32 layer);
-    void draw_selection_rect(const Ship* ship, f32 thickness, bs_color color, u32 layer);
+    void draw_selection_rect(bs_math::Vec2 center, f32 radius, f32 thickness, bs_color color, u32 layer);
     void draw_move_marker(bs_math::Vec2 target, f32 thickness, bs_color color, u32 layer);
-    void draw_attack_marker(const Ship* ship, f32 thickness, bs_color color, u32 layer);
+    void draw_attack_marker(bs_math::Vec2 center, f32 radius, f32 thickness, bs_color color, u32 layer);
 };

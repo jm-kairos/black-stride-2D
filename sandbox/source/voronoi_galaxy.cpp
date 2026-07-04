@@ -2,38 +2,19 @@
 #include "jc_voronoi.h"
 #include "voronoi_galaxy.h"
 #include "game.h"
+#include "core/view_transform.h" // cosmetic_compress
 #include <math/math_utils.h>
 #include <math/bs_hierpos.h>
 #include <renderer/renderer.h>
 #include <new>
 using namespace bs_math;
-// Scalar compression factor: 1.0 at normal zoom, shrinking toward 0.15 at min zoom.
-static f32 compression_factor(f32 zoom) {
-    const f32 threshold = 0.02f;
-    const f32 min_zoom  = 0.000004f;
-    if (zoom >= threshold) return 1.0f;
-    f32 t = (zoom - min_zoom) / (threshold - min_zoom);
-    return 0.15f + 0.85f * t;
-}
-static Vec2 cosmetic_compress(Vec2 pos, f32 zoom) {
-    return vec2_scale(pos, compression_factor(zoom));
-}
+// compression_factor / cosmetic_compress now come from core/view_transform.h (via game.h),
+// so voronoi cells share the SAME smoothstep compression curve as stars/ships (previously this
+// file used a linear ramp and drifted from them at extreme zoom-out).
 // =====================================================================================
 // Internal helpers
 // =====================================================================================
-static b8 point_in_polygon(Vec2 p, const Vec2* verts, i32 count)
-{
-    if (count < 3) return FALSE;
-    b8 inside = FALSE;
-    for (i32 i = 0, j = count - 1; i < count; j = i++) {
-        Vec2 vi = verts[i];
-        Vec2 vj = verts[j];
-        if (((vi.y > p.y) != (vj.y > p.y)) &&
-            (p.x < (vj.x - vi.x) * (p.y - vi.y) / (vj.y - vi.y) + vi.x))
-            inside = !inside;
-    }
-    return inside;
-}
+// point_in_polygon now lives in core/geom2d.cpp (declared via core/geom2d.h, included by game.h).
 static void sort_verts_by_angle(Vec2 center, Vec2* verts, i32 count)
 {
     if (count < 2) return;
@@ -211,10 +192,10 @@ void draw_voronoi_edges(const GalaxyVoronoi* v, const game_state* s,
         if (e.is_border) continue;
         HierPos2 h0 = hierpos_from_vec2(e.p0, BS_HIERPOS_CELL_SIZE);
         HierPos2 h1 = hierpos_from_vec2(e.p1, BS_HIERPOS_CELL_SIZE);
-        Vec2 p0 = hierpos_diff(&h0, &s->camera_hierpos, BS_HIERPOS_CELL_SIZE);
-        Vec2 p1 = hierpos_diff(&h1, &s->camera_hierpos, BS_HIERPOS_CELL_SIZE);
-        p0 = cosmetic_compress(p0, s->camera.zoom);
-        p1 = cosmetic_compress(p1, s->camera.zoom);
+        Vec2 p0 = hierpos_diff(&h0, &s->camera_state.camera_hierpos, BS_HIERPOS_CELL_SIZE);
+        Vec2 p1 = hierpos_diff(&h1, &s->camera_state.camera_hierpos, BS_HIERPOS_CELL_SIZE);
+        p0 = cosmetic_compress(p0, s->camera_state.camera.zoom);
+        p1 = cosmetic_compress(p1, s->camera_state.camera.zoom);
         renderer_draw_line(p0, p1, thickness, edge_col, VORONOI_LAYER_CELESTIAL);
     }
 }
@@ -226,10 +207,10 @@ void draw_delaunay_lanes(const GalaxyVoronoi* v, const StarSystem* systems,
     for (i32 i = 0; i < v->delaunay_edge_count; ++i) {
         const GalaxyDEdge& e = v->delaunay_edges[i];
         if (e.site_a < 0 || e.site_b < 0) continue;
-        Vec2 pa = hierpos_diff(&systems[e.site_a].galaxy_center, &s->camera_hierpos, BS_HIERPOS_CELL_SIZE);
-        Vec2 pb = hierpos_diff(&systems[e.site_b].galaxy_center, &s->camera_hierpos, BS_HIERPOS_CELL_SIZE);
-        pa = cosmetic_compress(pa, s->camera.zoom);
-        pb = cosmetic_compress(pb, s->camera.zoom);
+        Vec2 pa = hierpos_diff(&systems[e.site_a].galaxy_center, &s->camera_state.camera_hierpos, BS_HIERPOS_CELL_SIZE);
+        Vec2 pb = hierpos_diff(&systems[e.site_b].galaxy_center, &s->camera_state.camera_hierpos, BS_HIERPOS_CELL_SIZE);
+        pa = cosmetic_compress(pa, s->camera_state.camera.zoom);
+        pb = cosmetic_compress(pb, s->camera_state.camera.zoom);
         renderer_draw_line(pa, pb, thickness, lane_col, VORONOI_LAYER_UI);
     }
 }

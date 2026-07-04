@@ -20,7 +20,7 @@ struct TravelState {
     f64 world_x;
     f64 world_y;
 };
-void travel_init(TravelState* ts, bs_math::Vec2 ship_origin, bs_math::Vec2 dest_world);
+void travel_init(TravelState* ts, bs_math::HierPos2 ship_origin, bs_math::Vec2 dest_world);
 void travel_update(TravelState* ts, f32 dt);
 void travel_reset(TravelState* ts);
 void travel_set_destination(TravelState* ts, bs_math::Vec2 dest_world);

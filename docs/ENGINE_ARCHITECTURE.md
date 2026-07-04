@@ -170,10 +170,14 @@ game  ->  renderer.h (frontend)  ->  renderer_backend vtable  ->  sdlgpu backend
 ### Frontend (`renderer.cpp`)
 Public API (all `bs__api__`-exported):
 - Lifecycle: `renderer_initialize/shutdown/on_resize/begin_frame/end_frame`, `set_clear_color`.
-- Resources: `renderer_load_texture(path)`, `renderer_destroy_texture`.
+- Resources: `renderer_load_texture(path)`, `renderer_create_texture(pixels,w,h)`,
+  `renderer_update_texture(tex,pixels,w,h)` (re-upload to an existing texture), and
+  `renderer_destroy_texture`.
 - Camera: `renderer_set_camera(Camera2D)`.
 - Draw: `renderer_draw_sprite(const bs_sprite*)` plus immediate-mode helpers
   `renderer_draw_quad / draw_line / draw_rect_outline / draw_circle / draw_grid`.
+  Custom fullscreen passes: `renderer_draw_starfield`, `renderer_draw_sunburst`,
+  `renderer_draw_heat_map(const bs_heat_map_params*)` — procedural heat map overlay.
 - Stats: `renderer_get_frame_stats()` → `{sprite_count, draw_calls}`.
 
 **Every immediate-mode helper is built on the sprite batch.** A quad is a sprite with the
@@ -181,9 +185,9 @@ Public API (all `bs__api__`-exported):
 `sprite_count` counts debug primitives too.
 
 ### Backend interface (`renderer_backend.{h,cpp}`)
-A struct of function pointers (initialize, shutdown, begin/end frame, create/destroy
-texture, set_camera, draw_sprite, get_frame_stats, set_clear_color, on_resize). The
-factory binds them to the `sdlgpu_backend_*` functions. Adding a backend = implement the
+A struct of function pointers (initialize, shutdown, begin/end frame, create/update/destroy
+texture, set_camera, draw_sprite, draw_heat_map, get_frame_stats, set_clear_color, on_resize).
+The factory binds them to the `sdlgpu_backend_*` functions. Adding a backend = implement the
 vtable; the frontend and game never change.
 
 ### SDL3 GPU backend (`renderer_backend_sdlgpu.cpp`) — the render model
@@ -192,6 +196,8 @@ vtable; the frontend and game never change.
 
 1. `draw_sprite` appends a `bs_sprite` to a CPU batch (cap `BS_MAX_SPRITES`) and computes a
    **sort key**: `(layer << 20) | (blend << 18) | tex_index`. No GPU work yet.
+   `draw_heat_map` stores `bs_heat_map_params` in backend state; a single fullscreen draw is
+   issued inside the scene render pass before the sprite batch (so it appears behind ships).
 2. `end_frame`:
    - **Sort the batch** with `SDL_qsort` by that key. *(Unstable sort — see Pitfalls.)*
    - Build 4 world-space corner vertices per sprite on the CPU (applies origin, rotation;
@@ -226,6 +232,7 @@ SPIR-V (Vulkan fallback); runtime picks per `SDL_GetGPUShaderFormats`. SDL3 GPU 
 contract is encoded via register spaces:
 - vertex uniform buffer → `register(b0, space1)` (view_proj Mat4, uploaded column-major).
 - fragment sampled texture/sampler → `register(t0/s0, space2)`.
+- fragment uniform buffer → `register(b0, space3)` (used by procedural heat map shader).
 Vertex inputs are mapped to `TEXCOORD0..2` = position / uv / color (SDL maps non-system
 semantics to TEXCOORD on D3D12). The pipeline vertex layout must match this order.
 
@@ -291,6 +298,40 @@ A `#if BS_DEBUG` grid (`renderer_draw_grid`) is drawn each frame. **See Pitfalls
 layer-tie flicker class of bug** — two primitives sharing the same `(layer, blend,
 texture)` will swap paint order frame-to-frame under the unstable sort.
 
+### Radiation detector / heat map (`game.cpp`)
+- Toggled in global mode via the EDITOR PANEL "Radiation detector" checkbox (or by the
+  `show_metaball_ui` flag). Only active in `MODE_GLOBAL`.
+- Ships and combat entities expose a `radiation_emission` value (0..1). All active entities
+  with emission > 0 become heat sources. Drone-type fleet ships scale their emission with
+  speed: `0.005f` when halted, rising linearly to `0.05f` at `SHIP_MAX_SPEED`. The enemy raider
+  emits a constant `1.0f`.
+- The heat map overlay is a procedural fullscreen pass drawn via `renderer_draw_heat_map`.
+  The shader evaluates a uniform detection field (`base_radius² / dist²`) for every source,
+  so the detection radius is the same for drones and raiders. A second, emission-weighted
+  field (`emission² * base_radius² / dist²`) drives the rainbow gradient and alpha. For
+  non-fleet sources (enemy raider, future unidentified objects) the emission is further
+  attenuated by distance from the nearest fleet ship: full inside `base_detection_radius`,
+  then very faint (`(base_radius / distance)^4`) beyond it. Fleet ships are always shown at
+  full brightness because they are the detectors.
+- Moving heat sources leave a short, fluid wake. `draw_ship_metaballs` submits the current
+  position as the strongest point source, then extrapolates additional sources backward
+  along the entity's velocity vector with speed-scaled, age-faded emission. This creates a
+  visible, tapered trail behind moving ships while keeping stationary ships compact.
+  `BS_MAX_HEAT_SOURCES` was increased to 256 to fit ship trails, projectile trails, and
+  future hazard sources. Sources outside the viewport plus a margin are culled to keep CPU
+  work bounded.
+- The colored heat map is produced entirely by the GPU fullscreen shader; the CPU only
+  gathers and submits source positions. This makes the CPU cost `O(sources)` and scalable
+  to a large number of ships.
+- The shader applies a mild, smooth low-frequency domain warp to the sampling position,
+  giving the heat signature a soft, organic, non-circular boundary rather than a perfect
+  halo. The EDITOR PANEL exposes `Tail length`, `Tail fade`, and `Heat warp` sliders for tuning.
+- A simple static circle is drawn around the flagship at `base_detection_radius` to indicate
+  the detector range, replacing the previous CPU marching-squares contour lines.
+- Live performance readouts: `heat_map_cpu_ms` (rolling-average CPU cost of the heat map
+  work) and `frame_ms` (rolling-average frame time) are displayed in the EDITOR PANEL and
+  tracked with `std::chrono::steady_clock` (no SDL dependency in the sandbox).
+
 ---
 
 ## 6. Pitfalls & non-obvious invariants
@@ -352,6 +393,10 @@ the build.
 
 # Shaders (only when HLSL changes; requires dxc from the Vulkan SDK):
 bash tools/compile_shaders.sh
+# Additional heat_map fragment shader (already included in the script above, but if you
+# compile manually): dxc -T ps_6_0 -E main assets/shaders/src/heat_map.frag.hlsl
+#   -Fo assets/shaders/dxil/heat_map.frag.dxil
+# and the SPIR-V equivalent with -spirv -fspv-target-env="vulkan1.2".
 
 # Run (working dir MUST be bin/ so relative asset paths resolve):
 cd bin && ./sandbox.exe

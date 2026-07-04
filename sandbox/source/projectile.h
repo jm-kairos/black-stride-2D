@@ -1,16 +1,18 @@
 #pragma once
 #include <defines.h>
 #include <math/math_utils.h>
+#include <math/bs_hierpos.h>
 #include <renderer/renderer_types.h>
 #include "ship.h"
 #define MAX_PROJECTILES 256
 struct Projectile {
     b8            active;     // FALSE => free slot
-    bs_math::Vec2 position;   // world-space
+    bs_math::HierPos2 position;   // world-space (hierarchical grid cell + local offset)
     bs_math::Vec2 velocity;   // world-space units/s
     f32           lifetime;   // seconds remaining
     f32           age;        // seconds since spawn
     f32           radius;     // visual radius (world units)
+    f32           radiation_emission; // 0..1 heat-source strength; 0 means invisible to detector
     bs_color      color;      // tint
     VesselFaction owner;      // who fired it
 };
@@ -22,11 +24,13 @@ struct ProjectileSystem {
     // zero-init
     void init();
     // spawn a new projectile; returns TRUE if a free slot was found
-    b8 spawn(bs_math::Vec2 origin, bs_math::Vec2 velocity,
-             f32 lifetime, f32 radius, bs_color color, VesselFaction owner);
+    b8 spawn(bs_math::HierPos2 origin, bs_math::Vec2 velocity,
+             f32 lifetime, f32 radius, bs_color color, VesselFaction owner,
+             f32 radiation_emission = 0.0f);
     // advance all active projectiles; retire those whose lifetime expired
     void update(f32 dt);
-    // submit draw commands for all active projectiles
-    void render(u32 layer) const;
+    // submit draw commands for all active projectiles. Positions are transformed into the
+    // compressed render space relative to `camera` (render = hierpos_diff(pos, camera) * comp).
+    void render(u32 layer, const bs_math::HierPos2* camera, f32 comp = 1.0f) const;
     const bs_glow_params* glow_override; // NULL => use global glow; else per-bullet glow
 };
