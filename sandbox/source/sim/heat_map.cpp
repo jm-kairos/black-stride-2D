@@ -1,6 +1,6 @@
 #include "sim/heat_map.h"
 #include "game.h"
-#include "core/view_transform.h" // compression_factor, game_camera_center_hierpos
+#include "core/view_transform.h" // game_camera_center_hierpos
 #include <renderer/renderer.h> // bs_heat_map_params, renderer_draw_heat_map
 #include <math.h>  // powf, fmaxf
 #include <chrono>
@@ -40,15 +40,6 @@ void draw_ship_metaballs(game_state* s) {
     f32 heat_signature_radius = s->heat_signature_radius;
     if (base_radius <= 0.0f) return;
 
-    // At far zoom the sprite renderer compresses entity offsets by compression_factor(zoom)
-    // (it draws entities at comp*(P - camera_hierpos)) so distant systems fit on screen. The heat
-    // map must live in the SAME compressed render space or the blob drifts off its emitter as we
-    // zoom out. Fold comp into every source offset and world-space radius below; camera_pos and
-    // viewport already live in the compressed render frame (camera.position residual + fb/zoom
-    // span), so those stay as-is.
-    f32 comp = compression_factor(s->camera_state.camera.zoom);
-    if (comp < 1e-6f) comp = 1e-6f;
-
     // Viewport for shader submission and source culling.
     f32 vis_w = (f32)s->fb_width  / s->camera_state.camera.zoom;
     f32 vis_h = (f32)s->fb_height / s->camera_state.camera.zoom;
@@ -69,13 +60,13 @@ void draw_ship_metaballs(game_state* s) {
     f32 max_x = heat_center.x + vis_w * 0.5f + pad_x;
     f32 min_y = heat_center.y - vis_h * 0.5f - pad_y;
     f32 max_y = heat_center.y + vis_h * 0.5f + pad_y;
-    const f32 cull_margin = fmaxf(base_radius, heat_signature_radius) * 3.0f * comp;
+    const f32 cull_margin = fmaxf(base_radius, heat_signature_radius) * 3.0f;
     auto in_viewport = [&](Vec2 p) -> b8 {
         return p.x >= min_x - cull_margin && p.x <= max_x + cull_margin &&
                p.y >= min_y - cull_margin && p.y <= max_y + cull_margin;
     };
     auto to_rel = [&](const bs_math::HierPos2& hp) -> Vec2 {
-        return vec2_scale(hierpos_diff(&hp, &s->camera_state.camera_hierpos, BS_HIERPOS_CELL_SIZE), comp);
+        return hierpos_diff(&hp, &s->camera_state.camera_hierpos, BS_HIERPOS_CELL_SIZE);
     };
 
     // ---- Gather all game objects with radiation_emission > 0. -----------------------
@@ -159,13 +150,13 @@ void draw_ship_metaballs(game_state* s) {
     hm.camera_pos = heat_center;
     hm.viewport_w = vis_w;
     hm.viewport_h = vis_h;
-    hm.base_radius = base_radius * comp;
-    hm.heat_signature_radius = heat_signature_radius * comp;
+    hm.base_radius = base_radius;
+    hm.heat_signature_radius = heat_signature_radius;
     hm.palette = (u32)s->heat_palette;
     hm.color_low = s->heat_color_low;
     hm.color_high = s->heat_color_high;
     hm.color_falloff_power = s->heat_color_falloff_power;
-    hm.heat_warp_strength = s->heat_warp_strength * comp;
+    hm.heat_warp_strength = s->heat_warp_strength;
     hm.venn_sharpness = s->heat_map_venn_sharpness;
     hm.threshold = threshold;
     hm.intensity = s->heat_map_intensity * heat_map_fade_weight(s->camera_state.camera.zoom);

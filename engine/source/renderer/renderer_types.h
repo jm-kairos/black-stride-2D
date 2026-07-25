@@ -250,6 +250,45 @@ typedef struct bs_starsurface_params
     b8       aux_bloom;              // when TRUE, emit a proxy sprite for the aux-bloom/streak pass
 } bs_starsurface_params;
 
+// Parameters for a real-time procedural PLANET surface (impostor sphere) drawn via a custom GPU
+// pipeline. Passed to renderer_draw_planetsurface; queued and rendered during end_frame
+// (premult-over blend: the lit sphere occludes the scene, atmosphere/rings glow at the limb).
+typedef struct bs_planetsurface_params
+{
+    bs_math::Vec2 screen_pos;        // planet centre in screen pixels (top-left origin)
+    f32      body_radius;            // sphere disc radius in screen pixels
+    f32      quad_radius;            // outer quad half-size px (covers rings + atmosphere)
+    bs_color base_color;             // surface base tint (from planet type)
+    f32      time;                   // elapsed time for animation
+    bs_math::Vec2 light_dir;         // screen-space unit direction from planet toward its star
+    i32      planet_type;            // PlanetType enum value (drives the per-type surface)
+    f32      visibility;             // 0..1 fade (sensor range / cross-fade weight)
+    f32      rotation;               // axial rotation phase (radians)
+    f32      seed;                   // per-planet surface hash (stable look)
+    b8       has_atmosphere;         // draw the atmosphere rim glow
+    b8       has_rings;              // draw a ring band
+    f32      cloud_amount;           // 0..1 cloud coverage (ocean/terran)
+    f32      ring_shadow_elev;       // sin(star elevation above ring plane); orbit-driven seasons
+    bs_color star_color;             // star light colour tint
+    // ---- Per-planet genome (data-driven surface): 4-stop palette + feature genes + anomaly ----
+    bs_color pal_deep;               // shadow / base tone
+    bs_color pal_mid;                // dominant mid tone
+    bs_color pal_light;              // highlight tone
+    bs_color pal_accent;             // accent / emissive (lava glow, storm streaks)
+    bs_color cloud_tint;             // cloud colour
+    bs_color atmo_tint;              // atmosphere / limb-haze colour (from the genome)
+    f32      noise_freq;             // surface detail frequency multiplier
+    f32      warp_amount;            // domain-warp strength (feature fluidity)
+    f32      feature_density;        // craters / storms / continents amount (0..1)
+    f32      band_detail;            // gas/ice band count + sharpness (0..1)
+    f32      cap_extent;             // polar ice-cap size (0..1)
+    f32      roughness;              // terrain / tonal contrast (0..1)
+    f32      anomaly;                // rare-mutation id (structural anomalies branch in-shader)
+    u32      layer;                  // render sort key (e.g. LAYER_CELESTIAL)
+    u16      fb_w;                   // viewport width in pixels
+    u16      fb_h;                   // viewport height in pixels
+} bs_planetsurface_params;
+
 // Available heat-map color palettes.
 typedef enum bs_heat_palette
 {

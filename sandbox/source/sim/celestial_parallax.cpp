@@ -1,6 +1,6 @@
 #include "sim/celestial_parallax.h"
 #include "game.h"
-#include "voronoi_galaxy.h"
+#include "sim/galaxy_map.h"
 
 using namespace bs_math;
 
@@ -9,8 +9,13 @@ using namespace bs_math;
 // system's own center) keeps the depth term common to all systems, so their relative layout stays
 // rigid at any depth. Fallback to camera_hierpos yields a zero parallax offset (still no fusing).
 bs_math::HierPos2 celestial_shared_anchor(const game_state* s) {
-    i32 idx = find_system_by_cell(&s->camera_state.camera_hierpos, &s->galaxy.galaxy_voronoi, s->galaxy.systems);
-    if (idx >= 0 && idx < s->galaxy.system_count) return s->galaxy.systems[idx].galaxy_center;
+    // While a planet is captured (approach), the camera is deliberately offset from the star (to
+    // cancel the planet's parallax). "Nearest node to the camera" would then snap the shared anchor
+    // onto a NEIGHBOUR star as that offset grows, breaking the parallax math and mis-centring the
+    // planet. Pin the anchor to the captured star so the correction stays exact for ANY depth.
+    if (s->planet_approach.engaged) return s->planet_approach.system_center;
+    i32 idx = galaxy_nearest_node(s, &s->camera_state.camera_hierpos);
+    if (idx >= 0) return s->galaxy.nodes[idx].galaxy_center;
     return s->camera_state.camera_hierpos;
 }
 
@@ -31,7 +36,7 @@ static f32 parallax_fade_weight(const game_state* s) {
 
 // celestial_center_render: depth-parallax'd camera-relative offset of a system's center. See
 // declaration in celestial_parallax.h. Returns (system_center - cam) - (shared_anchor - cam)*depth;
-// the caller adds element-local offsets and applies compression. Because the depth term uses the
+// the caller adds element-local offsets. Because the depth term uses the
 // SHARED anchor, inter-system spacing is preserved exactly (no fusing at any depth). Master toggle
 // disables parallax entirely (returns the raw camera-relative offset).
 bs_math::Vec2 celestial_center_render(const game_state* s, const bs_math::HierPos2* system_center,
@@ -46,4 +51,11 @@ bs_math::Vec2 celestial_center_render(const game_state* s, const bs_math::HierPo
     if (eff_depth <= 0.0f) return sys_rel;
     bs_math::Vec2 anchor_rel = hierpos_diff(shared_anchor, &s->camera_state.camera_hierpos, BS_HIERPOS_CELL_SIZE);
     return vec2_sub(sys_rel, vec2_scale(anchor_rel, eff_depth));
+}
+
+// Public accessor for the internal parallax fade ramp (see parallax_fade_weight). Returns 0 when
+// parallax is disabled so callers get "no parallax" consistently.
+f32 celestial_parallax_fade(const game_state* s) {
+    if (!s->render.bg_parallax_enabled) return 0.0f;
+    return parallax_fade_weight(s);
 }

@@ -1,5 +1,8 @@
 #include "sim/combat_arena.h"
 #include "game.h"            // full game_state (ship.h / projectile.h / fleet.h via the cascade)
+#include "weapon.h"          // Weapon::fire / ready / projectile_speed
+#include "sim/galaxy_history.h" // galaxy_history_faction_is_hostile (Feature B per-entity stance)
+#include "sim/ai_ship.h"      // ai_ship_damage (General Ship AI: NPC combat entities)
 #include "sim/action_log.h"  // action_log_push
 #include "core/geom2d.h"     // point_in_polygon
 #include <math.h>            // sqrtf
@@ -18,42 +21,15 @@ void combat_arena_init(game_state* s) {
         s->combat_entities[i].heat_history_count = 0;
     }
 
-    // Register enemy ship as a combat entity.
-    {
-        CombatEntity* ce = &s->combat_entities[0];
-        ce->active   = TRUE;
-        ce->position = s->fleet_state.enemy_ship.origin;
-        ce->velocity = Vec2{ 0.0f, 0.0f };
-        ce->radius   = ship_bounding_radius(&s->fleet_state.enemy_ship);
-        ce->faction  = s->fleet_state.enemy_ship.faction;
-        ce->hp       = 100.0f;
-        ce->ship     = &s->fleet_state.enemy_ship;
-        ce->tint     = bs_color{ 1.0f, 0.3f, 0.3f, 1.0f };
-        ce->radiation_emission = s->fleet_state.enemy_ship.radiation_emission;
-        ce->is_drone = FALSE;
-        s->combat_entity_count = 1;
-    }
-
-    // Register every fleet ship as a combat entity so enemy fire can hit them.
-    for (i32 i = 0; i < s->fleet_state.fleet.count() && s->combat_entity_count < MAX_COMBAT_ENTITIES; ++i) {
-        FleetShip& fs = s->fleet_state.fleet.at(i);
-        CombatEntity* ce = &s->combat_entities[s->combat_entity_count++];
-        ce->active   = TRUE;
-        ce->position = fs.ship.origin;
-        ce->velocity = fs.flight.velocity;
-        ce->radius   = ship_bounding_radius(&fs.ship);
-        ce->faction  = fs.ship.faction;
-        ce->hp       = 100.0f;
-        ce->ship     = &fs.ship;
-        ce->tint     = bs_color{ 0.3f, 0.8f, 1.0f, 1.0f };
-        ce->radiation_emission = fs.ship.radiation_emission;
-        ce->is_drone = TRUE;
-    }
+    // Register the enemy ship + every ACTIVE fleet ship as combat entities. Recomputes
+    // npc_combat_base so the NPC window that ai_ships_register_combat appends lands right after.
+    combat_arena_rebuild_player_entities(s);
 
     // ---- Sensor / heat-signature / encounter tunables --------------------------------------
     s->ship_sensor_range      = 30000.0f;
     s->out_sensor_fx.init();
     s->show_metaball_ui       = FALSE;
+    s->show_sensor_layers     = FALSE;
 
     s->base_detection_radius  = 5000.0f;
     s->heat_signature_radius = 1000.0f;
@@ -76,6 +52,49 @@ void combat_arena_init(game_state* s) {
     s->encounter_can_retrigger = TRUE;
 }
 
+// Rebuild the persistent (non-NPC) combat-entity window: slot 0 is the enemy ship, slots
+// 1..fleet.count() mirror the ACTIVE fleet ships. Sets npc_combat_base to the slot right after
+// so the NPC agents (appended each frame by ai_ships_register_combat) start there. Call whenever
+// the active fleet count changes (e.g. the multi-ship editor toggle) so the windows stay packed.
+void combat_arena_rebuild_player_entities(game_state* s) {
+    if (!s) return;
+    // Register enemy ship as a combat entity (slot 0).
+    {
+        CombatEntity* ce = &s->combat_entities[0];
+        ce->active   = TRUE;
+        ce->position = s->fleet_state.enemy_ship.origin;
+        ce->velocity = Vec2{ 0.0f, 0.0f };
+        ce->radius   = ship_bounding_radius(&s->fleet_state.enemy_ship);
+        ce->faction  = s->fleet_state.enemy_ship.faction;
+        ce->faction_id = s->fleet_state.enemy_ship.faction_id;
+        ce->hp       = 100.0f;
+        ce->ship     = &s->fleet_state.enemy_ship;
+        ce->tint     = bs_color{ 1.0f, 0.3f, 0.3f, 1.0f };
+        ce->radiation_emission = s->fleet_state.enemy_ship.radiation_emission;
+        ce->is_drone = FALSE;
+    }
+    s->combat_entity_count = 1;
+
+    // Register every ACTIVE fleet ship as a combat entity so enemy fire can hit them.
+    for (i32 i = 0; i < s->fleet_state.fleet.count() && s->combat_entity_count < MAX_COMBAT_ENTITIES; ++i) {
+        FleetShip& fs = s->fleet_state.fleet.at(i);
+        CombatEntity* ce = &s->combat_entities[s->combat_entity_count++];
+        ce->active   = TRUE;
+        ce->position = fs.ship.origin;
+        ce->velocity = fs.flight.velocity;
+        ce->radius   = ship_bounding_radius(&fs.ship);
+        ce->faction  = fs.ship.faction;
+        ce->faction_id = fs.ship.faction_id;
+        ce->hp       = 100.0f;
+        ce->ship     = &fs.ship;
+        ce->tint     = bs_color{ 0.3f, 0.8f, 1.0f, 1.0f };
+        ce->radiation_emission = fs.ship.radiation_emission;
+        ce->is_drone = TRUE;
+    }
+    // The NPC window begins right after the persistent player + enemy slots.
+    s->npc_combat_base = s->combat_entity_count;
+}
+
 void combat_arena_update_encounter(game_state* s) {
     // ---- Encounter detection: blob merge ------------------------------------------------
     f32 threshold = s->metaball_threshold;
@@ -88,7 +107,6 @@ void combat_arena_update_encounter(game_state* s) {
     if (enemy_detected && !s->encounter_active && s->encounter_can_retrigger) {
         s->encounter_active = TRUE;
         s->encounter_can_retrigger = FALSE;
-        s->time_scale = 0.0f; // pause on encounter
         action_log_push(s, "Encounter detected! Enemy ship nearby.");
     }
     if (!enemy_detected && !s->encounter_active) {
@@ -116,11 +134,66 @@ void combat_arena_update_enemy_orbit(game_state* s, f32 dt) {
     s->fleet_state.enemy_ship.angle  = s->fleet_state.enemy_orbit_phase + BS_PI * 0.5f;
 }
 
+// Static enemy AI: the ship never translates. It rotates to track the flagship (turret) and fires
+// its weapon periodically while the flagship is inside ENEMY_DETECTOR_RADIUS. The weapon cooldown
+// (ticked in game_update) gives the periodic cadence.
+void combat_arena_update_enemy_ai(game_state* s, f32 dt) {
+    if (!s) return;
+
+    Ship* sh = &s->fleet_state.enemy_ship;
+    FleetShip& flag_fs = s->fleet_state.fleet.flagship();
+    Ship* flag = &flag_fs.ship;
+
+    // Vector from the enemy to the flagship (world units).
+    Vec2 to_target = hierpos_diff(&flag->origin, &sh->origin, BS_HIERPOS_CELL_SIZE);
+    f32  dist      = vec2_length(to_target);
+
+    // Firing range is unbounded for now: only bail on a coincident target. Position is never
+    // changed -> the ship remains static.
+    if (dist < 0.0001f) return;
+
+    // Rotate the nose toward the flagship (turret tracking only; no movement).
+    f32 desired_angle = atan2f(-to_target.x, to_target.y);
+    f32 angle_diff    = desired_angle - sh->angle;
+    while (angle_diff >  BS_PI) angle_diff -= 2.0f * BS_PI;
+    while (angle_diff < -BS_PI) angle_diff += 2.0f * BS_PI;
+    f32 max_rot = SHIP_MAX_TURN * dt;
+    sh->angle += clampf(angle_diff, -max_rot, max_rot);
+
+    // Feature B: resolve hostility per-entity from this hull's own faction_id (folds transitive
+    // diplomacy: an ally's enemies read hostile). Wild space / pirates always engage; the player's
+    // own faction never does. Non-hostile patrols just track and watch - they hold fire.
+    if (!galaxy_history_faction_is_hostile(s, sh->faction_id)) return;
+
+    // Fire only when roughly aligned and the weapon is off cooldown.
+    const f32 ENEMY_FIRE_FACE_ANGLE = 0.20f; // rad
+    if (fabsf(angle_diff) > ENEMY_FIRE_FACE_ANGLE) return;
+    if (sh->active_weapon_idx < 0 || sh->active_weapon_idx >= sh->weapon_count) return;
+    Weapon* w = sh->weapons[sh->active_weapon_idx];
+    if (!w || !w->ready()) return;
+
+    HierPos2 fire_origin = ship_local_to_world(sh, sh->weapon_fire_offset_local);
+    Vec2 aim_dir = to_target;
+    // Lead the flagship using its velocity so shots can connect while it maneuvers.
+    Vec2 target_vel = flag_fs.flight.velocity;
+    if ((target_vel.x != 0.0f || target_vel.y != 0.0f)) {
+        f32 proj_speed = w->projectile_speed();
+        if (proj_speed > 0.0001f) {
+            f32 lead_time = dist / proj_speed;
+            HierPos2 lead_pos = hierpos_add_vec2(&flag->origin, vec2_scale(target_vel, lead_time));
+            aim_dir = hierpos_diff(&lead_pos, &fire_origin);
+        }
+    }
+    // Enemy is static, so its own muzzle velocity contribution is zero.
+    w->fire(fire_origin, aim_dir, Vec2{ 0.0f, 0.0f }, &s->projectiles);
+}
+
 void combat_arena_sync_entities(game_state* s, f32 sim_dt) {
     // ---- Sync combat entity positions / velocities from their ships --------------------
     for (i32 i = 0; i < s->combat_entity_count; ++i) {
         CombatEntity* ce = &s->combat_entities[i];
         if (!ce->active || !ce->ship) continue;
+        ce->faction_id = ce->ship->faction_id; // keep the entity's faction in sync with its ship
         HierPos2 prev_hp = ce->position;
         ce->position = ce->ship->origin;
         ShipFlight* fl = s->fleet_state.fleet.flight_for_ship(ce->ship);
@@ -175,6 +248,8 @@ void combat_arena_update_projectiles(game_state* s, f32 sim_dt) {
                     }
                 }
                 if (hit) {
+                    // General Ship AI: NPC agents take damage (and die + raid their civ) when shot.
+                    if (ce->is_npc) ai_ship_damage(s, ce->npc_index, 15.0f);
                     p->active = FALSE;
                     --s->projectiles.count;
                     break; // projectile can only hit one entity

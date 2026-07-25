@@ -64,6 +64,10 @@ typedef struct renderer_backend
     // Parameters are queued and rendered during end_frame.
     void (*draw_starsurface)(struct renderer_backend* backend, const bs_starsurface_params* params);
 
+    // Draw a real-time procedural planet (impostor sphere) via custom GPU pipeline.
+    // Parameters are queued and rendered during end_frame.
+    void (*draw_planetsurface)(struct renderer_backend* backend, const bs_planetsurface_params* params);
+
     // Draw a procedural radiation heat map via custom GPU pipeline.
     // Parameters are queued and rendered during end_frame.
     void (*draw_heat_map)(struct renderer_backend* backend, const bs_heat_map_params* params);

@@ -1,7 +1,7 @@
 #include "render/ship_scene.h"
 #include "game.h"
 #include "ship.h"                 // ship_local_dir
-#include "core/view_transform.h"    // compression_factor, render_from_hierpos
+#include "core/view_transform.h"    // render_from_hierpos
 #include "sim/celestial_parallax.h" // celestial_center_render
 #include "render/debug_overlay.h"   // g_debug_cell_grid, draw_hierpos_cell_grid
 #include "render/ship_render.h"     // draw_collider_outline, draw_fleet_emblems
@@ -144,31 +144,27 @@ static void draw_engine_exhaust(const Ship* ship, bs_texture exhaust_tex,
 
 void draw_ship_scene(game_state* s) {
     // Transform dynamic world positions into render space: shift relative to the camera_hierpos
-    // anchor, then apply the SAME cosmetic compression the galaxy-map star/planets use (see
-    // cosmetic_compress). Without matching the compression the fleet sprites would stay at their
-    // true positions while the star is pulled toward the camera when zoomed out, so the two
-    // visibly drift apart.
-    f32  comp = compression_factor(s->camera_state.camera.zoom);
+    // anchor. The persistent HierPos2 simulation state is never mutated by rendering.
 
     // Star position drives ship lighting/visuals. On the arena side of the blend band the
-    // parallax-background pass already set s->star_pos (via the equivalent cosmetic_compress
-    // path); here we only cover the deep galaxy-map side (view_arena_w == 0), where that pass is
-    // skipped. This keeps s->star_pos defined across the whole zoom range without a mode branch.
+    // parallax-background pass already set s->star_pos; here we only cover the deep galaxy-map side
+    // (view_arena_w == 0), where that pass is skipped. This keeps s->star_pos defined across the
+    // whole zoom range without a mode branch.
     if (s->view_arena_w <= 0.0f) {
         if (s->galaxy.current_system >= 0 && s->galaxy.current_system < s->galaxy.system_count) {
             const StarSystem& ss = s->galaxy.systems[s->galaxy.current_system];
             // Depth parallax (precision-safe via hierpos_diff), matching the drawn star so
             // ship lighting tracks the parallaxed star on the deep galaxy-map side too.
             Vec2 sys_rel = celestial_center_render(s, &ss.galaxy_center, &s->celestial_anchor, s->render.depth_star);
-            s->star_pos = vec2_add(vec2_scale(sys_rel, comp), ss.star.position);
+            s->star_pos = vec2_add(sys_rel, ss.star.position);
         } else {
             s->star_pos = bs_math::Vec2{ 0.0f, 0.0f };
         }
     }
 
     // Compute each entity's transient render-space position (precision-safe: subtracts the
-    // camera_hierpos anchor in i64 cell space, then applies the cosmetic compression). The
-    // persistent HierPos2 simulation state is never mutated by rendering.
+    // camera_hierpos anchor in i64 cell space). The persistent HierPos2 simulation state is never
+    // mutated by rendering.
     for (i32 i = 0; i < s->fleet_state.fleet.count(); ++i) {
         s->fleet_state.fleet.at(i).ship.render_pos = render_from_hierpos(s, &s->fleet_state.fleet.at(i).ship.origin);
     }
@@ -215,7 +211,26 @@ void draw_ship_scene(game_state* s) {
         draw_engine_exhaust(ship, s->render.exhaust_texture, &s->render.exhaust_glow,
                             ship_speed_ratio, 1.0f, s->elapsed_time);
         // ---- DEBUG collider overlay.
-        draw_collider_outline(ship, COLLIDER_COLOR, 1.5f, comp);
+        draw_collider_outline(ship, COLLIDER_COLOR, 1.5f);
+    }
+    // ---- NPC AI ships (General Ship AI): moving, civ-coloured hulls ---------------------
+    for (i32 i = 0; i < NPC_SHIP_MAX; ++i) {
+        NpcShip& n = s->npc_ships[i];
+        if (!n.active) continue;
+        n.ship.render_pos = render_from_hierpos(s, &n.ship.origin);
+        if (!n.discovered) continue;     // generic "unidentified" marker is drawn in gameplay_overlays
+        bs_color tint = (n.faction >= 0 && n.faction < s->galaxy.civ_count)
+                          ? s->galaxy.civs[n.faction].color
+                          : bs_color{ 0.95f, 0.35f, 0.30f, 1.0f };
+        tint.a = 1.0f;
+        bs_math::Vec2 to_star = vec2_sub(s->star_pos, n.ship.render_pos);
+        f32 sd = vec2_length(to_star);
+        bs_math::Vec3 ld = fleet_light_dir;
+        if (sd > 0.001f) { bs_math::Vec2 d = vec2_scale(to_star, 1.0f / sd); ld = bs_math::Vec3{ d.x, d.y, 0.2f }; }
+        draw_ship_visual_ex(&n.ship, 1.0f, ld, tint, BLEND_ALPHA, bs_color{ 1.0f, 0.0f, 0.0f, 0.0f });
+        draw_engine_exhaust(&n.ship, s->render.exhaust_texture, &s->render.exhaust_glow,
+                            clampf(vec2_length(n.flight.velocity) / SHIP_MAX_SPEED, 0.0f, 1.0f),
+                            1.0f, s->elapsed_time);
     }
     // Enemy ship rendering based on the dedicated ship sensor range.
     // Inside the range: real sprite. Outside: flickering interference silhouette.

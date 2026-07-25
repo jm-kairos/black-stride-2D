@@ -14,7 +14,7 @@ Vec2 mouse_world(const game_state* s) {
 }
 
 // True (simulation) world position under the mouse cursor. Equals mouse_world in the legacy
-// global path (render space == true world); under the unified path it inverts the compression /
+// global path (render space == true world); under the unified path it inverts the
 // camera_hierpos transform so callers that hit-test against true-world entity positions (edit
 // picking, piloting/aiming) stay correct.
 Vec2 mouse_true_world(const game_state* s) {

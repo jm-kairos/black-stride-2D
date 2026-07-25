@@ -8,7 +8,7 @@ namespace bs_math { struct Vec2; struct HierPos2; }
 // Update the hovered cell and advance the head along the perimeter.
 // mouse_world: camera-relative world position under the cursor (from camera2d_screen_to_world).
 // camera_hierpos: the camera's absolute hierarchical position.
-// zoom: current camera zoom (needed to undo cosmetic_compress before cell lookup).
+// zoom: current camera zoom (currently unused; retained for the call signature).
 void update_cell_hover_effect(GalaxyVoronoi* v, f32 dt,
                                const bs_math::Vec2& mouse_world,
                                const bs_math::HierPos2* camera_hierpos,

@@ -56,6 +56,18 @@ bs__api__ b8 bs_ui_begin_panel(const char* title, BsUiAnchor anchor, f32 margin,
 // Close the current panel. Pair with every bs_ui_begin_panel call.
 bs__api__ void bs_ui_end_panel(void);
 
+// Begin a free-floating, movable & resizable window with a native title bar and close [X] button.
+// Unlike bs_ui_begin_panel (fixed corner-anchored), this window can be dragged and resized by the
+// user; its position/size default on first use and are then user-controlled. `p_open` (may be
+// NULL) is read/written in place: the caller sets it TRUE to show the window and it is set FALSE
+// when the user clicks the title-bar [X]. Returns TRUE if the window is visible and its body
+// should be built this frame. You MUST call bs_ui_end_window() afterwards regardless of the return
+// value (ImGui's Begin/End pairing rule). `title` doubles as the ImGui window id (unique per window).
+bs__api__ b8 bs_ui_begin_window(const char* title, b8* p_open);
+
+// Close the current free-floating window. Pair with every bs_ui_begin_window call.
+bs__api__ void bs_ui_end_window(void);
+
 // One line of text in the panel's default text color.
 bs__api__ void bs_ui_text(const char* text);
 
@@ -99,10 +111,6 @@ bs__api__ b8 bs_ui_color_edit3(const char* label, f32* rgb);
 // A combo box / dropdown. `items` is a NULL-separated list of labels (e.g. "A\0B\0C\0").
 // `current` is read/written in place. Returns TRUE on the frame the selection changes.
 bs__api__ b8 bs_ui_combo(const char* label, i32* current, const char* items);
-
-// A small auto-sized tooltip window at screen pixel coordinates (top-left origin).
-// No title bar, no move/resize. Draws `text` as wrapped body text.
-bs__api__ void bs_ui_tooltip_at(f32 screen_x, f32 screen_y, const char* text);
 
 // A screen-space label at the given pixel position with adjustable font scale.
 // `id` is the ImGui window identifier (must be unique per label); `text` is what is rendered.

@@ -1,7 +1,6 @@
 #include "render/frame_lighting.h"
 
 #include "game.h"
-#include "core/view_transform.h"    // compression_factor
 #include "sim/celestial_parallax.h" // celestial_center_render
 #include "star_fx.h"
 #include "core/render_layers.h"
@@ -44,15 +43,14 @@ void submit_frame_lighting(game_state* s) {
         const StarSystem& css = s->galaxy.systems[s->galaxy.current_system];
         Vec2 c_sys_pos_raw = hierpos_diff(&css.galaxy_center, &s->camera_state.camera_hierpos, BS_HIERPOS_CELL_SIZE);
         f32 c_vis = get_sensor_visibility(s, c_sys_pos_raw);
-        f32 c_comp = compression_factor(s->camera_state.camera.zoom);
         // Depth parallax so the volumetric star light aligns with the drawn (parallaxed) star.
-        Vec2 c_sys_pos = vec2_scale(celestial_center_render(s, &css.galaxy_center, &s->celestial_anchor, s->render.depth_star), c_comp);
+        Vec2 c_sys_pos = celestial_center_render(s, &css.galaxy_center, &s->celestial_anchor, s->render.depth_star);
         Vec2 c_star_pos = vec2_add(c_sys_pos, css.star.position);
         f32 c_max_orbit = 0.0f;
         for (i32 i = 0; i < css.planet_count; ++i) {
             c_max_orbit = fmaxf(c_max_orbit, css.planets[i].semi_major_axis);
         }
-        star_light = make_star_light(c_star_pos, css.star.color, c_max_orbit, c_comp, c_vis,
+        star_light = make_star_light(c_star_pos, css.star.color, c_max_orbit, c_vis,
                                      s->render.star_light_intensity_mul * map_w, s->render.star_light_radius_mul);
         has_star_light = TRUE;
     }

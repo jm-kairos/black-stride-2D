@@ -1,6 +1,6 @@
 #include "rts_controls.h"
 #include "game.h"
-#include "core/view_transform.h" // game_screen_to_true_*, game_compression_factor, render_from_hierpos, game_camera_center_hierpos
+#include "core/view_transform.h" // game_screen_to_true_*, render_from_hierpos, game_camera_center_hierpos
 #include "ship.h"
 #include "weapon.h"
 #include "fleet.h"
@@ -8,7 +8,7 @@
 #include <math/math_utils.h>
 #include <renderer/renderer.h>
 #include <renderer/bs_imgui.h>
-#include <renderer/bs_ui.h>
+#include <renderer/bs_rml.h>   // bs_rml_wants_mouse: in-game UI (RmlUi) owns the cursor
 #include <renderer/camera2d.h>
 using namespace bs_math;
 // =====================================================================================
@@ -27,11 +27,12 @@ static constexpr f32 RTS_CLICK_THRESHOLD = 4.0f; // pixels; below this a left re
 static constexpr f32 RTS_MOVE_MARKER_SIZE      = 12.0f;  // world units
 static constexpr f32 RTS_MOVE_MARKER_THICKNESS = 1.5f;
 static constexpr bs_color RTS_MOVE_MARKER_COLOR = { 0.35f, 0.85f, 0.95f, 0.90f };
+// FTL jump-mode visuals.
+static constexpr f32 JUMP_CIRCLE_THICKNESS = 2.0f;
+static constexpr bs_color JUMP_CIRCLE_COLOR = { 0.55f, 0.95f, 0.65f, 0.90f };
 // Free camera movement constants.
 static constexpr f32 FREE_CAM_MOVE_SPEED     = 1600.0f;  // WASD constant world-space speed (mechanical)
 static constexpr f32 FREE_CAM_SHIFT_MULT     = 3.0f;     // SHIFT speed multiplier for WASD/edge pan
-static constexpr f32 FREE_CAM_DRAG_DAMPING   = 8.0f;     // 1/s, drag spring damping
-static constexpr f32 FREE_CAM_DRAG_RESPONSIVE= 15.0f;    // 1/s, drag spring response
 static constexpr f32 FREE_CAM_EDGE_MARGIN    = 24.0f;    // pixels
 static constexpr f32 FREE_CAM_EDGE_SPEED     = 900.0f;   // world units/s
 // =====================================================================================
@@ -40,31 +41,19 @@ RtsControls::RtsControls()
     , m_hovered_ship_idx(-1)
     , m_hovered_enemy_idx(-1)
     , m_dash_angle(0.0f)
+    , m_jump_mode(FALSE)
     , m_box{ FALSE, 0.0f, 0.0f, 0.0f, 0.0f }
     , m_piloted_idx(0)
-    , m_camera_transitioning(FALSE)
-    , m_camera_transition_t(0.0f)
-    , m_camera_transition_from(HierPos2{})
-    , m_free_camera_vel(Vec2{0.0f, 0.0f})
-    , m_free_camera_drag_target(HierPos2{})
-    , m_free_camera_drag_start_mouse(Vec2{0.0f, 0.0f})
-    , m_free_camera_drag_start_pos(HierPos2{})
-    , m_free_camera_dragging(FALSE) {}
+    , m_free_camera_vel(Vec2{0.0f, 0.0f}) {}
 RtsControls::RtsControls(game_state* s)
     : m_state(s)
     , m_hovered_ship_idx(-1)
     , m_hovered_enemy_idx(-1)
     , m_dash_angle(0.0f)
+    , m_jump_mode(FALSE)
     , m_box{ FALSE, 0.0f, 0.0f, 0.0f, 0.0f }
     , m_piloted_idx(0)
-    , m_camera_transitioning(FALSE)
-    , m_camera_transition_t(0.0f)
-    , m_camera_transition_from(HierPos2{})
-    , m_free_camera_vel(Vec2{0.0f, 0.0f})
-    , m_free_camera_drag_target(HierPos2{})
-    , m_free_camera_drag_start_mouse(Vec2{0.0f, 0.0f})
-    , m_free_camera_drag_start_pos(HierPos2{})
-    , m_free_camera_dragging(FALSE) {}
+    , m_free_camera_vel(Vec2{0.0f, 0.0f}) {}
 // =====================================================================================
 static Vec2 read_wasd_dir() {
     Vec2 d{ 0.0f, 0.0f };
@@ -119,8 +108,8 @@ void RtsControls::update(f32 dt) {
         m_piloted_idx = 0;
     i32 mx, my;
     input_get_mouse_position(&mx, &my);
-    // Hit-test and issue orders in true (simulation) world space. In system mode this inverts the
-    // cosmetic compression so the cursor maps to the same space ship.origin lives in.
+    // Hit-test and issue orders in true (simulation) world space, the same space ship.origin
+    // lives in.
     Vec2 mouse_pos = game_screen_to_true_world(m_state, Vec2{ (f32)mx, (f32)my });
 
     bs_math::HierPos2 mouse_hp = game_screen_to_true_hierpos(m_state, Vec2{ (f32)mx, (f32)my });
@@ -141,27 +130,70 @@ void RtsControls::update(f32 dt) {
         CombatEntity* ce = &m_state->combat_entities[i];
         if (!ce->active || !ce->ship) continue;
         if (ce->faction == m_state->player_ship().faction) continue; // only hostile targets
+        // Discovery: ignore undiscovered NPC agents (they render as generic markers).
+        if (ce->is_npc && ce->npc_index >= 0 && !m_state->npc_ships[ce->npc_index].discovered) continue;
         if (is_point_over_ship(mouse_hp, ce->ship)) {
             m_hovered_enemy_idx = i;
             break;
         }
     }
+    // ---- Space-station hover + right-click context menu (works in both view modes) ----------
+    // Hit-test every VISIBLE station of every materialised system in true world space — discovered
+    // or not (undiscovered ones render as antenna markers, so they must react too), skipping only
+    // stations culled by sensor visibility (matching draw_system_stations' cull, so hover targets
+    // exactly what is drawn). A screen-constant pick floor keeps distant screen-marker stations
+    // clickable. Right-click opens the RML context menu at the cursor and suppresses the RTS move
+    // order this frame; a click elsewhere dismisses the menu.
+    b8 station_right_consumed = FALSE;
+    {
+        i32 hovered_sid = -1;
+        f32 zoom = m_state->camera_state.camera.zoom;
+        f32 pick_floor = 16.0f / (zoom > 1e-6f ? zoom : 1e-6f); // ~16 px in world units
+        for (i32 si = 0; si < m_state->galaxy.system_count && hovered_sid < 0; ++si) {
+            StarSystem& ss = m_state->galaxy.systems[si];
+            for (i32 k = 0; k < ss.station_count; ++k) {
+                SystemStation& st = ss.stations[k];
+                if (m_state->galaxy.map_draw_sensor_range) {        // sensor-culled stations don't react
+                    f32 sd = vec2_length(hierpos_diff(&st.pos, &m_state->player_ship().origin, BS_HIERPOS_CELL_SIZE));
+                    if (sensor_visibility_from_dist(sd, m_state->galaxy.map_sensor_range) <= 0.003f) continue;
+                }
+                f32 hit = st.radius > pick_floor ? st.radius : pick_floor;
+                f32 d   = vec2_length(hierpos_diff(&mouse_hp, &st.pos, BS_HIERPOS_CELL_SIZE));
+                if (d <= hit) { hovered_sid = st.station_id; break; }
+            }
+        }
+        m_state->hovered_station_id = hovered_sid;
+
+        b8 ui_free = !bs_imgui_wants_mouse() && !bs_rml_wants_mouse();
+        b8 rclick  = input_is_button_down(BUTTON_RIGHT) && !input_was_button_down(BUTTON_RIGHT);
+        b8 lclick  = input_is_button_down(BUTTON_LEFT)  && !input_was_button_down(BUTTON_LEFT);
+        if (rclick && ui_free && hovered_sid >= 0) {
+            m_state->station_menu_visible    = true;
+            m_state->station_menu_station_id = hovered_sid;
+            m_state->station_menu_x          = mx;
+            m_state->station_menu_y          = my;
+            station_right_consumed           = TRUE;      // don't also issue an RTS move order
+        } else if ((lclick || rclick) && ui_free && m_state->station_menu_visible) {
+            m_state->station_menu_visible = false;        // click outside the menu dismisses it
+        }
+    }
     m_dash_angle += HOVER_DASH_ROTATION_SPEED * dt;
     if (m_dash_angle > 2.0f * BS_PI) m_dash_angle -= 2.0f * BS_PI;
     // Detached = the free camera is active (browse / pan / RTS), independent of zoom or render look.
-    b8 detached = (m_state->camera_state.free_camera_active && !m_camera_transitioning);
-    // ---- Free camera movement (only while detached, and not during a recenter animation) ---
-    if (detached && !m_state->galaxy.map_recentering) {
-        // ---- Free camera movement (WASD + middle-mouse drag + edge pan) -----------------
+    b8 detached = (m_state->camera_state.free_camera_active && !m_state->camera_state.recentering);
+    // Jump mode is an RTS-only interaction: drop it whenever the camera is attached/piloting.
+    if (!detached) m_jump_mode = FALSE;
+    // ---- Free camera movement (only while detached, not during a recenter glide) ------------
+    if (detached) {
+        // ---- Free camera movement (WASD + edge pan) -------------------------------------
         // Scale movement so panning covers a roughly constant fraction of the screen per second at
-        // any zoom: the on-screen scale is zoom*comp, so world-space speed uses its inverse. This
+        // any zoom: the on-screen scale is zoom, so world-space speed uses its inverse. This
         // makes the camera faster the more you zoom out (unbounded above is fine: zoom is clamped to
-        // ZOOM_GLOBAL_MIN, so zoom*comp has a floor). Floor at 1 keeps the zoomed-in feel unchanged.
-        f32 comp     = game_compression_factor(m_state->camera_state.camera.zoom);
-        f32 zoom_mul = clampf(1.0f / (m_state->camera_state.camera.zoom * comp), 1.0f, 1.0e7f);
+        // ZOOM_GLOBAL_MIN, so zoom has a floor). Floor at 1 keeps the zoomed-in feel unchanged.
+        f32 zoom_mul = clampf(1.0f / m_state->camera_state.camera.zoom, 1.0f, 1.0e7f);
         Vec2 input_dir = read_wasd_dir();
         b8 fast = input_is_key_down(KEY_LSHIFT) || input_is_key_down(KEY_RSHIFT);
-        if (!bs_imgui_wants_mouse()) {
+        if (!bs_imgui_wants_mouse() && !bs_rml_wants_mouse()) {
             Vec2 edge_dir{ 0.0f, 0.0f };
             if (mx < (i32)FREE_CAM_EDGE_MARGIN) edge_dir.x -= 1.0f;
             if (mx > (i32)m_state->fb_width - (i32)FREE_CAM_EDGE_MARGIN) edge_dir.x += 1.0f;
@@ -171,8 +203,7 @@ void RtsControls::update(f32 dt) {
         }
         // Mechanical WASD/edge pan: instant constant velocity while held, instant stop on release
         // (no accel ramp, no friction coast) for a crisp, direct feel. SHIFT multiplies the speed.
-        // The middle-mouse drag spring below owns the velocity while dragging, so skip it then.
-        if (!m_free_camera_dragging) {
+        {
             f32 dir_len = vec2_length(input_dir);
             if (dir_len > 0.0f) {
                 Vec2 dir   = vec2_scale(input_dir, 1.0f / dir_len);   // unit -> constant diagonal speed
@@ -181,35 +212,6 @@ void RtsControls::update(f32 dt) {
             } else {
                 m_free_camera_vel = Vec2{ 0.0f, 0.0f };
             }
-        }
-        // Middle-mouse drag.
-        b8 middle_down = input_is_button_down(BUTTON_MIDDLE);
-        b8 middle_was_down = input_was_button_down(BUTTON_MIDDLE);
-        if (!middle_down) {
-            m_free_camera_dragging = FALSE;
-        }
-        if (middle_down && !bs_imgui_wants_mouse()) {
-            if (!middle_was_down) {
-                m_free_camera_dragging = TRUE;
-                m_free_camera_drag_start_pos = m_state->camera_state.free_camera_pos;
-                m_free_camera_drag_start_mouse = Vec2{ (f32)mx, (f32)my };
-                m_free_camera_drag_target = m_state->camera_state.free_camera_pos;
-                m_free_camera_vel = Vec2{ 0.0f, 0.0f };
-            } else {
-                Vec2 screen_delta = Vec2{ (f32)mx - m_free_camera_drag_start_mouse.x,
-                                          (f32)my - m_free_camera_drag_start_mouse.y };
-                Vec2 world_delta = Vec2{ screen_delta.x / m_state->camera_state.camera.zoom,
-                                         -screen_delta.y / m_state->camera_state.camera.zoom };
-                m_free_camera_drag_target = hierpos_add_vec2(&m_free_camera_drag_start_pos, vec2_scale(world_delta, -1.0f));
-            }
-        }
-        // Spring toward drag target.
-        if (m_free_camera_dragging) {
-            Vec2 error = hierpos_diff(&m_free_camera_drag_target, &m_state->camera_state.free_camera_pos, BS_HIERPOS_CELL_SIZE);
-            m_free_camera_vel = vec2_add(m_free_camera_vel,
-                                         vec2_scale(error, FREE_CAM_DRAG_RESPONSIVE * zoom_mul * dt));
-            m_free_camera_vel = vec2_sub(m_free_camera_vel,
-                                         vec2_scale(m_free_camera_vel, FREE_CAM_DRAG_DAMPING * zoom_mul * dt));
         }
         // Apply velocity.
         m_state->camera_state.free_camera_pos = hierpos_add_vec2(&m_state->camera_state.free_camera_pos,
@@ -227,7 +229,7 @@ void RtsControls::update(f32 dt) {
         b8 left_pressed = input_is_button_down(BUTTON_LEFT) && !input_was_button_down(BUTTON_LEFT);
         b8 left_down = input_is_button_down(BUTTON_LEFT);
         b8 left_released = !input_is_button_down(BUTTON_LEFT) && input_was_button_down(BUTTON_LEFT);
-        if (left_pressed && !bs_imgui_wants_mouse()) {
+        if (left_pressed && !bs_imgui_wants_mouse() && !bs_rml_wants_mouse()) {
             m_box.active = TRUE;
             m_box.start_x = (f32)mx;
             m_box.start_y = (f32)my;
@@ -260,17 +262,41 @@ void RtsControls::update(f32 dt) {
             }
             m_box.active = FALSE;
         }
-        // ---- Move / attack order input -------------------------------------------------
+        // ---- FTL jump mode toggle (J) --------------------------------------------------
+        Fleet& fleet = m_state->fleet_state.fleet;
+        if (input_is_key_down(KEY_J) && !input_was_key_down(KEY_J)) {
+            if (fleet.any_selected()) m_jump_mode = !m_jump_mode;
+            else                      m_jump_mode = FALSE;
+        }
+        // Jump mode requires a live selection; drop it if the selection was cleared.
+        if (m_jump_mode && !fleet.any_selected()) m_jump_mode = FALSE;
+        // ---- Move / attack / jump order input ------------------------------------------
         b8 right_click = input_is_button_down(BUTTON_RIGHT) && !input_was_button_down(BUTTON_RIGHT);
-        if (right_click && !bs_imgui_wants_mouse()) {
-            if (m_state->fleet_state.fleet.any_selected()) {
+        if (right_click && !station_right_consumed && !bs_imgui_wants_mouse() && !bs_rml_wants_mouse()) {
+            if (m_jump_mode) {
+                // Right-click executes the jump when the destination is within range; an
+                // out-of-range click is rejected and jump mode stays armed for a valid point.
+                i32 center_idx = -1;
+                f32 radius = 0.0f;
+                if (fleet.selected_min_jump(&center_idx, &radius)) {
+                    HierPos2 center_origin = fleet.at(center_idx).ship.origin;
+                    // The player picks the precise destination: the fleet jumps to the exact clicked
+                    // point (any arbitrary location), rejected only if it lies outside jump range.
+                    HierPos2 dest = mouse_hp;
+                    f32 dist = vec2_length(hierpos_diff(&dest, &center_origin));
+                    if (dist <= radius) {
+                        fleet.jump_selected(center_idx, dest);
+                        m_jump_mode = FALSE;
+                    }
+                }
+            } else if (fleet.any_selected()) {
                 if (m_hovered_enemy_idx >= 0) {
                     CombatEntity* ce = &m_state->combat_entities[m_hovered_enemy_idx];
                     if (ce->active && ce->ship) {
-                        m_state->fleet_state.fleet.order_attack(ce->ship);
+                        fleet.order_attack(ce->ship);
                     }
                 } else {
-                    m_state->fleet_state.fleet.order_move(mouse_hp);
+                    fleet.order_move(mouse_hp);
                 }
             }
         }
@@ -307,22 +333,6 @@ void RtsControls::update(f32 dt) {
         }
         m_piloted_idx = m_state->fleet_state.fleet.piloted_index();
     }
-    // ---- Camera transition: free camera -> piloted ship ---------------------------------
-    if (m_camera_transitioning) {
-        FleetShip* piloted = m_state->fleet_state.fleet.piloted();
-        if (!piloted) piloted = &m_state->fleet_state.fleet.at(0);
-        m_camera_transition_t += dt / 0.60f;
-        if (m_camera_transition_t > 1.0f) m_camera_transition_t = 1.0f;
-        f32 t = m_camera_transition_t;
-        f32 eased = t * t * (3.0f - 2.0f * t); // smoothstep
-        bs_math::HierPos2 target = piloted->ship.origin;
-        bs_math::HierPos2 new_pos = hierpos_lerp(&m_camera_transition_from, &target, eased, BS_HIERPOS_CELL_SIZE);
-        m_state->camera_state.free_camera_pos = new_pos; // keep free_camera_pos in sync
-        if (t >= 1.0f) {
-            m_camera_transitioning = FALSE;
-            m_state->camera_state.free_camera_active = FALSE;
-        }
-    }
 }
 // =====================================================================================
 void RtsControls::draw_dashed_circle(Vec2 center, f32 radius, u32 segments, f32 fill_ratio,
@@ -342,7 +352,7 @@ void RtsControls::draw() {
     if (!m_state) return;
     b8 in_free_camera = m_state->camera_state.free_camera_active;
     // RTS selection visuals are shown whenever the camera is detached (free camera), at any zoom.
-    // Positions are pushed through the same compressed render-space transform the ship sprites use
+    // Positions are pushed through the same render-space transform the ship sprites use
     // so rings / markers line up with the ships in both the arena and galaxy-map looks.
     b8 draw_rts_overlay = in_free_camera;
     // Free-camera-only visuals: drag box, selection rects, move/attack markers, hover rings.
@@ -388,84 +398,68 @@ void RtsControls::draw() {
                                    HOVER_CIRCLE_THICKNESS, col, HOVER_CIRCLE_LAYER);
             }
         }
+        // ---- FTL jump mode: dashed range ring (the "Currently in Jump Mode" banner is now an
+        // RmlUi HUD document driven from game_update via game_push_hud) --------------------
+        if (m_jump_mode) {
+            i32 center_idx = -1;
+            f32 radius = 0.0f;
+            if (m_state->fleet_state.fleet.selected_min_jump(&center_idx, &radius)) {
+                const Ship* center = &m_state->fleet_state.fleet.at(center_idx).ship;
+                // render_from_hierpos maps the center into render space; the renderer then applies
+                // zoom on top, so the world radius maps directly to the ring.
+                draw_dashed_circle(render_from_hierpos(m_state, &center->origin),
+                                   radius, (u32)HOVER_DASH_SEGMENTS,
+                                   HOVER_DASH_FILL_RATIO, m_dash_angle,
+                                   JUMP_CIRCLE_THICKNESS, JUMP_CIRCLE_COLOR, HOVER_CIRCLE_LAYER);
+            }
+        }
     }
-    // Draw a dedicated HUD panel for the currently piloted ship.
+    // The FLEET SHIP readout is now an RmlUi HUD document (see hud.rml + game_push_hud). Only the
+    // number-row weapon switching for the piloted ship remains here as input handling.
     FleetShip* piloted = m_state->fleet_state.fleet.piloted();
     if (!piloted) piloted = &m_state->fleet_state.fleet.at(0);
     if (piloted) {
         Ship* ship = &piloted->ship;
-        ShipFlight* fl = &piloted->flight;
-        if (bs_ui_begin_hud_panel("FLEET SHIP", BS_UI_ANCHOR_TOP_RIGHT, 190.0f)) {
-            bs_ui_text_colored(0.35f, 0.85f, 0.95f, 1.0f,
-                               ship->vessel_name ? ship->vessel_name : "Ship");
-            bs_ui_text_colored(0.55f, 0.65f, 0.75f, 0.85f, vessel_faction_name(ship->faction));
-            bs_ui_separator();
-            char buf[128];
-            snprintf(buf, sizeof(buf), "Speed: %.0f", vec2_length(fl->velocity));
-            bs_ui_text(buf);
-            f32 heading_deg = ship->angle * 180.0f / BS_PI;
-            snprintf(buf, sizeof(buf), "Heading: %.0f", heading_deg);
-            bs_ui_text(buf);
-            bs_ui_text("Health: --");
-            bs_ui_separator();
-            bs_ui_text("WEAPONS");
-            for (i32 i = 0; i < SHIP_MAX_WEAPONS; ++i) {
-                if (i >= ship->weapon_count || !ship->weapons[i]) {
-                    bs_ui_text_colored(0.35f, 0.45f, 0.50f, 0.60f, "-- empty --");
-                    continue;
-                }
-                Weapon* w = ship->weapons[i];
-                b8 selected = (i == ship->active_weapon_idx);
-                const char* name = w->name ? w->name : "?";
-                if (w->ready()) {
-                    snprintf(buf, sizeof(buf), "%d  %s  READY", i + 1, name);
-                } else {
-                    f32 prog = w->cooldown_progress();
-                    snprintf(buf, sizeof(buf), "%d  %s  %.0f%%", i + 1, name, prog * 100.0f);
-                }
-                if (bs_ui_selectable(buf, selected)) {
-                    ship->active_weapon_idx = i;
-                }
-            }
-            bs_ui_separator();
-            if (in_free_camera) {
-                if (bs_ui_button("Pilot unit", !m_camera_transitioning)) {
-                    m_state->fleet_state.fleet.set_piloted(m_state->fleet_state.fleet.any_selected()
-                                               ? m_state->fleet_state.fleet.first_selected()
-                                               : 0);
-                    m_piloted_idx = m_state->fleet_state.fleet.piloted_index();
-                    m_camera_transitioning = TRUE;
-                    m_camera_transition_t = 0.0f;
-                    m_camera_transition_from = game_camera_center_hierpos(m_state);
-                    m_free_camera_vel = Vec2{ 0.0f, 0.0f };
-                    m_free_camera_dragging = FALSE;
-                    // Note: only the piloted ship's order is cleared inside set_piloted().
-                    // The rest of the fleet continues its current Move/Attack orders.
-                }
-            } else {
-                if (bs_ui_button("Auto-pilot / RTS", !m_camera_transitioning)) {
-                    m_state->camera_state.free_camera_active = TRUE;
-                    m_state->camera_state.free_camera_pos = game_camera_center_hierpos(m_state);
-                    m_camera_transitioning = FALSE;
-                    // Existing fleet orders are preserved; the previously piloted ship
-                    // coasts until a new order is issued.
-                }
-            }
-            // Number-row weapon switching while piloted.
-            if (input_is_key_down(KEY_NUM1) && !input_was_key_down(KEY_NUM1)) {
-                if (ship->weapon_count > 0) ship->active_weapon_idx = 0;
-            }
-            if (input_is_key_down(KEY_NUM2) && !input_was_key_down(KEY_NUM2)) {
-                if (ship->weapon_count > 1) ship->active_weapon_idx = 1;
-            }
-            if (input_is_key_down(KEY_NUM3) && !input_was_key_down(KEY_NUM3)) {
-                if (ship->weapon_count > 2) ship->active_weapon_idx = 2;
-            }
-            if (input_is_key_down(KEY_NUM4) && !input_was_key_down(KEY_NUM4)) {
-                if (ship->weapon_count > 3) ship->active_weapon_idx = 3;
-            }
+        if (input_is_key_down(KEY_NUM1) && !input_was_key_down(KEY_NUM1)) {
+            if (ship->weapon_count > 0) ship->active_weapon_idx = 0;
         }
-        bs_ui_end_hud_panel();
+        if (input_is_key_down(KEY_NUM2) && !input_was_key_down(KEY_NUM2)) {
+            if (ship->weapon_count > 1) ship->active_weapon_idx = 1;
+        }
+        if (input_is_key_down(KEY_NUM3) && !input_was_key_down(KEY_NUM3)) {
+            if (ship->weapon_count > 2) ship->active_weapon_idx = 2;
+        }
+        if (input_is_key_down(KEY_NUM4) && !input_was_key_down(KEY_NUM4)) {
+            if (ship->weapon_count > 3) ship->active_weapon_idx = 3;
+        }
+    }
+}
+// =====================================================================================
+// HUD "Pilot unit" / "Auto-pilot / RTS" button handler. Invoked by game_push_hud when the
+// RmlUi fleet panel button is clicked. A no-op while a recenter glide is already in flight
+// (the button renders dimmed in that state).
+void RtsControls::hud_toggle_pilot_mode() {
+    if (!m_state || m_state->camera_state.recentering) return;
+    if (m_state->camera_state.free_camera_active) {
+        // Free camera -> pilot the selected unit (or the flagship): smooth recenter glide.
+        m_state->fleet_state.fleet.set_piloted(m_state->fleet_state.fleet.any_selected()
+                                   ? m_state->fleet_state.fleet.first_selected()
+                                   : 0);
+        m_piloted_idx = m_state->fleet_state.fleet.piloted_index();
+        m_state->camera_state.recentering       = TRUE;
+        m_state->camera_state.recenter_t        = 0.0f;
+        m_state->camera_state.recenter_from_pos = game_camera_center_hierpos(m_state);
+        m_state->camera_state.global_free_camera_saved = FALSE; // deliberate piloting intent (Model A)
+        m_free_camera_vel = Vec2{ 0.0f, 0.0f };
+        // Note: only the piloted ship's order is cleared inside set_piloted().
+        // The rest of the fleet continues its current Move/Attack orders.
+    } else {
+        // Piloting -> detach to the free-camera RTS view.
+        m_state->camera_state.free_camera_active = TRUE;
+        m_state->camera_state.free_camera_pos = game_camera_center_hierpos(m_state);
+        m_state->camera_state.global_free_camera_saved = TRUE; // deliberate free-camera intent (Model A)
+        // Existing fleet orders are preserved; the previously piloted ship
+        // coasts until a new order is issued.
     }
 }
 // =====================================================================================

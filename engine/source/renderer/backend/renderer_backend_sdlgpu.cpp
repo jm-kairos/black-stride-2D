@@ -39,9 +39,37 @@
 #include "imgui_impl_sdl3.h"
 #include "imgui_impl_sdlgpu3.h"
 
+// RmlUi (retained-mode in-game UI). Like ImGui, this is the ONLY TU permitted to include the
+// RmlUi headers; they come in via -isystem (see engine/build.bat) so RmlUi's own headers never
+// trip the engine's -Wall -Werror. RMLUI_STATIC_LIB keeps RmlUi's symbols internal to engine.dll.
+// The SDL-free public facade for the rest of the engine and the game is renderer/bs_rml.h, whose
+// bs_rml_* functions are implemented at the bottom of this file (they read the backend globals
+// g_sdl directly). stb_image is included for declarations only — STB_IMAGE_IMPLEMENTATION lives
+// in renderer/backend/stb_image_impl.cpp, so RmlUi's LoadTexture can decode PNG/JPG here.
+#include "renderer/bs_rml.h"
+#include <RmlUi/Core.h>
+#include <RmlUi/Core/DataModelHandle.h> // CreateDataModel / DataModelConstructor (Phase 4 HUD)
+#include <RmlUi/Debugger.h>
+#include <utility>                      // std::move (custom "backdrop" decorator)
+#include "stb_image.h"
+
+#include <SDL3/SDL_video.h>      // SDL_GetWindowSizeInPixels
+#include <SDL3/SDL_events.h>     // SDL_Event (RmlUi event translation)
+#include <SDL3/SDL_keyboard.h>   // SDL_GetModState
+#include <SDL3/SDL_mouse.h>      // SDL_BUTTON_LEFT/MIDDLE/RIGHT
+#include <SDL3/SDL_filesystem.h> // SDL_GlobDirectory (font enumeration)
+
 #include <stdlib.h> // qsort
 
 using namespace bs_math; // Mat4, mat4_ortho, etc.
+
+// RmlUi render is injected into the swapchain render pass in sdlgpu_backend_end_frame, BENEATH the
+// ImGui editor overlay. Defined at the bottom of this file alongside the rest of the bs_rml facade.
+static void bs_rml_render_internal(void);
+
+// TRUE when the RmlUi UI is active (and thus its frosted-glass "backdrop" decorator may be visible),
+// gating the per-frame scene-blur fill. Defined alongside the bs_rml facade at the bottom.
+static b8 g_rml_frost_active(void);
 
 // Workaround: on D3D12, SDL_GetGPUSwapchainTextureFormat() may report R8G8B8A8_UNORM
 // at init time while the actual swapchain is created as B8G8R8A8_UNORM.  If we build
@@ -229,6 +257,11 @@ typedef struct sdlgpu_state
     // half-size target (premultiplied alpha) and upscaled during compositing — same pattern as nebula.
     SDL_GPUTexture* heat_rt;
 
+    // Half-resolution UI backdrop target: a gaussian-blurred copy of the pre-UI scene, produced each
+    // frame and sampled by the custom "backdrop" RmlUi decorator to give panels a real frosted-glass
+    // look. Same half-res dimensions as the bloom ping-pong.
+    SDL_GPUTexture* ui_backdrop_rt;
+
     // Post-process pipelines (fullscreen triangle, no blending except where noted).
     SDL_GPUGraphicsPipeline* pipeline_extract;
     SDL_GPUGraphicsPipeline* pipeline_blur_h;
@@ -253,6 +286,10 @@ typedef struct sdlgpu_state
     // Real-time star surface pipeline (premult-over blend — occluding photosphere + corona glow).
     SDL_GPUGraphicsPipeline* pipeline_starsurface;           // -> offscreen (bloom path)
     SDL_GPUGraphicsPipeline* pipeline_starsurface_swapchain; // -> swapchain (non-bloom)
+
+    // Real-time planet surface pipeline (premult-over blend — lit impostor sphere + rings/atmo).
+    SDL_GPUGraphicsPipeline* pipeline_planetsurface;           // -> offscreen (bloom path)
+    SDL_GPUGraphicsPipeline* pipeline_planetsurface_swapchain; // -> swapchain (non-bloom)
 
     // Procedural radiation heat map. Rendered half-res into heat_rt (premultiply-on-write), then
     // composited (premult-over) via the shared nebula composite pipelines — see composite_halfres.
@@ -309,6 +346,14 @@ typedef struct sdlgpu_state
         bs_starsurface_params params;
     } starsurface_queue[BS_MAX_STARSURFACE_STARS];
     u32 starsurface_queue_count;
+
+    // Planet surface queue: impostor-sphere planets large enough on screen to render in full.
+    #define BS_MAX_PLANETSURFACE 32
+    struct {
+        b8               active;
+        bs_planetsurface_params params;
+    } planetsurface_queue[BS_MAX_PLANETSURFACE];
+    u32 planetsurface_queue_count;
 } sdlgpu_state;
 
 static sdlgpu_state g_sdl;
@@ -829,6 +874,13 @@ static b8 create_bloom_targets(u32 width, u32 height)
         if (!g_sdl.heat_rt) { BS_LOG_FATAL("create_bloom_targets: heat_rt failed: %s", SDL_GetError()); return FALSE; }
     }
 
+    // Half-resolution UI backdrop target (opaque blurred scene for the frosted-glass decorator).
+    info.width  = (width  > 1) ? (width  / 2) : 1;
+    info.height = (height > 1) ? (height / 2) : 1;
+    info.usage  = SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER;
+    g_sdl.ui_backdrop_rt = SDL_CreateGPUTexture(g_sdl.device, &info);
+    if (!g_sdl.ui_backdrop_rt) { BS_LOG_FATAL("create_bloom_targets: ui_backdrop_rt failed: %s", SDL_GetError()); return FALSE; }
+
     return TRUE;
 }
 
@@ -1134,6 +1186,20 @@ static b8 create_postprocess_pipelines(void)
     SDL_ReleaseGPUShader(g_sdl.device, vs_starsurf);
     if (!g_sdl.pipeline_starsurface_swapchain) { BS_LOG_FATAL("create_postprocess_pipelines: star_surface_swapchain failed"); SDL_ReleaseGPUShader(g_sdl.device, vs); return FALSE; }
 
+    // planet_surface -> offscreen + swapchain (premult-over; reuses the star quad vertex shader).
+    SDL_GPUShader* vs_planet = load_shader(g_sdl.device, "star_surface", "vert",
+                                            SDL_GPU_SHADERSTAGE_VERTEX, 0, 1);
+    if (!vs_planet) { SDL_ReleaseGPUShader(g_sdl.device, vs); return FALSE; }
+    SDL_GPUShader* fs_planet = load_shader(g_sdl.device, "planet_surface", "frag",
+                                            SDL_GPU_SHADERSTAGE_FRAGMENT, 0, 1);
+    if (!fs_planet) { SDL_ReleaseGPUShader(g_sdl.device, vs); SDL_ReleaseGPUShader(g_sdl.device, vs_planet); return FALSE; }
+    g_sdl.pipeline_planetsurface = create_premult_over_postprocess_pipeline(vs_planet, fs_planet, offscreen_fmt);
+    if (!g_sdl.pipeline_planetsurface) { BS_LOG_FATAL("create_postprocess_pipelines: planet_surface failed"); SDL_ReleaseGPUShader(g_sdl.device, fs_planet); SDL_ReleaseGPUShader(g_sdl.device, vs_planet); SDL_ReleaseGPUShader(g_sdl.device, vs); return FALSE; }
+    g_sdl.pipeline_planetsurface_swapchain = create_premult_over_postprocess_pipeline(vs_planet, fs_planet, swap_fmt);
+    SDL_ReleaseGPUShader(g_sdl.device, fs_planet);
+    SDL_ReleaseGPUShader(g_sdl.device, vs_planet);
+    if (!g_sdl.pipeline_planetsurface_swapchain) { BS_LOG_FATAL("create_postprocess_pipelines: planet_surface_swapchain failed"); SDL_ReleaseGPUShader(g_sdl.device, vs); return FALSE; }
+
     // composite -> swapchain (must match swapchain format); 4 samplers (scene + bloom + streak + flare)
     SDL_GPUShader* fs_composite = load_shader(g_sdl.device, "bloom_composite", "frag",
                                                SDL_GPU_SHADERSTAGE_FRAGMENT, 4, 1);
@@ -1399,6 +1465,7 @@ void sdlgpu_backend_shutdown(struct renderer_backend* backend)
     if (g_sdl.aux_bloom_b) SDL_ReleaseGPUTexture(g_sdl.device, g_sdl.aux_bloom_b);
     if (g_sdl.nebula_rt)  SDL_ReleaseGPUTexture(g_sdl.device, g_sdl.nebula_rt);
     if (g_sdl.heat_rt)    SDL_ReleaseGPUTexture(g_sdl.device, g_sdl.heat_rt);
+    if (g_sdl.ui_backdrop_rt) SDL_ReleaseGPUTexture(g_sdl.device, g_sdl.ui_backdrop_rt);
     if (g_sdl.pipeline_extract)   SDL_ReleaseGPUGraphicsPipeline(g_sdl.device, g_sdl.pipeline_extract);
     if (g_sdl.pipeline_blur_h)    SDL_ReleaseGPUGraphicsPipeline(g_sdl.device, g_sdl.pipeline_blur_h);
     if (g_sdl.pipeline_blur_v)    SDL_ReleaseGPUGraphicsPipeline(g_sdl.device, g_sdl.pipeline_blur_v);
@@ -1413,6 +1480,8 @@ void sdlgpu_backend_shutdown(struct renderer_backend* backend)
     if (g_sdl.pipeline_sunburst_swapchain) SDL_ReleaseGPUGraphicsPipeline(g_sdl.device, g_sdl.pipeline_sunburst_swapchain);
     if (g_sdl.pipeline_starsurface)          SDL_ReleaseGPUGraphicsPipeline(g_sdl.device, g_sdl.pipeline_starsurface);
     if (g_sdl.pipeline_starsurface_swapchain) SDL_ReleaseGPUGraphicsPipeline(g_sdl.device, g_sdl.pipeline_starsurface_swapchain);
+    if (g_sdl.pipeline_planetsurface)          SDL_ReleaseGPUGraphicsPipeline(g_sdl.device, g_sdl.pipeline_planetsurface);
+    if (g_sdl.pipeline_planetsurface_swapchain) SDL_ReleaseGPUGraphicsPipeline(g_sdl.device, g_sdl.pipeline_planetsurface_swapchain);
     if (g_sdl.pipeline_composite) SDL_ReleaseGPUGraphicsPipeline(g_sdl.device, g_sdl.pipeline_composite);
     if (g_sdl.pipeline_heat_map_halfres) SDL_ReleaseGPUGraphicsPipeline(g_sdl.device, g_sdl.pipeline_heat_map_halfres);
     if (g_sdl.pipeline_mapped) SDL_ReleaseGPUGraphicsPipeline(g_sdl.device, g_sdl.pipeline_mapped);
@@ -1448,6 +1517,7 @@ void sdlgpu_backend_on_resize(struct renderer_backend* backend, u16 width, u16 h
         if (g_sdl.aux_bloom_b) SDL_ReleaseGPUTexture(g_sdl.device, g_sdl.aux_bloom_b);
         if (g_sdl.nebula_rt)  SDL_ReleaseGPUTexture(g_sdl.device, g_sdl.nebula_rt);
         if (g_sdl.heat_rt)    SDL_ReleaseGPUTexture(g_sdl.device, g_sdl.heat_rt);
+        if (g_sdl.ui_backdrop_rt) SDL_ReleaseGPUTexture(g_sdl.device, g_sdl.ui_backdrop_rt);
         g_sdl.scene_rt = NULL;
         g_sdl.bloom_a  = NULL;
         g_sdl.bloom_b  = NULL;
@@ -1455,6 +1525,7 @@ void sdlgpu_backend_on_resize(struct renderer_backend* backend, u16 width, u16 h
         g_sdl.aux_bloom_b = NULL;
         g_sdl.nebula_rt   = NULL;
         g_sdl.heat_rt     = NULL;
+        g_sdl.ui_backdrop_rt = NULL;
 
         if (!create_bloom_targets((u32)width, (u32)height))
             BS_LOG_ERROR("on_resize: failed to recreate bloom targets (%ux%u).", (u32)width, (u32)height);
@@ -1488,6 +1559,7 @@ b8 sdlgpu_backend_begin_frame(struct renderer_backend* backend, f32 dt)
     g_sdl.starfield_queue_count = 0; // reset starfield layer queue
     g_sdl.sunburst_queue_count  = 0; // reset sunburst star queue
     g_sdl.starsurface_queue_count = 0; // reset star surface queue
+    g_sdl.planetsurface_queue_count = 0; // reset planet surface queue
     g_sdl.heat_map_set          = FALSE; // reset heat map; game must re-submit each frame
     g_sdl.nebula_set            = FALSE; // reset nebula layer; game must re-submit each frame
     g_sdl.streak_source_set     = FALSE; // source must be resubmitted each frame
@@ -1795,6 +1867,17 @@ void sdlgpu_backend_draw_starsurface(struct renderer_backend* backend, const bs_
     }
 }
 
+void sdlgpu_backend_draw_planetsurface(struct renderer_backend* backend, const bs_planetsurface_params* params)
+{
+    (void)backend;
+    if (!params) return;
+    if (g_sdl.planetsurface_queue_count >= BS_MAX_PLANETSURFACE)
+        return; // fixed-size safety net; silently drop extras
+    auto& slot = g_sdl.planetsurface_queue[g_sdl.planetsurface_queue_count++];
+    slot.active = TRUE;
+    slot.params = *params;
+}
+
 void sdlgpu_backend_draw_heat_map(struct renderer_backend* backend, const bs_heat_map_params* params)
 {
     (void)backend;
@@ -1802,7 +1885,6 @@ void sdlgpu_backend_draw_heat_map(struct renderer_backend* backend, const bs_hea
     g_sdl.heat_map_params = *params;
     g_sdl.heat_map_set    = TRUE;
 }
-
 void sdlgpu_backend_draw_nebula(struct renderer_backend* backend, const bs_nebula_params* params)
 {
     (void)backend;
@@ -2471,8 +2553,12 @@ b8 sdlgpu_backend_end_frame(struct renderer_backend* backend, f32 dt)
     b8 use_offscreen = g_sdl.scene_rt && g_sdl.bloom_a && g_sdl.bloom_b;
     b8 need_bloom    = g_sdl.bloom_enabled;
     b8 need_streak   = g_sdl.streak_enabled && aux_count > 0;
+    // The frosted-glass UI backdrop samples a blurred copy of scene_rt, which is only populated on the
+    // offscreen path. Force that path whenever the UI frost is active so the effect works even with
+    // bloom/streak disabled (the composite handles zero bloom/streak intensity, same as the streak path).
+    b8 need_frost    = g_rml_frost_active();
 
-    if (use_offscreen && (need_bloom || need_streak))
+    if (use_offscreen && (need_bloom || need_streak || need_frost))
     {
         // ---- PASS 1: game-world sprites -> scene_rt -------------------------------------------
         SDL_GPUColorTargetInfo scene_target;
@@ -2544,6 +2630,30 @@ b8 sdlgpu_backend_end_frame(struct renderer_backend* backend, f32 dt)
             u[12] = (float)p.fb_w;   u[13] = (float)p.fb_h;   u[14] = p.hotspot_gain;    u[15] = p.sunspot_density;
             u[16] = p.limb_darkening;u[17] = p.brightness;    u[18] = p.corona_strength; u[19] = p.dark_radius;
             u[20] = 0.0f; u[21] = 0.0f; u[22] = 0.0f; u[23] = 0.0f;
+            SDL_PushGPUVertexUniformData(g_sdl.cmd, 0, u, sizeof(u));
+            SDL_PushGPUFragmentUniformData(g_sdl.cmd, 0, u, sizeof(u));
+            SDL_DrawGPUPrimitives(g_sdl.pass, 6, 1, 0, 0);
+        }
+        // Draw queued procedural planet surfaces (lit impostor spheres) behind sprites.
+        for (u32 i = 0; i < g_sdl.planetsurface_queue_count; ++i)
+        {
+            if (!g_sdl.planetsurface_queue[i].active) continue;
+            const bs_planetsurface_params& p = g_sdl.planetsurface_queue[i].params;
+            SDL_BindGPUGraphicsPipeline(g_sdl.pass, g_sdl.pipeline_planetsurface);
+            float u[52];
+            u[0]  = p.screen_pos.x;  u[1]  = p.screen_pos.y;  u[2]  = p.body_radius;  u[3]  = p.quad_radius;
+            u[4]  = p.base_color.r;  u[5]  = p.base_color.g;  u[6]  = p.base_color.b;  u[7]  = p.time;
+            u[8]  = p.light_dir.x;   u[9]  = p.light_dir.y;   u[10] = (float)p.planet_type; u[11] = p.visibility;
+            u[12] = (float)p.fb_w;   u[13] = (float)p.fb_h;   u[14] = p.rotation;     u[15] = p.seed;
+            u[16] = p.has_atmosphere ? 1.0f : 0.0f; u[17] = p.has_rings ? 1.0f : 0.0f; u[18] = p.cloud_amount; u[19] = p.ring_shadow_elev;
+            u[20] = p.star_color.r;  u[21] = p.star_color.g;  u[22] = p.star_color.b;  u[23] = 0.0f;
+            u[24] = p.pal_deep.r;    u[25] = p.pal_deep.g;    u[26] = p.pal_deep.b;    u[27] = p.noise_freq;
+            u[28] = p.pal_mid.r;     u[29] = p.pal_mid.g;     u[30] = p.pal_mid.b;     u[31] = p.warp_amount;
+            u[32] = p.pal_light.r;   u[33] = p.pal_light.g;   u[34] = p.pal_light.b;   u[35] = p.feature_density;
+            u[36] = p.pal_accent.r;  u[37] = p.pal_accent.g;  u[38] = p.pal_accent.b;  u[39] = p.band_detail;
+            u[40] = p.cloud_tint.r;  u[41] = p.cloud_tint.g;  u[42] = p.cloud_tint.b;  u[43] = p.cap_extent;
+            u[44] = p.atmo_tint.r;   u[45] = p.atmo_tint.g;   u[46] = p.atmo_tint.b;   u[47] = p.roughness;
+            u[48] = p.anomaly;       u[49] = 0.0f;            u[50] = 0.0f;            u[51] = 0.0f;
             SDL_PushGPUVertexUniformData(g_sdl.cmd, 0, u, sizeof(u));
             SDL_PushGPUFragmentUniformData(g_sdl.cmd, 0, u, sizeof(u));
             SDL_DrawGPUPrimitives(g_sdl.pass, 6, 1, 0, 0);
@@ -2695,6 +2805,40 @@ b8 sdlgpu_backend_end_frame(struct renderer_backend* backend, f32 dt)
             }
         }
 
+        // ---- FROST FILL: blurred copy of scene_rt -> ui_backdrop_rt -------------------------
+        // Produces the half-res, gaussian-blurred scene sampled by the "backdrop" UI decorator for a
+        // real frosted-glass look. Two separable passes (H+V twice) via the existing bloom blur
+        // pipelines; bloom_b is reused as scratch (it is free after the bloom ping-pong at this point).
+        if (g_rml_frost_active() && g_sdl.ui_backdrop_rt && g_sdl.pipeline_blur_h && g_sdl.pipeline_blur_v)
+        {
+            const u32 hw = (g_sdl.bloom_width  / 2) > 1u ? (g_sdl.bloom_width  / 2) : 1u;
+            const u32 hh = (g_sdl.bloom_height / 2) > 1u ? (g_sdl.bloom_height / 2) : 1u;
+            float fp[4]; fp[0] = 1.0f / (f32)hw; fp[1] = 1.0f / (f32)hh; fp[2] = 0.0f; fp[3] = 0.0f;
+
+            SDL_GPUColorTargetInfo ft; SDL_zero(ft);
+            ft.load_op = SDL_GPU_LOADOP_DONT_CARE; ft.store_op = SDL_GPU_STOREOP_STORE;
+            SDL_GPUTextureSamplerBinding fb; SDL_zero(fb); fb.sampler = g_sdl.sampler_linear;
+
+            struct { SDL_GPUTexture* dst; SDL_GPUTexture* src; SDL_GPUGraphicsPipeline* pipe; } frost_steps[4] = {
+                { g_sdl.bloom_b,        g_sdl.scene_rt,       g_sdl.pipeline_blur_h }, // downsample + blur H
+                { g_sdl.ui_backdrop_rt, g_sdl.bloom_b,        g_sdl.pipeline_blur_v }, // blur V
+                { g_sdl.bloom_b,        g_sdl.ui_backdrop_rt, g_sdl.pipeline_blur_h }, // blur H (2nd iter)
+                { g_sdl.ui_backdrop_rt, g_sdl.bloom_b,        g_sdl.pipeline_blur_v }, // blur V (2nd iter)
+            };
+            for (int fs = 0; fs < 4; ++fs)
+            {
+                ft.texture = frost_steps[fs].dst;
+                g_sdl.pass = SDL_BeginGPURenderPass(g_sdl.cmd, &ft, 1, NULL);
+                SDL_BindGPUGraphicsPipeline(g_sdl.pass, frost_steps[fs].pipe);
+                fb.texture = frost_steps[fs].src;
+                SDL_BindGPUFragmentSamplers(g_sdl.pass, 0, &fb, 1);
+                SDL_PushGPUFragmentUniformData(g_sdl.cmd, 0, fp, sizeof(fp));
+                SDL_DrawGPUPrimitives(g_sdl.pass, 3, 1, 0, 0);
+                SDL_EndGPURenderPass(g_sdl.pass);
+                g_sdl.pass = NULL;
+            }
+        }
+
         // ---- PASS 8: composite -> swapchain -------------------------------------------------
         SDL_GPUColorTargetInfo swap_target;
         SDL_zero(swap_target);
@@ -2724,6 +2868,9 @@ b8 sdlgpu_backend_end_frame(struct renderer_backend* backend, f32 dt)
         // ---- PASS 8b: debug / UI overlays directly on swapchain (bypass bloom) ------------
         if (bloom_split < g_sdl.batch_count)
             draw_calls += draw_sprite_batch(FALSE, g_sdl.batch, g_sdl.batch_count, aux_count, bloom_split, g_sdl.batch_count);
+
+        // RmlUi in-game UI, drawn into the swapchain pass beneath the ImGui editor overlay.
+        bs_rml_render_internal();
 
         // ImGui on top of everything.
         if (g_sdl.imgui_active && imgui_draw_data && imgui_draw_data->TotalVtxCount > 0)
@@ -2808,10 +2955,37 @@ b8 sdlgpu_backend_end_frame(struct renderer_backend* backend, f32 dt)
             SDL_PushGPUFragmentUniformData(g_sdl.cmd, 0, u, sizeof(u));
             SDL_DrawGPUPrimitives(g_sdl.pass, 6, 1, 0, 0);
         }
+        // Draw queued procedural planet surfaces (lit impostor spheres) behind sprites.
+        for (u32 i = 0; i < g_sdl.planetsurface_queue_count; ++i)
+        {
+            if (!g_sdl.planetsurface_queue[i].active) continue;
+            const bs_planetsurface_params& p = g_sdl.planetsurface_queue[i].params;
+            SDL_BindGPUGraphicsPipeline(g_sdl.pass, g_sdl.pipeline_planetsurface_swapchain);
+            float u[52];
+            u[0]  = p.screen_pos.x;  u[1]  = p.screen_pos.y;  u[2]  = p.body_radius;  u[3]  = p.quad_radius;
+            u[4]  = p.base_color.r;  u[5]  = p.base_color.g;  u[6]  = p.base_color.b;  u[7]  = p.time;
+            u[8]  = p.light_dir.x;   u[9]  = p.light_dir.y;   u[10] = (float)p.planet_type; u[11] = p.visibility;
+            u[12] = (float)p.fb_w;   u[13] = (float)p.fb_h;   u[14] = p.rotation;     u[15] = p.seed;
+            u[16] = p.has_atmosphere ? 1.0f : 0.0f; u[17] = p.has_rings ? 1.0f : 0.0f; u[18] = p.cloud_amount; u[19] = p.ring_shadow_elev;
+            u[20] = p.star_color.r;  u[21] = p.star_color.g;  u[22] = p.star_color.b;  u[23] = 0.0f;
+            u[24] = p.pal_deep.r;    u[25] = p.pal_deep.g;    u[26] = p.pal_deep.b;    u[27] = p.noise_freq;
+            u[28] = p.pal_mid.r;     u[29] = p.pal_mid.g;     u[30] = p.pal_mid.b;     u[31] = p.warp_amount;
+            u[32] = p.pal_light.r;   u[33] = p.pal_light.g;   u[34] = p.pal_light.b;   u[35] = p.feature_density;
+            u[36] = p.pal_accent.r;  u[37] = p.pal_accent.g;  u[38] = p.pal_accent.b;  u[39] = p.band_detail;
+            u[40] = p.cloud_tint.r;  u[41] = p.cloud_tint.g;  u[42] = p.cloud_tint.b;  u[43] = p.cap_extent;
+            u[44] = p.atmo_tint.r;   u[45] = p.atmo_tint.g;   u[46] = p.atmo_tint.b;   u[47] = p.roughness;
+            u[48] = p.anomaly;       u[49] = 0.0f;            u[50] = 0.0f;            u[51] = 0.0f;
+            SDL_PushGPUVertexUniformData(g_sdl.cmd, 0, u, sizeof(u));
+            SDL_PushGPUFragmentUniformData(g_sdl.cmd, 0, u, sizeof(u));
+            SDL_DrawGPUPrimitives(g_sdl.pass, 6, 1, 0, 0);
+        }
         // Composite the half-res radiation heat map behind the sprite batch (upscaled, premult-over).
         composite_heat(g_sdl.pipeline_nebula_composite_swapchain);
         draw_calls = draw_sprite_batch(FALSE, g_sdl.batch, g_sdl.batch_count, aux_count, 0, g_sdl.batch_count);
         draw_calls += draw_mapped_batch(FALSE);
+
+        // RmlUi in-game UI, drawn into the swapchain pass beneath the ImGui editor overlay.
+        bs_rml_render_internal();
 
         if (g_sdl.imgui_active && imgui_draw_data && imgui_draw_data->TotalVtxCount > 0)
             ImGui_ImplSDLGPU3_RenderDrawData(imgui_draw_data, g_sdl.cmd, g_sdl.pass);
@@ -2829,4 +3003,1432 @@ b8 sdlgpu_backend_end_frame(struct renderer_backend* backend, f32 dt)
     g_sdl.aux_bloom_mode  = FALSE;
     g_sdl.aux_batch_count = 0;
     return TRUE;
+}
+
+// =====================================================================================
+// RmlUi backend (renderer/bs_rml.h). Implemented HERE, alongside the ImGui facade, because this
+// is the only TU that includes <SDL3/...> and the RmlUi headers and it needs direct access to the
+// backend globals (g_sdl.device/window/cmd/pass/swap_width/height, the texture pool, samplers,
+// and the shared white texture). RmlUi provides three application interfaces; we implement the
+// SystemInterface (time + logging) and the RenderInterface (SDL3 GPU), and rely on RmlUi's default
+// FileInterface (stdio, paths relative to CWD) and default FreeType font engine (we compile
+// Source/FontEngineDefault into rmlui.lib and link FreeType).
+//
+// GPU-upload discipline: RmlUi may call CompileGeometry / GenerateTexture / LoadTexture at any
+// time, INCLUDING lazily during Context::Render() while our swapchain render pass (g_sdl.pass) is
+// open. SDL3 GPU forbids copy passes inside an active render pass, so every RmlUi upload acquires
+// its OWN command buffer and copy pass (mirroring sdlgpu_upload_texture_pixels) — independent of
+// the frame's g_sdl.cmd — and SDL synchronizes the cross-command-buffer hazard automatically.
+// RenderGeometry, by contrast, records draws directly into the open g_sdl.pass.
+// =====================================================================================
+namespace {
+
+// Persistent GPU buffers for one compiled RmlUi geometry (retained across frames until released).
+struct bs_rml_geometry
+{
+    SDL_GPUBuffer* vbuf;
+    SDL_GPUBuffer* ibuf;
+    u32            index_count;
+};
+
+// A compiled RmlUi shader effect. Currently only the "backdrop" frosted-glass shader; the tint is
+// captured from the decorator's RCSS at CompileShader time and pushed as a fragment uniform.
+struct bs_rml_shader
+{
+    f32 tint[4]; // rgb = tint colour, a = tint strength [0..1]
+};
+
+class BsRmlSystemInterface : public Rml::SystemInterface
+{
+public:
+    double GetElapsedTime() override { return (double)platform_get_absolute_time(); }
+
+    bool LogMessage(Rml::Log::Type type, const Rml::String& message) override
+    {
+        switch (type)
+        {
+            case Rml::Log::LT_ERROR:
+            case Rml::Log::LT_ASSERT:  BS_LOG_ERROR("[RmlUi] %s", message.c_str()); break;
+            case Rml::Log::LT_WARNING: BS_LOG_WARN ("[RmlUi] %s", message.c_str()); break;
+            case Rml::Log::LT_INFO:    BS_LOG_INFO ("[RmlUi] %s", message.c_str()); break;
+            default:                   BS_LOG_DEBUG("[RmlUi] %s", message.c_str()); break;
+        }
+        return true; // continue execution (never break into a debugger)
+    }
+};
+
+class BsRmlRenderInterface : public Rml::RenderInterface
+{
+public:
+    Rml::CompiledGeometryHandle CompileGeometry(Rml::Span<const Rml::Vertex> vertices,
+                                                Rml::Span<const int> indices) override;
+    void RenderGeometry(Rml::CompiledGeometryHandle geometry, Rml::Vector2f translation,
+                        Rml::TextureHandle texture) override;
+    void ReleaseGeometry(Rml::CompiledGeometryHandle geometry) override;
+
+    Rml::TextureHandle LoadTexture(Rml::Vector2i& texture_dimensions, const Rml::String& source) override;
+    Rml::TextureHandle GenerateTexture(Rml::Span<const Rml::byte> source, Rml::Vector2i source_dimensions) override;
+    void ReleaseTexture(Rml::TextureHandle texture) override;
+
+    void EnableScissorRegion(bool enable) override;
+    void SetScissorRegion(Rml::Rectanglei region) override;
+
+    void SetTransform(const Rml::Matrix4f* transform) override;
+
+    // Frosted-glass "backdrop" decorator support (only these shader hooks are implemented; any other
+    // shader name returns 0 so unrelated shader/filter decorators simply do not render).
+    Rml::CompiledShaderHandle CompileShader(const Rml::String& name, const Rml::Dictionary& parameters) override;
+    void RenderShader(Rml::CompiledShaderHandle shader, Rml::CompiledGeometryHandle geometry,
+                      Rml::Vector2f translation, Rml::TextureHandle texture) override;
+    void ReleaseShader(Rml::CompiledShaderHandle shader) override;
+};
+
+// All RmlUi backend state. The interface instances live here (static storage) so they outlive
+// Rml::Shutdown, which is a hard requirement of SetSystemInterface/SetRenderInterface.
+struct bs_rml_state
+{
+    b8                       active;
+    Rml::Context*            context;
+    BsRmlSystemInterface     system_iface;
+    BsRmlRenderInterface     render_iface;
+
+    SDL_GPUGraphicsPipeline* pipeline;   // premult-alpha UI pipeline targeting the swapchain
+    SDL_GPUGraphicsPipeline* pipeline_backdrop; // frosted-glass backdrop pipeline (samples ui_backdrop_rt)
+    SDL_GPUTexture*          white_tex;  // shared 1x1 white (untextured geometry)
+
+    // Render-time state, mutated by the render interface during Context::Render().
+    Mat4                     transform;        // current element transform (column-major)
+    b8                       has_transform;    // FALSE => identity (skip the multiply)
+    b8                       scissor_enabled;
+    SDL_Rect                 scissor;          // pixel rect, top-left origin
+
+    // Input state.
+    b8                       wants_mouse;      // last mouse-move landed on an interactive element
+};
+
+bs_rml_state g_rml;
+
+} // anonymous namespace
+
+// Gates the per-frame scene-blur fill for the frosted-glass "backdrop" decorator (see end_frame).
+// The in-game HUD panels use the decorator continuously, so filling whenever the UI is active is
+// both correct and cheap (four half-res passes).
+static b8 g_rml_frost_active(void) { return g_rml.active; }
+
+// Create + upload a persistent GPU buffer from CPU data using an OWN command buffer/copy pass, so
+// it is safe to call even while the frame's render pass is open. Returns NULL on failure.
+static SDL_GPUBuffer* sdlgpu_create_buffer_with_data(SDL_GPUBufferUsageFlags usage,
+                                                     const void* data, u32 size, const char* ctx)
+{
+    if (size == 0) { BS_LOG_ERROR("%s: zero-size buffer.", ctx); return NULL; }
+
+    SDL_GPUBufferCreateInfo binfo;
+    SDL_zero(binfo);
+    binfo.usage = usage;
+    binfo.size  = size;
+    SDL_GPUBuffer* buf = SDL_CreateGPUBuffer(g_sdl.device, &binfo);
+    if (!buf) { BS_LOG_ERROR("%s: SDL_CreateGPUBuffer failed: %s", ctx, SDL_GetError()); return NULL; }
+
+    SDL_GPUTransferBufferCreateInfo tinfo;
+    SDL_zero(tinfo);
+    tinfo.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
+    tinfo.size  = size;
+    SDL_GPUTransferBuffer* tb = SDL_CreateGPUTransferBuffer(g_sdl.device, &tinfo);
+    if (!tb) { BS_LOG_ERROR("%s: transfer buffer failed: %s", ctx, SDL_GetError()); SDL_ReleaseGPUBuffer(g_sdl.device, buf); return NULL; }
+
+    void* map = SDL_MapGPUTransferBuffer(g_sdl.device, tb, false);
+    SDL_memcpy(map, data, size);
+    SDL_UnmapGPUTransferBuffer(g_sdl.device, tb);
+
+    SDL_GPUCommandBuffer* up = SDL_AcquireGPUCommandBuffer(g_sdl.device);
+    if (!up) { BS_LOG_ERROR("%s: command buffer failed: %s", ctx, SDL_GetError()); SDL_ReleaseGPUTransferBuffer(g_sdl.device, tb); SDL_ReleaseGPUBuffer(g_sdl.device, buf); return NULL; }
+
+    SDL_GPUCopyPass* cp = SDL_BeginGPUCopyPass(up);
+    SDL_GPUTransferBufferLocation src; SDL_zero(src);
+    src.transfer_buffer = tb; src.offset = 0;
+    SDL_GPUBufferRegion dst; SDL_zero(dst);
+    dst.buffer = buf; dst.offset = 0; dst.size = size;
+    SDL_UploadToGPUBuffer(cp, &src, &dst, false);
+    SDL_EndGPUCopyPass(cp);
+    SDL_SubmitGPUCommandBuffer(up);
+    SDL_ReleaseGPUTransferBuffer(g_sdl.device, tb);
+
+    return buf;
+}
+
+// Create + upload a standalone RGBA8 sampler texture (not pooled). Returns NULL on failure.
+static SDL_GPUTexture* sdlgpu_create_rgba_texture(const u8* pixels, u32 width, u32 height, const char* ctx)
+{
+    SDL_GPUTextureCreateInfo info;
+    SDL_zero(info);
+    info.type                 = SDL_GPU_TEXTURETYPE_2D;
+    info.format               = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
+    info.usage                = SDL_GPU_TEXTUREUSAGE_SAMPLER;
+    info.width                = width;
+    info.height               = height;
+    info.layer_count_or_depth = 1;
+    info.num_levels           = 1;
+
+    SDL_GPUTexture* tex = SDL_CreateGPUTexture(g_sdl.device, &info);
+    if (!tex) { BS_LOG_ERROR("%s: SDL_CreateGPUTexture failed: %s", ctx, SDL_GetError()); return NULL; }
+
+    if (!sdlgpu_upload_texture_pixels(tex, pixels, width, height, ctx))
+    {
+        SDL_ReleaseGPUTexture(g_sdl.device, tex);
+        return NULL;
+    }
+    return tex;
+}
+
+// -------------------------------------------------------------------------------------
+// RenderInterface implementation (reopened anonymous namespace so the method definitions see the
+// anon-namespace class + g_rml, while freely using the file-scope backend helpers/globals).
+// -------------------------------------------------------------------------------------
+namespace {
+
+Rml::CompiledGeometryHandle BsRmlRenderInterface::CompileGeometry(Rml::Span<const Rml::Vertex> vertices,
+                                                                  Rml::Span<const int> indices)
+{
+    const u32 vsize = (u32)(vertices.size() * sizeof(Rml::Vertex));
+    const u32 isize = (u32)(indices.size()  * sizeof(int));
+    if (vsize == 0 || isize == 0) return 0;
+
+    SDL_GPUBuffer* vbuf = sdlgpu_create_buffer_with_data(SDL_GPU_BUFFERUSAGE_VERTEX, vertices.data(), vsize, "rml CompileGeometry(vbuf)");
+    if (!vbuf) return 0;
+    SDL_GPUBuffer* ibuf = sdlgpu_create_buffer_with_data(SDL_GPU_BUFFERUSAGE_INDEX, indices.data(), isize, "rml CompileGeometry(ibuf)");
+    if (!ibuf) { SDL_ReleaseGPUBuffer(g_sdl.device, vbuf); return 0; }
+
+    bs_rml_geometry* geom = new bs_rml_geometry{ vbuf, ibuf, (u32)indices.size() };
+    return (Rml::CompiledGeometryHandle)geom;
+}
+
+void BsRmlRenderInterface::RenderGeometry(Rml::CompiledGeometryHandle geometry, Rml::Vector2f translation,
+                                          Rml::TextureHandle texture)
+{
+    if (!g_sdl.pass || !g_rml.pipeline) return;
+    bs_rml_geometry* geom = (bs_rml_geometry*)geometry;
+    if (!geom) return;
+
+    SDL_BindGPUGraphicsPipeline(g_sdl.pass, g_rml.pipeline);
+
+    SDL_GPUBufferBinding vb; SDL_zero(vb); vb.buffer = geom->vbuf; vb.offset = 0;
+    SDL_BindGPUVertexBuffers(g_sdl.pass, 0, &vb, 1);
+    SDL_GPUBufferBinding ib; SDL_zero(ib); ib.buffer = geom->ibuf; ib.offset = 0;
+    SDL_BindGPUIndexBuffer(g_sdl.pass, &ib, SDL_GPU_INDEXELEMENTSIZE_32BIT);
+
+    SDL_GPUTexture* tex = texture ? (SDL_GPUTexture*)texture : g_rml.white_tex;
+    SDL_GPUTextureSamplerBinding tsb; SDL_zero(tsb);
+    tsb.texture = tex; tsb.sampler = g_sdl.sampler_linear;
+    SDL_BindGPUFragmentSamplers(g_sdl.pass, 0, &tsb, 1);
+
+    // Vertex uniform: mvp = project * transform, plus the per-draw pixel translation. project is a
+    // top-left-origin orthographic matrix sized to the current swapchain (RmlUi submits geometry in
+    // pixels from the top-left). Column-major throughout, matching the HLSL mul(mvp, ...).
+    const Mat4 project = mat4_ortho(0.0f, (f32)g_sdl.swap_width, (f32)g_sdl.swap_height, 0.0f, -10000.0f, 10000.0f);
+    const Mat4 mvp     = g_rml.has_transform ? mat4_mul(project, g_rml.transform) : project;
+
+    struct { f32 mvp[16]; f32 translation[2]; f32 pad[2]; } ubo;
+    SDL_memcpy(ubo.mvp, mvp.data, sizeof(ubo.mvp));
+    ubo.translation[0] = translation.x;
+    ubo.translation[1] = translation.y;
+    ubo.pad[0] = ubo.pad[1] = 0.0f;
+    SDL_PushGPUVertexUniformData(g_sdl.cmd, 0, &ubo, sizeof(ubo));
+
+    // Scissor: apply the current region (clamped to the framebuffer) or reset to full.
+    SDL_Rect sc;
+    if (g_rml.scissor_enabled) sc = g_rml.scissor;
+    else { sc.x = 0; sc.y = 0; sc.w = (int)g_sdl.swap_width; sc.h = (int)g_sdl.swap_height; }
+    if (sc.x < 0) { sc.w += sc.x; sc.x = 0; }
+    if (sc.y < 0) { sc.h += sc.y; sc.y = 0; }
+    if (sc.w < 0) sc.w = 0;
+    if (sc.h < 0) sc.h = 0;
+    if (sc.x + sc.w > (int)g_sdl.swap_width)  sc.w = (int)g_sdl.swap_width  - sc.x;
+    if (sc.y + sc.h > (int)g_sdl.swap_height) sc.h = (int)g_sdl.swap_height - sc.y;
+    SDL_SetGPUScissor(g_sdl.pass, &sc);
+
+    SDL_DrawGPUIndexedPrimitives(g_sdl.pass, geom->index_count, 1, 0, 0, 0);
+}
+
+void BsRmlRenderInterface::ReleaseGeometry(Rml::CompiledGeometryHandle geometry)
+{
+    bs_rml_geometry* geom = (bs_rml_geometry*)geometry;
+    if (!geom) return;
+    if (geom->vbuf) SDL_ReleaseGPUBuffer(g_sdl.device, geom->vbuf);
+    if (geom->ibuf) SDL_ReleaseGPUBuffer(g_sdl.device, geom->ibuf);
+    delete geom;
+}
+
+Rml::TextureHandle BsRmlRenderInterface::LoadTexture(Rml::Vector2i& texture_dimensions, const Rml::String& source)
+{
+    // stb_image is built with STBI_NO_STDIO (see stb_image_impl.cpp), so decode from a memory
+    // buffer rather than a file path. SDL_LoadFile reads the bytes relative to the CWD, matching
+    // RmlUi's default FileInterface (which resolves texture paths the same way).
+    size_t file_size = 0;
+    void*  file_data = SDL_LoadFile(source.c_str(), &file_size);
+    if (!file_data)
+    {
+        BS_LOG_ERROR("rml LoadTexture: failed to read '%s': %s", source.c_str(), SDL_GetError());
+        return 0;
+    }
+
+    int w = 0, h = 0, comp = 0;
+    stbi_uc* pixels = stbi_load_from_memory((const stbi_uc*)file_data, (int)file_size, &w, &h, &comp, 4);
+    SDL_free(file_data);
+    if (!pixels)
+    {
+        BS_LOG_ERROR("rml LoadTexture: failed to decode '%s': %s", source.c_str(), stbi_failure_reason());
+        return 0;
+    }
+
+    // RmlUi expects premultiplied-alpha textures (it multiplies by premultiplied vertex colors).
+    const int pixel_count = w * h;
+    for (int i = 0; i < pixel_count; ++i)
+    {
+        u8* p = pixels + i * 4;
+        const u32 a = p[3];
+        p[0] = (u8)((p[0] * a) / 255u);
+        p[1] = (u8)((p[1] * a) / 255u);
+        p[2] = (u8)((p[2] * a) / 255u);
+    }
+
+    SDL_GPUTexture* tex = sdlgpu_create_rgba_texture(pixels, (u32)w, (u32)h, "rml LoadTexture");
+    stbi_image_free(pixels);
+    if (!tex) return 0;
+
+    texture_dimensions.x = w;
+    texture_dimensions.y = h;
+    return (Rml::TextureHandle)tex;
+}
+
+Rml::TextureHandle BsRmlRenderInterface::GenerateTexture(Rml::Span<const Rml::byte> source, Rml::Vector2i source_dimensions)
+{
+    if (source_dimensions.x <= 0 || source_dimensions.y <= 0) return 0;
+    SDL_GPUTexture* tex = sdlgpu_create_rgba_texture((const u8*)source.data(),
+                                                     (u32)source_dimensions.x, (u32)source_dimensions.y,
+                                                     "rml GenerateTexture");
+    return tex ? (Rml::TextureHandle)tex : 0;
+}
+
+void BsRmlRenderInterface::ReleaseTexture(Rml::TextureHandle texture)
+{
+    if (!texture) return;
+    // SDL defers the actual destruction until the GPU is finished with the texture, so this is
+    // safe to call even mid-frame without a manual SDL_WaitForGPUIdle.
+    SDL_ReleaseGPUTexture(g_sdl.device, (SDL_GPUTexture*)texture);
+}
+
+void BsRmlRenderInterface::EnableScissorRegion(bool enable)
+{
+    g_rml.scissor_enabled = enable ? TRUE : FALSE;
+}
+
+void BsRmlRenderInterface::SetScissorRegion(Rml::Rectanglei region)
+{
+    g_rml.scissor.x = region.Left();
+    g_rml.scissor.y = region.Top();
+    g_rml.scissor.w = region.Width();
+    g_rml.scissor.h = region.Height();
+}
+
+void BsRmlRenderInterface::SetTransform(const Rml::Matrix4f* transform)
+{
+    if (!transform) { g_rml.has_transform = FALSE; return; }
+    g_rml.has_transform = TRUE;
+    // Rml::Matrix4f is column-major by default (Config.h); data() returns 16 floats in column-major
+    // order, matching the engine's Mat4 layout (data[col*4+row]) — a direct copy is correct.
+    SDL_memcpy(g_rml.transform.data, transform->data(), sizeof(f32) * 16u);
+}
+
+// --- Frosted-glass backdrop shader --------------------------------------------------------------
+// The custom "backdrop" decorator (below) compiles this "shader" to fill a panel with a tinted,
+// blurred copy of the scene behind it. Only "backdrop" is handled; every other name returns 0.
+Rml::CompiledShaderHandle BsRmlRenderInterface::CompileShader(const Rml::String& name, const Rml::Dictionary& parameters)
+{
+    if (name != "backdrop") return 0;
+
+    bs_rml_shader* sh = new bs_rml_shader{};
+    // Defaults (dark blue glass) used when the decorator omits a tint.
+    sh->tint[0] = 0.05f; sh->tint[1] = 0.09f; sh->tint[2] = 0.15f; sh->tint[3] = 0.55f;
+
+    auto read = [&](const char* key, f32& out) {
+        auto it = parameters.find(key);
+        if (it != parameters.end()) out = it->second.Get<float>(out);
+    };
+    read("tr", sh->tint[0]);
+    read("tg", sh->tint[1]);
+    read("tb", sh->tint[2]);
+    read("ta", sh->tint[3]);
+    return (Rml::CompiledShaderHandle)sh;
+}
+
+void BsRmlRenderInterface::RenderShader(Rml::CompiledShaderHandle shader, Rml::CompiledGeometryHandle geometry,
+                                        Rml::Vector2f translation, Rml::TextureHandle /*texture*/)
+{
+    if (!g_sdl.pass || !g_rml.pipeline_backdrop || !g_sdl.ui_backdrop_rt) return;
+    bs_rml_shader*   sh   = (bs_rml_shader*)shader;
+    bs_rml_geometry* geom = (bs_rml_geometry*)geometry;
+    if (!sh || !geom) return;
+
+    SDL_BindGPUGraphicsPipeline(g_sdl.pass, g_rml.pipeline_backdrop);
+
+    SDL_GPUBufferBinding vb; SDL_zero(vb); vb.buffer = geom->vbuf; vb.offset = 0;
+    SDL_BindGPUVertexBuffers(g_sdl.pass, 0, &vb, 1);
+    SDL_GPUBufferBinding ib; SDL_zero(ib); ib.buffer = geom->ibuf; ib.offset = 0;
+    SDL_BindGPUIndexBuffer(g_sdl.pass, &ib, SDL_GPU_INDEXELEMENTSIZE_32BIT);
+
+    // Fragment samples the pre-UI blurred scene in screen space (see ui_backdrop.frag.hlsl).
+    SDL_GPUTextureSamplerBinding tsb; SDL_zero(tsb);
+    tsb.texture = g_sdl.ui_backdrop_rt; tsb.sampler = g_sdl.sampler_linear;
+    SDL_BindGPUFragmentSamplers(g_sdl.pass, 0, &tsb, 1);
+
+    // Vertex uniform: same ortho * transform + per-draw translation as the normal UI path, so a
+    // dragged panel's frost stays screen-correct (translation is live each frame).
+    const Mat4 project = mat4_ortho(0.0f, (f32)g_sdl.swap_width, (f32)g_sdl.swap_height, 0.0f, -10000.0f, 10000.0f);
+    const Mat4 mvp     = g_rml.has_transform ? mat4_mul(project, g_rml.transform) : project;
+    struct { f32 mvp[16]; f32 translation[2]; f32 pad[2]; } vubo;
+    SDL_memcpy(vubo.mvp, mvp.data, sizeof(vubo.mvp));
+    vubo.translation[0] = translation.x;
+    vubo.translation[1] = translation.y;
+    vubo.pad[0] = vubo.pad[1] = 0.0f;
+    SDL_PushGPUVertexUniformData(g_sdl.cmd, 0, &vubo, sizeof(vubo));
+
+    // Fragment uniform: 1/screen (for screen-space uv) + the tint.
+    struct { f32 inv_screen[4]; f32 tint[4]; } fubo;
+    fubo.inv_screen[0] = (g_sdl.swap_width  > 0) ? 1.0f / (f32)g_sdl.swap_width  : 0.0f;
+    fubo.inv_screen[1] = (g_sdl.swap_height > 0) ? 1.0f / (f32)g_sdl.swap_height : 0.0f;
+    fubo.inv_screen[2] = 0.0f; fubo.inv_screen[3] = 0.0f;
+    fubo.tint[0] = sh->tint[0]; fubo.tint[1] = sh->tint[1]; fubo.tint[2] = sh->tint[2]; fubo.tint[3] = sh->tint[3];
+    SDL_PushGPUFragmentUniformData(g_sdl.cmd, 0, &fubo, sizeof(fubo));
+
+    // Scissor: current region (clamped to the framebuffer) or reset to full.
+    SDL_Rect sc;
+    if (g_rml.scissor_enabled) sc = g_rml.scissor;
+    else { sc.x = 0; sc.y = 0; sc.w = (int)g_sdl.swap_width; sc.h = (int)g_sdl.swap_height; }
+    if (sc.x < 0) { sc.w += sc.x; sc.x = 0; }
+    if (sc.y < 0) { sc.h += sc.y; sc.y = 0; }
+    if (sc.w < 0) sc.w = 0;
+    if (sc.h < 0) sc.h = 0;
+    if (sc.x + sc.w > (int)g_sdl.swap_width)  sc.w = (int)g_sdl.swap_width  - sc.x;
+    if (sc.y + sc.h > (int)g_sdl.swap_height) sc.h = (int)g_sdl.swap_height - sc.y;
+    SDL_SetGPUScissor(g_sdl.pass, &sc);
+
+    SDL_DrawGPUIndexedPrimitives(g_sdl.pass, geom->index_count, 1, 0, 0, 0);
+}
+
+void BsRmlRenderInterface::ReleaseShader(Rml::CompiledShaderHandle shader)
+{
+    delete (bs_rml_shader*)shader;
+}
+
+} // anonymous namespace
+
+// -------------------------------------------------------------------------------------
+// Frosted-glass "backdrop" decorator. Registered with RmlUi so RCSS can request a real scene-blur
+// behind a panel:  decorator: backdrop( <tint-color> );
+// It builds a rounded-box mesh (respecting border-radius) and binds our custom "backdrop" shader,
+// which the render interface draws by sampling the blurred ui_backdrop_rt in screen space. The tint
+// colour's alpha channel is the tint STRENGTH (0 = pure blurred scene, 255 = pure tint colour).
+// -------------------------------------------------------------------------------------
+namespace {
+
+struct BsBackdropElementData
+{
+    Rml::Geometry       geometry;
+    Rml::CompiledShader shader;
+};
+
+class BsBackdropDecorator : public Rml::Decorator
+{
+public:
+    bool Initialise(Rml::Colourb in_tint) { tint = in_tint; return true; }
+
+    Rml::DecoratorDataHandle GenerateElementData(Rml::Element* element, Rml::BoxArea paint_area) const override
+    {
+        Rml::RenderManager* rm = element->GetRenderManager();
+        if (!rm) return Rml::Decorator::INVALID_DECORATORDATAHANDLE;
+
+        // Serialize the tint as normalized floats through the shader parameters (see CompileShader).
+        Rml::Dictionary params;
+        params["tr"] = Rml::Variant(tint.red   / 255.0f);
+        params["tg"] = Rml::Variant(tint.green / 255.0f);
+        params["tb"] = Rml::Variant(tint.blue  / 255.0f);
+        params["ta"] = Rml::Variant(tint.alpha / 255.0f);
+        Rml::CompiledShader shader = rm->CompileShader("backdrop", params);
+        if (!shader) return Rml::Decorator::INVALID_DECORATORDATAHANDLE;
+
+        const Rml::RenderBox render_box = element->GetRenderBox(paint_area);
+        const Rml::ComputedValues& computed = element->GetComputedValues();
+        const Rml::byte alpha = Rml::byte(computed.opacity() * 255.0f);
+
+        Rml::Mesh mesh;
+        Rml::MeshUtilities::GenerateBackground(mesh, render_box, Rml::ColourbPremultiplied(alpha, alpha));
+
+        BsBackdropElementData* data = new BsBackdropElementData{ rm->MakeGeometry(std::move(mesh)), std::move(shader) };
+        return reinterpret_cast<Rml::DecoratorDataHandle>(data);
+    }
+
+    void ReleaseElementData(Rml::DecoratorDataHandle handle) const override
+    {
+        delete reinterpret_cast<BsBackdropElementData*>(handle);
+    }
+
+    void RenderElement(Rml::Element* element, Rml::DecoratorDataHandle handle) const override
+    {
+        BsBackdropElementData* data = reinterpret_cast<BsBackdropElementData*>(handle);
+        data->geometry.Render(element->GetAbsoluteOffset(Rml::BoxArea::Border), {}, data->shader);
+    }
+
+private:
+    Rml::Colourb tint;
+};
+
+class BsBackdropDecoratorInstancer : public Rml::DecoratorInstancer
+{
+public:
+    BsBackdropDecoratorInstancer()
+    {
+        id_tint = RegisterProperty("tint", "#0d1a2a8c").AddParser("color").GetId();
+        RegisterShorthand("decorator", "tint", Rml::ShorthandType::FallThrough);
+    }
+
+    Rml::SharedPtr<Rml::Decorator> InstanceDecorator(const Rml::String& /*name*/, const Rml::PropertyDictionary& properties,
+                                                     const Rml::DecoratorInstancerInterface& /*iface*/) override
+    {
+        Rml::Colourb tint = properties.GetProperty(id_tint)->Get<Rml::Colourb>();
+        auto decorator = Rml::MakeShared<BsBackdropDecorator>();
+        if (decorator->Initialise(tint)) return decorator;
+        return nullptr;
+    }
+
+private:
+    Rml::PropertyId id_tint = {};
+};
+
+} // anonymous namespace
+
+// -------------------------------------------------------------------------------------
+// UI pipeline + init helpers.
+// -------------------------------------------------------------------------------------
+static b8 bs_rml_create_pipeline(void)
+{
+    SDL_GPUShader* vs = load_shader(g_sdl.device, "rml", "vert", SDL_GPU_SHADERSTAGE_VERTEX,   0, 1);
+    SDL_GPUShader* fs = load_shader(g_sdl.device, "rml", "frag", SDL_GPU_SHADERSTAGE_FRAGMENT, 1, 0);
+    if (!vs || !fs)
+    {
+        if (vs) SDL_ReleaseGPUShader(g_sdl.device, vs);
+        if (fs) SDL_ReleaseGPUShader(g_sdl.device, fs);
+        return FALSE;
+    }
+
+    SDL_GPUVertexBufferDescription vbuf_desc;
+    SDL_zero(vbuf_desc);
+    vbuf_desc.slot       = 0;
+    vbuf_desc.pitch      = sizeof(Rml::Vertex);
+    vbuf_desc.input_rate = SDL_GPU_VERTEXINPUTRATE_VERTEX;
+
+    // Rml::Vertex: position (float2 @0), colour (premult RGBA8 @8), tex_coord (float2 @12).
+    SDL_GPUVertexAttribute attrs[3];
+    SDL_zero(attrs);
+    attrs[0].location = 0; attrs[0].buffer_slot = 0; attrs[0].format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT2;      attrs[0].offset = offsetof(Rml::Vertex, position);
+    attrs[1].location = 1; attrs[1].buffer_slot = 0; attrs[1].format = SDL_GPU_VERTEXELEMENTFORMAT_UBYTE4_NORM; attrs[1].offset = offsetof(Rml::Vertex, colour);
+    attrs[2].location = 2; attrs[2].buffer_slot = 0; attrs[2].format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT2;      attrs[2].offset = offsetof(Rml::Vertex, tex_coord);
+
+    // Premultiplied-alpha over blend (RmlUi convention): src=ONE, dst=ONE_MINUS_SRC_ALPHA.
+    SDL_GPUColorTargetBlendState blend;
+    SDL_zero(blend);
+    blend.color_write_mask     = SDL_GPU_COLORCOMPONENT_R | SDL_GPU_COLORCOMPONENT_G |
+                                 SDL_GPU_COLORCOMPONENT_B | SDL_GPU_COLORCOMPONENT_A;
+    blend.enable_blend         = true;
+    blend.color_blend_op       = SDL_GPU_BLENDOP_ADD;
+    blend.src_color_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
+    blend.dst_color_blendfactor = SDL_GPU_BLENDFACTOR_ONE_MINUS_SRC_ALPHA;
+    blend.alpha_blend_op       = SDL_GPU_BLENDOP_ADD;
+    blend.src_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
+    blend.dst_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE_MINUS_SRC_ALPHA;
+
+    SDL_GPUColorTargetDescription color_target;
+    SDL_zero(color_target);
+    color_target.format      = get_corrected_swapchain_format(g_sdl.device, g_sdl.window);
+    color_target.blend_state = blend;
+
+    SDL_GPUGraphicsPipelineCreateInfo info;
+    SDL_zero(info);
+    info.vertex_shader   = vs;
+    info.fragment_shader = fs;
+    info.primitive_type  = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST;
+    info.vertex_input_state.vertex_buffer_descriptions = &vbuf_desc;
+    info.vertex_input_state.num_vertex_buffers         = 1;
+    info.vertex_input_state.vertex_attributes          = attrs;
+    info.vertex_input_state.num_vertex_attributes      = 3;
+    info.rasterizer_state.fill_mode  = SDL_GPU_FILLMODE_FILL;
+    info.rasterizer_state.cull_mode  = SDL_GPU_CULLMODE_NONE;
+    info.rasterizer_state.front_face = SDL_GPU_FRONTFACE_COUNTER_CLOCKWISE;
+    info.target_info.color_target_descriptions = &color_target;
+    info.target_info.num_color_targets         = 1;
+    info.target_info.has_depth_stencil_target  = false;
+
+    g_rml.pipeline = SDL_CreateGPUGraphicsPipeline(g_sdl.device, &info);
+    SDL_ReleaseGPUShader(g_sdl.device, vs);
+    SDL_ReleaseGPUShader(g_sdl.device, fs);
+
+    if (!g_rml.pipeline)
+    {
+        BS_LOG_FATAL("bs_rml: UI pipeline creation failed: %s", SDL_GetError());
+        return FALSE;
+    }
+    return TRUE;
+}
+
+// Frosted-glass backdrop pipeline: same vertex layout / premult-alpha blend / swapchain format as the
+// UI pipeline, but with the ui_backdrop fragment shader (samples the blurred scene). Reuses rml.vert.
+static b8 bs_rml_create_backdrop_pipeline(void)
+{
+    SDL_GPUShader* vs = load_shader(g_sdl.device, "rml",         "vert", SDL_GPU_SHADERSTAGE_VERTEX,   0, 1);
+    SDL_GPUShader* fs = load_shader(g_sdl.device, "ui_backdrop", "frag", SDL_GPU_SHADERSTAGE_FRAGMENT, 1, 1);
+    if (!vs || !fs)
+    {
+        if (vs) SDL_ReleaseGPUShader(g_sdl.device, vs);
+        if (fs) SDL_ReleaseGPUShader(g_sdl.device, fs);
+        return FALSE;
+    }
+
+    SDL_GPUVertexBufferDescription vbuf_desc;
+    SDL_zero(vbuf_desc);
+    vbuf_desc.slot       = 0;
+    vbuf_desc.pitch      = sizeof(Rml::Vertex);
+    vbuf_desc.input_rate = SDL_GPU_VERTEXINPUTRATE_VERTEX;
+
+    SDL_GPUVertexAttribute attrs[3];
+    SDL_zero(attrs);
+    attrs[0].location = 0; attrs[0].buffer_slot = 0; attrs[0].format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT2;      attrs[0].offset = offsetof(Rml::Vertex, position);
+    attrs[1].location = 1; attrs[1].buffer_slot = 0; attrs[1].format = SDL_GPU_VERTEXELEMENTFORMAT_UBYTE4_NORM; attrs[1].offset = offsetof(Rml::Vertex, colour);
+    attrs[2].location = 2; attrs[2].buffer_slot = 0; attrs[2].format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT2;      attrs[2].offset = offsetof(Rml::Vertex, tex_coord);
+
+    SDL_GPUColorTargetBlendState blend;
+    SDL_zero(blend);
+    blend.color_write_mask     = SDL_GPU_COLORCOMPONENT_R | SDL_GPU_COLORCOMPONENT_G |
+                                 SDL_GPU_COLORCOMPONENT_B | SDL_GPU_COLORCOMPONENT_A;
+    blend.enable_blend         = true;
+    blend.color_blend_op       = SDL_GPU_BLENDOP_ADD;
+    blend.src_color_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
+    blend.dst_color_blendfactor = SDL_GPU_BLENDFACTOR_ONE_MINUS_SRC_ALPHA;
+    blend.alpha_blend_op       = SDL_GPU_BLENDOP_ADD;
+    blend.src_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
+    blend.dst_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE_MINUS_SRC_ALPHA;
+
+    SDL_GPUColorTargetDescription color_target;
+    SDL_zero(color_target);
+    color_target.format      = get_corrected_swapchain_format(g_sdl.device, g_sdl.window);
+    color_target.blend_state = blend;
+
+    SDL_GPUGraphicsPipelineCreateInfo info;
+    SDL_zero(info);
+    info.vertex_shader   = vs;
+    info.fragment_shader = fs;
+    info.primitive_type  = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST;
+    info.vertex_input_state.vertex_buffer_descriptions = &vbuf_desc;
+    info.vertex_input_state.num_vertex_buffers         = 1;
+    info.vertex_input_state.vertex_attributes          = attrs;
+    info.vertex_input_state.num_vertex_attributes      = 3;
+    info.rasterizer_state.fill_mode  = SDL_GPU_FILLMODE_FILL;
+    info.rasterizer_state.cull_mode  = SDL_GPU_CULLMODE_NONE;
+    info.rasterizer_state.front_face = SDL_GPU_FRONTFACE_COUNTER_CLOCKWISE;
+    info.target_info.color_target_descriptions = &color_target;
+    info.target_info.num_color_targets         = 1;
+    info.target_info.has_depth_stencil_target  = false;
+
+    g_rml.pipeline_backdrop = SDL_CreateGPUGraphicsPipeline(g_sdl.device, &info);
+    SDL_ReleaseGPUShader(g_sdl.device, vs);
+    SDL_ReleaseGPUShader(g_sdl.device, fs);
+
+    if (!g_rml.pipeline_backdrop)
+    {
+        BS_LOG_ERROR("bs_rml: backdrop pipeline creation failed: %s", SDL_GetError());
+        return FALSE;
+    }
+    return TRUE;
+}
+
+// -------------------------------------------------------------------------------------
+// Input translation helpers.
+// -------------------------------------------------------------------------------------
+static int bs_rml_key_modifiers(void)
+{
+    SDL_Keymod m = SDL_GetModState();
+    int r = 0;
+    if (m & SDL_KMOD_SHIFT) r |= Rml::Input::KM_SHIFT;
+    if (m & SDL_KMOD_CTRL)  r |= Rml::Input::KM_CTRL;
+    if (m & SDL_KMOD_ALT)   r |= Rml::Input::KM_ALT;
+    if (m & SDL_KMOD_GUI)   r |= Rml::Input::KM_META;
+    if (m & SDL_KMOD_CAPS)  r |= Rml::Input::KM_CAPSLOCK;
+    if (m & SDL_KMOD_NUM)   r |= Rml::Input::KM_NUMLOCK;
+    return r;
+}
+
+// Map an SDL scancode to a RmlUi key identifier. Covers letters (for shortcuts) and the navigation
+// / editing keys a text field needs; character entry itself flows through SDL_EVENT_TEXT_INPUT.
+static Rml::Input::KeyIdentifier bs_rml_scancode_to_key(SDL_Scancode sc)
+{
+    if (sc >= SDL_SCANCODE_A && sc <= SDL_SCANCODE_Z)
+        return (Rml::Input::KeyIdentifier)(Rml::Input::KI_A + (sc - SDL_SCANCODE_A));
+
+    switch (sc)
+    {
+        case SDL_SCANCODE_RETURN:
+        case SDL_SCANCODE_KP_ENTER: return Rml::Input::KI_RETURN;
+        case SDL_SCANCODE_BACKSPACE: return Rml::Input::KI_BACK;
+        case SDL_SCANCODE_DELETE:    return Rml::Input::KI_DELETE;
+        case SDL_SCANCODE_TAB:       return Rml::Input::KI_TAB;
+        case SDL_SCANCODE_ESCAPE:    return Rml::Input::KI_ESCAPE;
+        case SDL_SCANCODE_LEFT:      return Rml::Input::KI_LEFT;
+        case SDL_SCANCODE_RIGHT:     return Rml::Input::KI_RIGHT;
+        case SDL_SCANCODE_UP:        return Rml::Input::KI_UP;
+        case SDL_SCANCODE_DOWN:      return Rml::Input::KI_DOWN;
+        case SDL_SCANCODE_HOME:      return Rml::Input::KI_HOME;
+        case SDL_SCANCODE_END:       return Rml::Input::KI_END;
+        case SDL_SCANCODE_PAGEUP:    return Rml::Input::KI_PRIOR;
+        case SDL_SCANCODE_PAGEDOWN:  return Rml::Input::KI_NEXT;
+        default:                     return Rml::Input::KI_UNKNOWN;
+    }
+}
+
+// SDL mouse buttons are 1=left, 2=middle, 3=right; RmlUi wants 0=left, 1=right, 2=middle.
+static int bs_rml_mouse_button(Uint8 sdl_button)
+{
+    switch (sdl_button)
+    {
+        case SDL_BUTTON_LEFT:   return 0;
+        case SDL_BUTTON_RIGHT:  return 1;
+        case SDL_BUTTON_MIDDLE: return 2;
+        default:                return -1;
+    }
+}
+
+// Convert logical (window) mouse coordinates to swapchain pixel coordinates (the context uses
+// pixel dimensions). On a 1.0x display the scale is 1.0, so this is a no-op there.
+static void bs_rml_scale_mouse(float lx, float ly, int* out_x, int* out_y)
+{
+    int lw = 0, lh = 0, pw = 0, ph = 0;
+    SDL_GetWindowSize(g_sdl.window, &lw, &lh);
+    SDL_GetWindowSizeInPixels(g_sdl.window, &pw, &ph);
+    float sx = (lw > 0) ? ((float)pw / (float)lw) : 1.0f;
+    float sy = (lh > 0) ? ((float)ph / (float)lh) : 1.0f;
+    *out_x = (int)(lx * sx);
+    *out_y = (int)(ly * sy);
+}
+
+// -------------------------------------------------------------------------------------
+// bs_rml facade (renderer/bs_rml.h).
+// -------------------------------------------------------------------------------------
+b8 bs_rml_initialize(void)
+{
+    if (g_rml.active) { BS_LOG_WARN("bs_rml_initialize called twice; ignoring."); return TRUE; }
+    if (!g_sdl.device || !g_sdl.window)
+    {
+        BS_LOG_ERROR("bs_rml_initialize: GPU device/window not ready (call after backend init).");
+        return FALSE;
+    }
+
+    // Resolve the shared 1x1 white texture used for untextured geometry.
+    gpu_texture* wt = pool_resolve_texture(g_sdl.white_texture);
+    g_rml.white_tex = wt ? wt->tex : NULL;
+    if (!g_rml.white_tex)
+    {
+        BS_LOG_ERROR("bs_rml_initialize: shared white texture not available.");
+        return FALSE;
+    }
+
+    if (!bs_rml_create_pipeline()) return FALSE;
+
+    // Frosted-glass backdrop pipeline is optional: if it fails, the "backdrop" decorator's RenderShader
+    // no-ops and panels fall back to their solid background-color.
+    if (!bs_rml_create_backdrop_pipeline())
+        BS_LOG_WARN("bs_rml_initialize: frosted-glass backdrop unavailable (panels stay opaque).");
+
+    Rml::SetSystemInterface(&g_rml.system_iface);
+    Rml::SetRenderInterface(&g_rml.render_iface);
+
+    if (!Rml::Initialise())
+    {
+        BS_LOG_ERROR("bs_rml_initialize: Rml::Initialise failed.");
+        SDL_ReleaseGPUGraphicsPipeline(g_sdl.device, g_rml.pipeline);
+        g_rml.pipeline = NULL;
+        return FALSE;
+    }
+
+    // Register the custom frosted-glass "backdrop" decorator (instancer kept alive for the process).
+    {
+        static BsBackdropDecoratorInstancer s_backdrop_instancer;
+        Rml::Factory::RegisterDecoratorInstancer("backdrop", &s_backdrop_instancer);
+    }
+
+    int pw = 0, ph = 0;
+    SDL_GetWindowSizeInPixels(g_sdl.window, &pw, &ph);
+    if (pw <= 0) pw = 1280;
+    if (ph <= 0) ph = 720;
+
+    g_rml.context = Rml::CreateContext("main", Rml::Vector2i(pw, ph));
+    if (!g_rml.context)
+    {
+        BS_LOG_ERROR("bs_rml_initialize: Rml::CreateContext failed.");
+        Rml::Shutdown();
+        SDL_ReleaseGPUGraphicsPipeline(g_sdl.device, g_rml.pipeline);
+        g_rml.pipeline = NULL;
+        return FALSE;
+    }
+
+    // Optional in-UI inspector (toggle with F12 via bs_rml_debugger_toggle). Harmless if it fails.
+    Rml::Debugger::Initialise(g_rml.context);
+
+    g_rml.transform       = mat4_identity();
+    g_rml.has_transform   = FALSE;
+    g_rml.scissor_enabled = FALSE;
+    g_rml.wants_mouse     = FALSE;
+    g_rml.active          = TRUE;
+
+    BS_LOG_INFO("RmlUi initialized (context %dx%d, swapchain format-matched pipeline).", pw, ph);
+    return TRUE;
+}
+
+void bs_rml_shutdown(void)
+{
+    if (!g_rml.active) return;
+
+    // Drain the GPU before releasing RmlUi's device-bound resources, and do it BEFORE the backend
+    // destroys the device (renderer.cpp ordering). Rml::Shutdown unloads all documents and calls
+    // ReleaseGeometry/ReleaseTexture on our render interface, freeing the GPU buffers/textures.
+    if (g_sdl.device) SDL_WaitForGPUIdle(g_sdl.device);
+
+    // Tear down the HUD data model + document BEFORE Rml::Shutdown so the RemoveDataModel /
+    // UnloadDocument calls run while the context is still valid.
+    bs_rml_hud_shutdown();
+
+    Rml::Shutdown();
+    g_rml.context = NULL;
+
+    if (g_rml.pipeline)
+    {
+        SDL_ReleaseGPUGraphicsPipeline(g_sdl.device, g_rml.pipeline);
+        g_rml.pipeline = NULL;
+    }
+    if (g_rml.pipeline_backdrop)
+    {
+        SDL_ReleaseGPUGraphicsPipeline(g_sdl.device, g_rml.pipeline_backdrop);
+        g_rml.pipeline_backdrop = NULL;
+    }
+
+    g_rml.active = FALSE;
+    BS_LOG_INFO("RmlUi shut down.");
+}
+
+i32 bs_rml_load_fonts(const char* fonts_dir)
+{
+    if (!g_rml.active || !fonts_dir) return 0;
+
+    i32 loaded = 0;
+    const char* patterns[2] = { "*.ttf", "*.otf" };
+    for (int pi = 0; pi < 2; ++pi)
+    {
+        int count = 0;
+        char** names = SDL_GlobDirectory(fonts_dir, patterns[pi], (SDL_GlobFlags)0, &count);
+        if (!names) continue;
+        for (int i = 0; i < count; ++i)
+        {
+            char full[512];
+            SDL_snprintf(full, sizeof(full), "%s/%s", fonts_dir, names[i]);
+            if (Rml::LoadFontFace(full)) ++loaded;
+            else BS_LOG_WARN("bs_rml_load_fonts: failed to load '%s'.", full);
+        }
+        SDL_free(names);
+    }
+
+    BS_LOG_INFO("bs_rml_load_fonts: loaded %d face(s) from '%s'.", loaded, fonts_dir);
+    return loaded;
+}
+
+bs_rml_document bs_rml_load_document(const char* rml_path)
+{
+    bs_rml_document handle;
+    handle.ptr = NULL;
+    if (!g_rml.active || !g_rml.context || !rml_path) return handle;
+
+    Rml::ElementDocument* doc = g_rml.context->LoadDocument(rml_path);
+    if (!doc)
+    {
+        BS_LOG_ERROR("bs_rml_load_document: failed to load '%s'.", rml_path);
+        return handle;
+    }
+    handle.ptr = doc;
+    return handle;
+}
+
+void bs_rml_show(bs_rml_document doc, b8 show)
+{
+    if (!doc.ptr) return;
+    Rml::ElementDocument* d = (Rml::ElementDocument*)doc.ptr;
+    if (show) d->Show();
+    else      d->Hide();
+}
+
+void bs_rml_unload_document(bs_rml_document doc)
+{
+    if (!g_rml.active || !g_rml.context || !doc.ptr) return;
+    g_rml.context->UnloadDocument((Rml::ElementDocument*)doc.ptr);
+}
+
+void bs_rml_update(void)
+{
+    if (!g_rml.active || !g_rml.context) return;
+
+    int pw = 0, ph = 0;
+    SDL_GetWindowSizeInPixels(g_sdl.window, &pw, &ph);
+    if (pw > 0 && ph > 0)
+        g_rml.context->SetDimensions(Rml::Vector2i(pw, ph));
+
+    g_rml.context->Update();
+}
+
+void bs_rml_process_event(const void* sdl_event)
+{
+    if (!g_rml.active || !g_rml.context || !sdl_event) return;
+    const SDL_Event* ev = (const SDL_Event*)sdl_event;
+    const int mods = bs_rml_key_modifiers();
+
+    switch (ev->type)
+    {
+        case SDL_EVENT_MOUSE_MOTION:
+        {
+            int x = 0, y = 0;
+            bs_rml_scale_mouse(ev->motion.x, ev->motion.y, &x, &y);
+            // ProcessMouseMove returns TRUE when the mouse is NOT over any interactive element.
+            g_rml.wants_mouse = g_rml.context->ProcessMouseMove(x, y, mods) ? FALSE : TRUE;
+        } break;
+
+        case SDL_EVENT_MOUSE_BUTTON_DOWN:
+        {
+            int b = bs_rml_mouse_button(ev->button.button);
+            if (b >= 0)
+                g_rml.wants_mouse = g_rml.context->ProcessMouseButtonDown(b, mods) ? FALSE : TRUE;
+        } break;
+
+        case SDL_EVENT_MOUSE_BUTTON_UP:
+        {
+            int b = bs_rml_mouse_button(ev->button.button);
+            if (b >= 0)
+                g_rml.context->ProcessMouseButtonUp(b, mods);
+        } break;
+
+        case SDL_EVENT_MOUSE_WHEEL:
+        {
+            // SDL wheel.y > 0 = scroll up; RmlUi wheel_delta > 0 = scroll down. Invert.
+            g_rml.context->ProcessMouseWheel(-ev->wheel.y, mods);
+        } break;
+
+        case SDL_EVENT_WINDOW_MOUSE_LEAVE:
+        {
+            g_rml.context->ProcessMouseLeave();
+            g_rml.wants_mouse = FALSE;
+        } break;
+
+        case SDL_EVENT_KEY_DOWN:
+        {
+            Rml::Input::KeyIdentifier key = bs_rml_scancode_to_key(ev->key.scancode);
+            if (key != Rml::Input::KI_UNKNOWN)
+                g_rml.context->ProcessKeyDown(key, mods);
+        } break;
+
+        case SDL_EVENT_KEY_UP:
+        {
+            Rml::Input::KeyIdentifier key = bs_rml_scancode_to_key(ev->key.scancode);
+            if (key != Rml::Input::KI_UNKNOWN)
+                g_rml.context->ProcessKeyUp(key, mods);
+        } break;
+
+        case SDL_EVENT_TEXT_INPUT:
+        {
+            if (ev->text.text && ev->text.text[0])
+                g_rml.context->ProcessTextInput(Rml::String(ev->text.text));
+        } break;
+
+        default: break;
+    }
+}
+
+b8 bs_rml_wants_mouse(void)
+{
+    return (g_rml.active && g_rml.wants_mouse) ? TRUE : FALSE;
+}
+
+b8 bs_rml_wants_keyboard(void)
+{
+    if (!g_rml.active || !g_rml.context) return FALSE;
+    Rml::Element* focus = g_rml.context->GetFocusElement();
+    if (!focus) return FALSE;
+    const Rml::String& tag = focus->GetTagName();
+    return (tag == "input" || tag == "textarea") ? TRUE : FALSE;
+}
+
+void bs_rml_on_resize(u16 width, u16 height)
+{
+    if (!g_rml.active || !g_rml.context) return;
+    g_rml.context->SetDimensions(Rml::Vector2i((int)width, (int)height));
+}
+
+void bs_rml_debugger_toggle(void)
+{
+    if (!g_rml.active || !g_rml.context) return;
+    bool vis = !Rml::Debugger::IsVisible();
+    Rml::Debugger::SetVisible(vis);
+    BS_LOG_INFO("bs_rml_debugger_toggle: RmlUi debugger %s.", vis ? "shown" : "hidden");
+}
+
+// -------------------------------------------------------------------------------------
+// In-game HUD data model (Phase 4). One "hud" data model backs the whole in-game document; the
+// game pushes a POD snapshot each frame (bs_rml_hud_update) and drains click actions (poll).
+// -------------------------------------------------------------------------------------
+
+// A repeated action-log line, exposed to RML as { text }.
+struct BsRmlHudLog
+{
+    Rml::String text;
+};
+
+// A repeated discovery line, exposed to RML as { text, color } (color is an RCSS colour string).
+struct BsRmlHudDisc
+{
+    Rml::String text;
+    Rml::String color;
+};
+
+// A repeated fleet-ship weapon row, exposed to RML as { text, glyph, action, selected, empty }.
+// `glyph` is the placeholder symbol shown in the Arsenal drag-queue (unused by the fleet panel).
+struct BsRmlHudWeapon
+{
+    Rml::String text;
+    Rml::String glyph;
+    Rml::String action;
+    Rml::String drop;
+    bool        selected = false;
+    bool        empty    = false;
+};
+
+// The engine-side mirror of bs_rml_hud_state, using RmlUi string/array types the data model binds
+// to. Populated by bs_rml_hud_update from the game's POD snapshot.
+struct BsRmlHudModel
+{
+    bool                     nav_visible = false;
+    Rml::String              nav_sector, nav_system, nav_distance, nav_zone;
+
+    bool                     ship_visible = false;
+    Rml::String              ship_speed;
+
+    bool                     time_visible = false;
+    Rml::String              time_date;
+    int                      time_tier = 1;
+
+    bool                     enc_visible = false;
+    Rml::String              enc_name, enc_distance, enc_faction, enc_desc;
+
+    bool                     log_visible = false;
+    float                    log_alpha = 1.0f;
+    Rml::Vector<BsRmlHudLog> log;
+
+    bool                     disc_visible = false;
+    Rml::String              disc_count_label;
+    Rml::Vector<BsRmlHudDisc> disc;
+
+    bool                        fleet_visible = false;
+    Rml::String                 fleet_name, fleet_faction, fleet_speed, fleet_heading, fleet_health;
+    Rml::Vector<BsRmlHudWeapon> fleet_weapon;
+    Rml::String                 fleet_mode_label;
+    bool                        fleet_mode_enabled = false;
+
+    bool                     jump_visible = false;
+
+    bool                     debug_visible = false;
+    Rml::String              debug_text;
+
+    bool                     tip_visible = false;
+    Rml::String              tip_left = "0px", tip_top = "0px", tip_text;
+
+    bool                        inspector_btn_visible = false;
+    bool                        inspector_visible = false;
+    Rml::String                 insp_ship_name;
+    Rml::Vector<BsRmlHudWeapon> arsenal_inv;
+    Rml::Vector<BsRmlHudWeapon> arsenal_def;
+    Rml::Vector<BsRmlHudWeapon> arsenal_hp;
+
+    int                         ui_kit = 1; // 0 = Neon, 1 = Clean, 2 = Minimal (drives body class)
+
+    bool                        station_menu_visible = false;
+    Rml::String                 station_menu_left = "0px", station_menu_top = "0px";
+    bool                        station_inspector_visible = false;
+    Rml::String                 station_insp_title;
+    bool                        station_insp_show_dock = false;
+    bool                        station_insp_show_market = false;
+    bool                        station_insp_show_contracts = false;
+    bool                        station_insp_tab2_visible = false;
+    Rml::String                 station_insp_dock;
+    Rml::String                 station_insp_market;
+    Rml::String                 station_insp_contracts;
+};
+
+static BsRmlHudModel          g_hud_model;
+static Rml::DataModelHandle   g_hud_handle;
+static Rml::ElementDocument*  g_hud_doc = nullptr;
+static Rml::Vector<Rml::String> g_hud_actions; // pending UI actions (drained by the game)
+
+// Copy a bounded, possibly-unterminated C string into an Rml::String.
+static void bs_rml_assign(Rml::String& dst, const char* src, size_t cap)
+{
+    if (!src) { dst.clear(); return; }
+    size_t n = 0;
+    while (n < cap && src[n] != '\0') ++n;
+    dst.assign(src, n);
+}
+
+b8 bs_rml_hud_init(const char* rml_path)
+{
+    if (!g_rml.active || !g_rml.context)
+    {
+        BS_LOG_ERROR("bs_rml_hud_init: RmlUi is not initialized.");
+        return FALSE;
+    }
+    if (!rml_path) return FALSE;
+    if (g_hud_doc) { BS_LOG_WARN("bs_rml_hud_init called twice; ignoring."); return TRUE; }
+
+    Rml::DataModelConstructor c = g_rml.context->CreateDataModel("hud");
+    if (!c)
+    {
+        BS_LOG_ERROR("bs_rml_hud_init: CreateDataModel('hud') failed.");
+        return FALSE;
+    }
+
+    // Register the repeated row structs and their arrays before binding them.
+    if (auto h = c.RegisterStruct<BsRmlHudLog>())
+        h.RegisterMember("text", &BsRmlHudLog::text);
+    c.RegisterArray<Rml::Vector<BsRmlHudLog>>();
+
+    if (auto h = c.RegisterStruct<BsRmlHudDisc>())
+    {
+        h.RegisterMember("text",  &BsRmlHudDisc::text);
+        h.RegisterMember("color", &BsRmlHudDisc::color);
+    }
+    c.RegisterArray<Rml::Vector<BsRmlHudDisc>>();
+
+    if (auto h = c.RegisterStruct<BsRmlHudWeapon>())
+    {
+        h.RegisterMember("text",     &BsRmlHudWeapon::text);
+        h.RegisterMember("glyph",    &BsRmlHudWeapon::glyph);
+        h.RegisterMember("action",   &BsRmlHudWeapon::action);
+        h.RegisterMember("drop",     &BsRmlHudWeapon::drop);
+        h.RegisterMember("selected", &BsRmlHudWeapon::selected);
+        h.RegisterMember("empty",    &BsRmlHudWeapon::empty);
+    }
+    c.RegisterArray<Rml::Vector<BsRmlHudWeapon>>();
+
+    // Scalar bindings.
+    c.Bind("nav_visible",  &g_hud_model.nav_visible);
+    c.Bind("nav_sector",   &g_hud_model.nav_sector);
+    c.Bind("nav_system",   &g_hud_model.nav_system);
+    c.Bind("nav_distance", &g_hud_model.nav_distance);
+    c.Bind("nav_zone",     &g_hud_model.nav_zone);
+
+    c.Bind("ship_visible", &g_hud_model.ship_visible);
+    c.Bind("ship_speed",   &g_hud_model.ship_speed);
+
+    c.Bind("time_visible", &g_hud_model.time_visible);
+    c.Bind("time_date",    &g_hud_model.time_date);
+    c.Bind("time_tier",    &g_hud_model.time_tier);
+
+    c.Bind("enc_visible",  &g_hud_model.enc_visible);
+    c.Bind("enc_name",     &g_hud_model.enc_name);
+    c.Bind("enc_distance", &g_hud_model.enc_distance);
+    c.Bind("enc_faction",  &g_hud_model.enc_faction);
+    c.Bind("enc_desc",     &g_hud_model.enc_desc);
+
+    c.Bind("log_visible",  &g_hud_model.log_visible);
+    c.Bind("log_alpha",    &g_hud_model.log_alpha);
+    c.Bind("log",          &g_hud_model.log);
+
+    c.Bind("disc_visible",     &g_hud_model.disc_visible);
+    c.Bind("disc_count_label", &g_hud_model.disc_count_label);
+    c.Bind("disc",             &g_hud_model.disc);
+
+    c.Bind("fleet_visible",      &g_hud_model.fleet_visible);
+    c.Bind("fleet_name",         &g_hud_model.fleet_name);
+    c.Bind("fleet_faction",      &g_hud_model.fleet_faction);
+    c.Bind("fleet_speed",        &g_hud_model.fleet_speed);
+    c.Bind("fleet_heading",      &g_hud_model.fleet_heading);
+    c.Bind("fleet_health",       &g_hud_model.fleet_health);
+    c.Bind("fleet_weapon",       &g_hud_model.fleet_weapon);
+    c.Bind("fleet_mode_label",   &g_hud_model.fleet_mode_label);
+    c.Bind("fleet_mode_enabled", &g_hud_model.fleet_mode_enabled);
+
+    c.Bind("jump_visible", &g_hud_model.jump_visible);
+
+    c.Bind("debug_visible", &g_hud_model.debug_visible);
+    c.Bind("debug_text",    &g_hud_model.debug_text);
+
+    c.Bind("tip_visible", &g_hud_model.tip_visible);
+    c.Bind("tip_left",    &g_hud_model.tip_left);
+    c.Bind("tip_top",     &g_hud_model.tip_top);
+    c.Bind("tip_text",    &g_hud_model.tip_text);
+
+    c.Bind("inspector_btn_visible", &g_hud_model.inspector_btn_visible);
+    c.Bind("inspector_visible",     &g_hud_model.inspector_visible);
+    c.Bind("insp_ship_name",        &g_hud_model.insp_ship_name);
+    c.Bind("arsenal_inv",           &g_hud_model.arsenal_inv);
+    c.Bind("arsenal_def",           &g_hud_model.arsenal_def);
+    c.Bind("arsenal_hp",            &g_hud_model.arsenal_hp);
+
+    c.Bind("ui_kit", &g_hud_model.ui_kit);
+
+    c.Bind("station_menu_visible",      &g_hud_model.station_menu_visible);
+    c.Bind("station_menu_left",         &g_hud_model.station_menu_left);
+    c.Bind("station_menu_top",          &g_hud_model.station_menu_top);
+    c.Bind("station_inspector_visible", &g_hud_model.station_inspector_visible);
+    c.Bind("station_insp_title",        &g_hud_model.station_insp_title);
+    c.Bind("station_insp_show_dock",      &g_hud_model.station_insp_show_dock);
+    c.Bind("station_insp_show_market",    &g_hud_model.station_insp_show_market);
+    c.Bind("station_insp_show_contracts", &g_hud_model.station_insp_show_contracts);
+    c.Bind("station_insp_tab2_visible",   &g_hud_model.station_insp_tab2_visible);
+    c.Bind("station_insp_dock",           &g_hud_model.station_insp_dock);
+    c.Bind("station_insp_market",         &g_hud_model.station_insp_market);
+    c.Bind("station_insp_contracts",      &g_hud_model.station_insp_contracts);
+
+    // Click actions from the encounter buttons / discoveries close box enqueue a short string that
+    // the game drains with bs_rml_hud_poll_action. The engine never mutates game state directly.
+    c.BindEventCallback("hud_action",
+        [](Rml::DataModelHandle /*handle*/, Rml::Event& /*event*/, const Rml::VariantList& args)
+        {
+            if (!args.empty())
+            {
+                Rml::String a = args[0].Get<Rml::String>();
+                if (!a.empty()) g_hud_actions.push_back(a);
+            }
+        });
+
+    g_hud_handle = c.GetModelHandle();
+
+    g_hud_doc = g_rml.context->LoadDocument(rml_path);
+    if (!g_hud_doc)
+    {
+        BS_LOG_ERROR("bs_rml_hud_init: failed to load HUD document '%s'.", rml_path);
+        return FALSE;
+    }
+    g_hud_doc->Show();
+
+    BS_LOG_INFO("bs_rml_hud_init: HUD document '%s' loaded and shown.", rml_path);
+    return TRUE;
+}
+
+void bs_rml_hud_shutdown(void)
+{
+    if (g_rml.context)
+    {
+        if (g_hud_doc) g_rml.context->UnloadDocument(g_hud_doc);
+        g_rml.context->RemoveDataModel("hud");
+    }
+    g_hud_doc = nullptr;
+    g_hud_handle = Rml::DataModelHandle();
+    g_hud_actions.clear();
+    g_hud_model = BsRmlHudModel();
+}
+
+void bs_rml_hud_update(const bs_rml_hud_state* s)
+{
+    if (!g_rml.active || !s || !g_hud_handle) return;
+
+    g_hud_model.nav_visible = s->nav_visible ? true : false;
+    bs_rml_assign(g_hud_model.nav_sector,   s->nav_sector,   sizeof(s->nav_sector));
+    bs_rml_assign(g_hud_model.nav_system,   s->nav_system,   sizeof(s->nav_system));
+    bs_rml_assign(g_hud_model.nav_distance, s->nav_distance, sizeof(s->nav_distance));
+    bs_rml_assign(g_hud_model.nav_zone,     s->nav_zone,     sizeof(s->nav_zone));
+
+    g_hud_model.ship_visible = s->ship_visible ? true : false;
+    bs_rml_assign(g_hud_model.ship_speed, s->ship_speed, sizeof(s->ship_speed));
+
+    g_hud_model.time_visible = s->time_visible ? true : false;
+    bs_rml_assign(g_hud_model.time_date, s->time_date, sizeof(s->time_date));
+    g_hud_model.time_tier = s->time_tier;
+
+    g_hud_model.enc_visible = s->enc_visible ? true : false;
+    bs_rml_assign(g_hud_model.enc_name,     s->enc_name,     sizeof(s->enc_name));
+    bs_rml_assign(g_hud_model.enc_distance, s->enc_distance, sizeof(s->enc_distance));
+    bs_rml_assign(g_hud_model.enc_faction,  s->enc_faction,  sizeof(s->enc_faction));
+    bs_rml_assign(g_hud_model.enc_desc,     s->enc_desc,     sizeof(s->enc_desc));
+
+    g_hud_model.log_visible = s->log_visible ? true : false;
+    g_hud_model.log_alpha   = s->log_alpha;
+    {
+        i32 n = s->log_count;
+        if (n < 0) n = 0;
+        if (n > BS_RML_LOG_MAX) n = BS_RML_LOG_MAX;
+        g_hud_model.log.resize((size_t)n);
+        for (i32 i = 0; i < n; ++i)
+            bs_rml_assign(g_hud_model.log[(size_t)i].text, s->log[i].text, sizeof(s->log[i].text));
+    }
+
+    g_hud_model.disc_visible = s->disc_visible ? true : false;
+    bs_rml_assign(g_hud_model.disc_count_label, s->disc_count_label, sizeof(s->disc_count_label));
+    {
+        i32 n = s->disc_count;
+        if (n < 0) n = 0;
+        if (n > BS_RML_DISC_MAX) n = BS_RML_DISC_MAX;
+        g_hud_model.disc.resize((size_t)n);
+        for (i32 i = 0; i < n; ++i)
+        {
+            bs_rml_assign(g_hud_model.disc[(size_t)i].text,  s->disc[i].text,  sizeof(s->disc[i].text));
+            bs_rml_assign(g_hud_model.disc[(size_t)i].color, s->disc[i].color, sizeof(s->disc[i].color));
+        }
+    }
+
+    g_hud_model.fleet_visible = s->fleet_visible ? true : false;
+    bs_rml_assign(g_hud_model.fleet_name,    s->fleet_name,    sizeof(s->fleet_name));
+    bs_rml_assign(g_hud_model.fleet_faction, s->fleet_faction, sizeof(s->fleet_faction));
+    bs_rml_assign(g_hud_model.fleet_speed,   s->fleet_speed,   sizeof(s->fleet_speed));
+    bs_rml_assign(g_hud_model.fleet_heading, s->fleet_heading, sizeof(s->fleet_heading));
+    bs_rml_assign(g_hud_model.fleet_health,  s->fleet_health,  sizeof(s->fleet_health));
+    bs_rml_assign(g_hud_model.fleet_mode_label, s->fleet_mode_label, sizeof(s->fleet_mode_label));
+    g_hud_model.fleet_mode_enabled = s->fleet_mode_enabled ? true : false;
+    {
+        i32 n = s->fleet_weapon_count;
+        if (n < 0) n = 0;
+        if (n > BS_RML_WEAPON_MAX) n = BS_RML_WEAPON_MAX;
+        g_hud_model.fleet_weapon.resize((size_t)n);
+        for (i32 i = 0; i < n; ++i)
+        {
+            bs_rml_assign(g_hud_model.fleet_weapon[(size_t)i].text, s->fleet_weapon[i].text,
+                          sizeof(s->fleet_weapon[i].text));
+            bs_rml_assign(g_hud_model.fleet_weapon[(size_t)i].action, s->fleet_weapon[i].action,
+                          sizeof(s->fleet_weapon[i].action));
+            bs_rml_assign(g_hud_model.fleet_weapon[(size_t)i].drop, s->fleet_weapon[i].drop,
+                          sizeof(s->fleet_weapon[i].drop));
+            g_hud_model.fleet_weapon[(size_t)i].selected = s->fleet_weapon[i].selected ? true : false;
+            g_hud_model.fleet_weapon[(size_t)i].empty    = s->fleet_weapon[i].empty ? true : false;
+        }
+    }
+
+    g_hud_model.jump_visible = s->jump_visible ? true : false;
+
+    g_hud_model.debug_visible = s->debug_visible ? true : false;
+    bs_rml_assign(g_hud_model.debug_text, s->debug_text, sizeof(s->debug_text));
+
+    g_hud_model.tip_visible = s->tip_visible ? true : false;
+    bs_rml_assign(g_hud_model.tip_left, s->tip_left, sizeof(s->tip_left));
+    bs_rml_assign(g_hud_model.tip_top,  s->tip_top,  sizeof(s->tip_top));
+    bs_rml_assign(g_hud_model.tip_text, s->tip_text, sizeof(s->tip_text));
+
+    g_hud_model.inspector_btn_visible = s->inspector_btn_visible ? true : false;
+    g_hud_model.inspector_visible     = s->inspector_visible ? true : false;
+    bs_rml_assign(g_hud_model.insp_ship_name, s->insp_ship_name, sizeof(s->insp_ship_name));
+    {
+        i32 n = s->arsenal_inv_count;
+        if (n < 0) n = 0;
+        if (n > BS_RML_WEAPON_MAX) n = BS_RML_WEAPON_MAX;
+        g_hud_model.arsenal_inv.resize((size_t)n);
+        for (i32 i = 0; i < n; ++i)
+        {
+            bs_rml_assign(g_hud_model.arsenal_inv[(size_t)i].text, s->arsenal_inv[i].text,
+                          sizeof(s->arsenal_inv[i].text));
+            bs_rml_assign(g_hud_model.arsenal_inv[(size_t)i].glyph, s->arsenal_inv[i].glyph,
+                          sizeof(s->arsenal_inv[i].glyph));
+            bs_rml_assign(g_hud_model.arsenal_inv[(size_t)i].action, s->arsenal_inv[i].action,
+                          sizeof(s->arsenal_inv[i].action));
+            bs_rml_assign(g_hud_model.arsenal_inv[(size_t)i].drop, s->arsenal_inv[i].drop,
+                          sizeof(s->arsenal_inv[i].drop));
+            g_hud_model.arsenal_inv[(size_t)i].selected = s->arsenal_inv[i].selected ? true : false;
+            g_hud_model.arsenal_inv[(size_t)i].empty    = s->arsenal_inv[i].empty ? true : false;
+        }
+    }
+    {
+        i32 n = s->arsenal_def_count;
+        if (n < 0) n = 0;
+        if (n > BS_RML_WEAPON_MAX) n = BS_RML_WEAPON_MAX;
+        g_hud_model.arsenal_def.resize((size_t)n);
+        for (i32 i = 0; i < n; ++i)
+        {
+            bs_rml_assign(g_hud_model.arsenal_def[(size_t)i].text, s->arsenal_def[i].text,
+                          sizeof(s->arsenal_def[i].text));
+            bs_rml_assign(g_hud_model.arsenal_def[(size_t)i].glyph, s->arsenal_def[i].glyph,
+                          sizeof(s->arsenal_def[i].glyph));
+            bs_rml_assign(g_hud_model.arsenal_def[(size_t)i].action, s->arsenal_def[i].action,
+                          sizeof(s->arsenal_def[i].action));
+            bs_rml_assign(g_hud_model.arsenal_def[(size_t)i].drop, s->arsenal_def[i].drop,
+                          sizeof(s->arsenal_def[i].drop));
+            g_hud_model.arsenal_def[(size_t)i].selected = s->arsenal_def[i].selected ? true : false;
+            g_hud_model.arsenal_def[(size_t)i].empty    = s->arsenal_def[i].empty ? true : false;
+        }
+    }
+    {
+        i32 n = s->arsenal_hp_count;
+        if (n < 0) n = 0;
+        if (n > BS_RML_WEAPON_MAX) n = BS_RML_WEAPON_MAX;
+        g_hud_model.arsenal_hp.resize((size_t)n);
+        for (i32 i = 0; i < n; ++i)
+        {
+            bs_rml_assign(g_hud_model.arsenal_hp[(size_t)i].text, s->arsenal_hp[i].text,
+                          sizeof(s->arsenal_hp[i].text));
+            bs_rml_assign(g_hud_model.arsenal_hp[(size_t)i].glyph, s->arsenal_hp[i].glyph,
+                          sizeof(s->arsenal_hp[i].glyph));
+            bs_rml_assign(g_hud_model.arsenal_hp[(size_t)i].action, s->arsenal_hp[i].action,
+                          sizeof(s->arsenal_hp[i].action));
+            bs_rml_assign(g_hud_model.arsenal_hp[(size_t)i].drop, s->arsenal_hp[i].drop,
+                          sizeof(s->arsenal_hp[i].drop));
+            g_hud_model.arsenal_hp[(size_t)i].selected = s->arsenal_hp[i].selected ? true : false;
+            g_hud_model.arsenal_hp[(size_t)i].empty    = s->arsenal_hp[i].empty ? true : false;
+        }
+    }
+
+    g_hud_model.ui_kit = s->ui_kit;
+
+    g_hud_model.station_menu_visible = s->station_menu_visible ? true : false;
+    bs_rml_assign(g_hud_model.station_menu_left, s->station_menu_left, sizeof(s->station_menu_left));
+    bs_rml_assign(g_hud_model.station_menu_top,  s->station_menu_top,  sizeof(s->station_menu_top));
+    g_hud_model.station_inspector_visible = s->station_inspector_visible ? true : false;
+    bs_rml_assign(g_hud_model.station_insp_title, s->station_insp_title, sizeof(s->station_insp_title));
+    g_hud_model.station_insp_show_dock      = s->station_insp_show_dock ? true : false;
+    g_hud_model.station_insp_show_market    = s->station_insp_show_market ? true : false;
+    g_hud_model.station_insp_show_contracts = s->station_insp_show_contracts ? true : false;
+    g_hud_model.station_insp_tab2_visible   = s->station_insp_tab2_visible ? true : false;
+    bs_rml_assign(g_hud_model.station_insp_dock,      s->station_insp_dock,      sizeof(s->station_insp_dock));
+    bs_rml_assign(g_hud_model.station_insp_market,    s->station_insp_market,    sizeof(s->station_insp_market));
+    bs_rml_assign(g_hud_model.station_insp_contracts, s->station_insp_contracts, sizeof(s->station_insp_contracts));
+
+    // Poll-style HUD: everything may change each frame, so just dirty the whole model.
+    g_hud_handle.DirtyAllVariables();
+}
+
+i32 bs_rml_hud_poll_action(char* out_action, i32 cap)
+{
+    if (!out_action || cap <= 0) return 0;
+    out_action[0] = '\0';
+    if (g_hud_actions.empty()) return 0;
+
+    Rml::String a = g_hud_actions.front();
+    g_hud_actions.erase(g_hud_actions.begin());
+
+    i32 len = (i32)a.size();
+    if (len > cap - 1) len = cap - 1;
+    for (i32 i = 0; i < len; ++i) out_action[i] = a[(size_t)i];
+    out_action[len] = '\0';
+    return len;
+}
+
+// Internal: render the RmlUi context into the currently open swapchain render pass. Called from
+// sdlgpu_backend_end_frame BEFORE the ImGui editor overlay, so game UI sits beneath it. RmlUi may
+// leave a tight scissor set from its last draw, so reset it to the full framebuffer afterwards to
+// avoid clipping the ImGui overlay that records into the same pass.
+static void bs_rml_render_internal(void)
+{
+    if (!g_rml.active || !g_rml.context || !g_sdl.pass) return;
+
+    g_rml.context->Render();
+
+    SDL_Rect full;
+    full.x = 0; full.y = 0;
+    full.w = (int)g_sdl.swap_width;
+    full.h = (int)g_sdl.swap_height;
+    SDL_SetGPUScissor(g_sdl.pass, &full);
 }

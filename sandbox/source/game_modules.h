@@ -21,18 +21,34 @@
 // galaxy_map_sync_entities / galaxy_map_update_orbits).
 #include "sim/galaxy_map.h"
 
+// Galaxy history subsystem: civilizations, territory, chronicle + Legends browser.
+#include "sim/galaxy_history.h"
+
+// New Game setup screen + generation progress panel (Phase A).
+#include "ui/new_game_setup.h"
+
 // Combat-arena subsystem: projectiles, combat entities, encounter detection (combat_arena_init /
 // combat_arena_update_encounter / combat_arena_update_enemy_orbit / combat_arena_sync_entities /
 // combat_arena_update_projectiles).
 #include "sim/combat_arena.h"
+
+// General Ship AI: live NPC agents (ai_ships_init / ai_ships_update / ai_ships_register_combat).
+#include "sim/ai_ship.h"
+
+// Cross-system Ship AI: macro travelers on the galaxy lane graph (ship_missions_seed /
+// ship_missions_update / ship_mission_position).
+#include "sim/ship_mission.h"
+
+// Minimal interstellar economy: room-based stations + deterministic baseline markets with a
+// bounded trader-dock delta pool (station_rooms / station_market_get / station_market_apply).
+#include "sim/station_market.h"
 
 // Rolling HUD action log data (action_log_push). The presentation panel is ui/action_log_panel.h.
 #include "sim/action_log.h"
 
 // Celestial depth parallax (celestial_center_render / celestial_shared_anchor).
 #include "sim/celestial_parallax.h"
-// Cosmetic zoom-space compression + the screen<->true-world<->render-space transforms
-// (compression_factor, cosmetic_compress, game_compression_factor, view_arena_weight,
+// The screen<->true-world<->render-space transforms (view_arena_weight,
 // game_screen_to_true_world/render, game_camera_center, and the HierPos2 variants).
 #include "core/view_transform.h"
 // DEBUG HierPos2 cell-grid overlay (draw_hierpos_cell_grid).
@@ -47,8 +63,6 @@
 #include "sim/editor_tools.h"
 // System/galaxy-map fleet emblems (draw_fleet_emblems).
 #include "render/ship_render.h"
-// Arena-side HUD overlays (draw_encounter_panel / draw_nav_ship_hud).
-#include "render/game_hud.h"
 // In-world gameplay overlays (draw_gameplay_overlays).
 #include "render/gameplay_overlays.h"
 // Galaxy-map look render pass (draw_galaxy_map_look).
@@ -67,5 +81,5 @@
 #include "sim/camera_controller.h"
 // Editor / debug UI panels (build_editor_panel / build_transform_panel / draw_time_control_panel / build_profiler_panel).
 #include "ui/editor_ui.h"
-// Action Log HUD panel (build_action_log_panel) — presentation half of sim/action_log.
-#include "ui/action_log_panel.h"
+// Single-ship discovery system (discovery_update / discovery_log_push).
+#include "sim/discovery.h"

@@ -34,6 +34,8 @@ b8 ship_load(Ship* out_ship, const char* path) {
     out_ship->collider_count = 0;
     out_ship->size_local   = Vec2{ 0.0f, 0.0f };
     out_ship->weapon_fire_offset_local = Vec2{ 0.0f, 0.0f };
+    out_ship->sensors      = SensorSuite{};
+    out_ship->point_defense = DefenseLaser{};
     ship_visual_clear(&out_ship->visual);
     char line[512];
     while (fgets(line, sizeof(line), f)) {

@@ -219,14 +219,14 @@ void draw_fleet_emblems(game_state* s)
     renderer_set_draw_alpha(1.0f);
 }
 
-// Draw a ship's collider polygon outline (world-space corners scaled by `comp`) on LAYER_DEBUG.
-void draw_collider_outline(const Ship* ship, bs_color color, f32 thickness, f32 comp) {
+// Draw a ship's collider polygon outline (world-space corners) on LAYER_DEBUG.
+void draw_collider_outline(const Ship* ship, bs_color color, f32 thickness) {
     if (!ship || ship->collider_count <= 0) return;
     Vec2 k[SHIP_MAX_COLLIDER_VERTS];
     ship_collider_corners(ship, k);  // corners are ship-origin-relative (world units)
     for (i32 i = 0; i < ship->collider_count; ++i) {
-        Vec2 a = vec2_add(ship->render_pos, vec2_scale(k[i], comp));
-        Vec2 b = vec2_add(ship->render_pos, vec2_scale(k[(i + 1) % ship->collider_count], comp));
+        Vec2 a = vec2_add(ship->render_pos, k[i]);
+        Vec2 b = vec2_add(ship->render_pos, k[(i + 1) % ship->collider_count]);
         renderer_draw_line(a, b, thickness, color, LAYER_DEBUG);
     }
 }

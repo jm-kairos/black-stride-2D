@@ -73,6 +73,27 @@ void bs_ui_end_panel(void)
     ImGui::End();
 }
 
+b8 bs_ui_begin_window(const char* title, b8* p_open)
+{
+    // Free-floating window: movable + resizable + native title bar with a close [X]. Only hint the
+    // initial size/position (FirstUseEver) so ImGui then hands control to the user. Marshal our b8*
+    // through a native bool for ImGui's close-button contract.
+    ImGui::SetNextWindowSize(ImVec2(360.0f, 460.0f), ImGuiCond_FirstUseEver);
+    const ImGuiViewport* vp = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x * 0.5f,
+                                   vp->WorkPos.y + vp->WorkSize.y * 0.5f),
+                            ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.5f));
+    bool open = p_open ? (*p_open != 0) : true;
+    b8 visible = ImGui::Begin(title, p_open ? &open : NULL, ImGuiWindowFlags_None) ? TRUE : FALSE;
+    if (p_open) *p_open = open ? TRUE : FALSE;
+    return visible;
+}
+
+void bs_ui_end_window(void)
+{
+    ImGui::End();
+}
+
 void bs_ui_text(const char* text)
 {
     ImGui::TextUnformatted(text ? text : "");
@@ -185,29 +206,6 @@ void bs_ui_color_button(f32 r, f32 g, f32 b, f32 a, f32 size)
                      | ImGuiColorEditFlags_NoTooltip
                      | ImGuiColorEditFlags_NoDragDrop,
                        ImVec2(size, size));
-}
-
-void bs_ui_tooltip_at(f32 screen_x, f32 screen_y, const char* text)
-{
-    if (!text || !text[0]) return;
-    ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar
-                           | ImGuiWindowFlags_NoMove
-                           | ImGuiWindowFlags_NoResize
-                           | ImGuiWindowFlags_NoCollapse
-                           | ImGuiWindowFlags_AlwaysAutoResize
-                           | ImGuiWindowFlags_NoSavedSettings
-                           | ImGuiWindowFlags_NoNav
-                           | ImGuiWindowFlags_NoFocusOnAppearing
-                           | ImGuiWindowFlags_NoBringToFrontOnFocus;
-    ImGui::SetNextWindowPos(ImVec2(screen_x + 16.0f, screen_y + 16.0f), ImGuiCond_Always);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 4.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f, 6.0f));
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.05f, 0.05f, 0.08f, 0.85f));
-    ImGui::Begin("##tooltip", NULL, flags);
-    ImGui::TextUnformatted(text);
-    ImGui::End();
-    ImGui::PopStyleColor();
-    ImGui::PopStyleVar(2);
 }
 
 void bs_ui_label_at(const char* id, f32 screen_x, f32 screen_y, f32 font_scale, bs_color tint, const char* text)

@@ -27,4 +27,5 @@ void action_log_push(game_state* s, const char* fmt, ...) {
     s->action_log.inactivity_timer = 0.0f;
 }
 
-// build_action_log_panel (the presentation half) now lives in ui/action_log_panel.cpp.
+// The action log is rendered by the RmlUi HUD (sandbox game_push_hud); the old bs_ui
+// presentation panel (build_action_log_panel) has been retired.

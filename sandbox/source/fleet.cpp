@@ -162,8 +162,21 @@ void FleetShip::clear_attack_target() {
 // =====================================================================================
 // Fleet
 // =====================================================================================
-Fleet::Fleet() : m_count(0), m_piloted_idx(0) {}
-void Fleet::init() { m_count = 0; m_piloted_idx = 0; }
+Fleet::Fleet() : m_count(0), m_spawned(0), m_piloted_idx(0) {}
+void Fleet::init() { m_count = 0; m_spawned = 0; m_piloted_idx = 0; }
+void Fleet::set_count(i32 n) {
+    if (n < 1) n = 1;
+    if (n > m_spawned) n = m_spawned;
+    if (n < 1) n = 1;
+    // Clear state on slots that are about to become hidden so a later restore is clean.
+    for (i32 i = n; i < m_count; ++i) {
+        m_ships[i].selected = FALSE;
+        m_ships[i].clear_move_target();
+        m_ships[i].clear_attack_target();
+    }
+    m_count = n;
+    if (m_piloted_idx >= m_count) m_piloted_idx = 0;
+}
 void Fleet::set_piloted(i32 idx) {
     if (idx < 0 || idx >= m_count) idx = 0;
     m_piloted_idx = idx;
@@ -185,10 +198,13 @@ FleetShip& Fleet::add() {
     fs.selected = FALSE;
     fs.has_move_target = FALSE;
     fs.has_attack_target = FALSE;
+    fs.jump_capable = TRUE;
+    fs.jump_radius = JUMP_RADIUS_DEFAULT;
     fs.move_target = HierPos2{};
     fs.attack_target = nullptr;
     fs.flight.velocity = Vec2{ 0.0f, 0.0f };
     fs.flight.angular_velocity = 0.0f;
+    if (m_count > m_spawned) m_spawned = m_count;
     return fs;
 }
 ShipFlight* Fleet::flight_for_ship(const Ship* ship) {
@@ -287,6 +303,38 @@ void Fleet::order_attack(Ship* target) {
         m_ships[i].has_attack_target = TRUE;
         m_ships[i].attack_target = target;
     }
+}
+// =====================================================================================
+b8 Fleet::selected_min_jump(i32* out_center_idx, f32* out_radius) const {
+    i32 center = -1;
+    f32 min_r = 0.0f;
+    for (i32 i = 0; i < m_count; ++i) {
+        if (!m_ships[i].selected || !m_ships[i].jump_capable) continue;
+        if (center < 0 || m_ships[i].jump_radius < min_r) {
+            center = i;
+            min_r = m_ships[i].jump_radius;
+        }
+    }
+    if (center < 0) return FALSE;
+    if (out_center_idx) *out_center_idx = center;
+    if (out_radius)     *out_radius = min_r;
+    return TRUE;
+}
+void Fleet::jump_selected(i32 center_idx, HierPos2 point) {
+    if (center_idx < 0 || center_idx >= m_count) return;
+    HierPos2 center_origin = m_ships[center_idx].ship.origin;
+    for (i32 i = 0; i < m_count; ++i) {
+        if (!m_ships[i].selected || !m_ships[i].jump_capable) continue;
+        // Preserve each ship's offset from the center ship so the formation lands intact.
+        Vec2 offset = hierpos_diff(&m_ships[i].ship.origin, &center_origin);
+        m_ships[i].ship.origin = hierpos_add_vec2(&point, offset);
+        m_ships[i].clear_move_target();
+        m_ships[i].clear_attack_target();
+        m_ships[i].flight.velocity = Vec2{ 0.0f, 0.0f };
+    }
+}
+void Fleet::set_all_jump_radius(f32 radius) {
+    for (i32 i = 0; i < m_count; ++i) m_ships[i].jump_radius = radius;
 }
 void Fleet::clear_order(i32 idx) {
     if (idx < 0 || idx >= m_count) return;

@@ -28,6 +28,7 @@ b8 renderer_backend_create(ERendererBackend type, renderer_backend* out_backend)
             out_backend->draw_starfield = sdlgpu_backend_draw_starfield;
             out_backend->draw_sunburst = sdlgpu_backend_draw_sunburst;
             out_backend->draw_starsurface = sdlgpu_backend_draw_starsurface;
+            out_backend->draw_planetsurface = sdlgpu_backend_draw_planetsurface;
             out_backend->draw_heat_map = sdlgpu_backend_draw_heat_map;
             out_backend->draw_nebula = sdlgpu_backend_draw_nebula;
             out_backend->set_lights = sdlgpu_backend_set_lights;
@@ -66,6 +67,7 @@ void renderer_backend_destroy(renderer_backend* backend)
     backend->draw_starfield = 0;
     backend->draw_sunburst = 0;
     backend->draw_starsurface = 0;
+    backend->draw_planetsurface = 0;
     backend->draw_heat_map = 0;
     backend->draw_nebula = 0;
     backend->set_lights = 0;

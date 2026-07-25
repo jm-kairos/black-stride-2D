@@ -96,7 +96,9 @@ bs__api__ void renderer_draw_sunburst(const bs_sunburst_params* params);
 // Draw a real-time procedural star surface (animated photosphere + corona) using a custom
 // GPU pipeline. The backend queues the parameters and renders during end_frame.
 bs__api__ void renderer_draw_starsurface(const bs_starsurface_params* params);
-
+// Draw a real-time procedural planet (impostor sphere: star-lit, per-type surface, clouds,
+// atmosphere, rings) using a custom GPU pipeline. Queued and rendered during end_frame.
+bs__api__ void renderer_draw_planetsurface(const bs_planetsurface_params* params);
 // Draw a procedural radiation heat map using a custom GPU pipeline.
 // The backend queues the parameters and renders as a fullscreen alpha-blended overlay during end_frame.
 bs__api__ void renderer_draw_heat_map(const bs_heat_map_params* params);

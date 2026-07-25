@@ -1,0 +1,167 @@
+<rml>
+<head>
+    <link type="text/rcss" href="theme.rcss"/>
+    <link type="text/rcss" href="hud.rcss"/>
+    <title>Black Stride HUD</title>
+</head>
+<body data-model="hud" data-class-kit-neon="ui_kit == 0" data-class-kit-clean="ui_kit == 1" data-class-kit-minimal="ui_kit == 2">
+
+    <!-- Navigation readout (top-right) -->
+    <div id="nav" class="hud-panel" data-if="nav_visible">
+        <div class="hud-row"><span class="hud-key">SECTOR</span><span class="hud-val">{{ nav_sector }}</span></div>
+        <div class="hud-row"><span class="hud-key">SYS</span><span class="hud-val">{{ nav_system }}</span></div>
+        <div class="hud-row"><span class="hud-key">DIST</span><span class="hud-val">{{ nav_distance }}</span></div>
+        <div class="hud-row"><span class="hud-key">ZONE</span><span class="hud-val">{{ nav_zone }}</span></div>
+    </div>
+
+    <!-- Ship readout (top-right, below nav) -->
+    <div id="ship" class="hud-panel" data-if="ship_visible">
+        <div class="hud-row"><span class="hud-key">SPEED</span><span class="hud-val">{{ ship_speed }}</span></div>
+    </div>
+
+    <!-- Time control (top-center): pause + speed tiers on the shared in-game calendar -->
+    <div id="time" class="hud-panel" data-if="time_visible">
+        <div class="time-date">{{ time_date }}</div>
+        <div class="time-btns">
+            <span class="time-btn" data-class-active="time_tier == 0" data-event-click="hud_action('time:0')">Pause</span>
+            <span class="time-btn" data-class-active="time_tier == 1" data-event-click="hud_action('time:1')">1x</span>
+            <span class="time-btn" data-class-active="time_tier == 2" data-event-click="hud_action('time:3')">3x</span>
+            <span class="time-btn" data-class-active="time_tier == 3" data-event-click="hud_action('time:5')">5x</span>
+            <span class="time-btn" data-class-active="time_tier == 4" data-event-click="hud_action('time:10')">10x</span>
+        </div>
+    </div>
+
+    <!-- Action log (bottom-right; whole-panel opacity driven by the game's idle fade) -->
+    <div id="log" class="hud-panel" data-if="log_visible" data-style-opacity="log_alpha">
+        <div class="log-line" data-for="line : log">{{ line.text }}</div>
+    </div>
+
+    <!-- Discoveries browser (floating) -->
+    <div id="discoveries" class="panel" data-if="disc_visible">
+        <div class="win-title">DISCOVERIES<span class="win-close" data-event-click="hud_action('close_discoveries')">X</span></div>
+        <div class="win-count">{{ disc_count_label }}</div>
+        <div class="rule"></div>
+        <div class="disc-list">
+            <div class="disc-line" data-for="d : disc" data-style-color="d.color">{{ d.text }}</div>
+        </div>
+    </div>
+
+    <!-- Fleet ship panel (top-right, piloted-ship combat readout + controls) -->
+    <div id="fleet" class="hud-panel" data-if="fleet_visible">
+        <div class="fleet-name">{{ fleet_name }}</div>
+        <div class="fleet-faction">{{ fleet_faction }}</div>
+        <div class="rule"></div>
+        <div class="fleet-stat">Speed: {{ fleet_speed }}</div>
+        <div class="fleet-stat">Heading: {{ fleet_heading }}</div>
+        <div class="fleet-stat">Health: {{ fleet_health }}</div>
+        <div class="rule"></div>
+        <div class="fleet-hdr">WEAPONS</div>
+        <div class="weapon-row" data-for="w : fleet_weapon"
+             data-class-selected="w.selected" data-class-empty="w.empty"
+             data-event-click="hud_action(w.action)">{{ w.text }}</div>
+        <div class="rule"></div>
+        <div class="fleet-mode" data-class-disabled="!fleet_mode_enabled"
+             data-event-click="hud_action('fleet_mode')">{{ fleet_mode_label }}</div>
+    </div>
+
+    <!-- Encounter modal (centered) -->
+    <div id="encounter" class="panel accent" data-if="enc_visible">
+        <div class="modal-title">{{ enc_name }}</div>
+        <div class="rule"></div>
+        <div class="modal-row">Distance: {{ enc_distance }}</div>
+        <div class="modal-row">Faction: {{ enc_faction }}</div>
+        <div class="modal-desc">{{ enc_desc }}</div>
+        <div class="rule"></div>
+        <div class="modal-btn" data-event-click="hud_action('engage')">Engage</div>
+        <div class="modal-btn" data-event-click="hud_action('avoid')">Avoid</div>
+        <div class="modal-btn" data-event-click="hud_action('hail')">Hail</div>
+        <div class="modal-btn" data-event-click="hud_action('observe')">Observe</div>
+    </div>
+
+    <!-- FTL jump-mode banner (bottom-center) -->
+    <div id="jumpmode" data-if="jump_visible">Currently in Jump Mode</div>
+
+    <!-- HierPos2 debug readout (top-left, dev toggle from the COORDINATE SPACE editor panel) -->
+    <div id="debug" data-if="debug_visible">{{ debug_text }}</div>
+
+    <!-- Flagship inspector launcher (bottom-center) -->
+    <div id="inspector-btn" data-if="inspector_btn_visible"
+         data-event-click="hud_action('toggle_inspector')">Inspector</div>
+
+    <!-- Flagship inspector window (persistent; single, extensible Arsenal tab). Covers the whole
+         game window (fullscreen); the title bar is a plain header, no longer draggable. -->
+    <div id="inspector" class="panel" data-if="inspector_visible">
+        <div class="win-title">FLAGSHIP INSPECTOR<span class="win-close" data-event-click="hud_action('close_inspector')">Collapse</span></div>
+        <div class="insp-tabs">
+            <div class="insp-tab active">Arsenal</div>
+        </div>
+        <div class="rule"></div>
+        <!-- Two-pane loadout editor: left = UNMOUNTED inventory (draggable sources; also an unmount
+             drop target), right = the ship's hardpoints as discrete, type-agnostic drop targets that
+             double as drag sources for rearranging -->
+        <div class="arsenal-cols">
+            <div class="arsenal-left">
+                <div class="insp-section-hdr">Offensive weapons</div>
+                <div class="weapon-queue inv-drop" data-event-dragdrop="hud_action('stash')">
+                    <div class="weapon-symbol" data-for="w : arsenal_inv"
+                         data-class-empty="w.empty"
+                         data-event-dragstart="hud_action(w.action)">
+                        <span class="weapon-glyph">{{ w.glyph }}</span>
+                        <div class="weapon-tip">{{ w.text }}</div>
+                    </div>
+                </div>
+                <div class="insp-section-hdr">Defensive weapons</div>
+                <div class="weapon-queue inv-drop" data-event-dragdrop="hud_action('defstash')">
+                    <div class="weapon-symbol def" data-for="w : arsenal_def"
+                         data-class-selected="w.selected" data-class-empty="w.empty"
+                         data-event-dragstart="hud_action('defdrag')">
+                        <span class="weapon-glyph">{{ w.glyph }}</span>
+                        <div class="weapon-tip">{{ w.text }}</div>
+                    </div>
+                </div>
+            </div>
+            <div class="arsenal-right">
+                <div class="ship-preview">
+                    <div class="ship-preview-label">Ship hardpoints — drop a weapon to mount it</div>
+                    <div class="hardpoints">
+                        <div class="weapon-slot" data-for="w : arsenal_hp"
+                             data-class-selected="w.selected" data-class-empty="w.empty"
+                             data-event-dragstart="hud_action(w.action)"
+                             data-event-dragdrop="hud_action(w.drop)">
+                            <span class="weapon-glyph">{{ w.glyph }}</span>
+                            <div class="weapon-tip">{{ w.text }}</div>
+                        </div>
+                    </div>
+                    <div class="ship-preview-name">{{ insp_ship_name }}</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Galaxy-map hover tooltip (cursor-anchored; position set game-side via tip_left/tip_top) -->
+    <div id="tooltip" class="panel" data-if="tip_visible"
+         data-style-left="tip_left" data-style-top="tip_top">{{ tip_text }}</div>
+
+    <!-- Space-station right-click context menu (cursor-anchored via station_menu_left/top) -->
+    <div id="station-menu" class="panel" data-if="station_menu_visible"
+         data-style-left="station_menu_left" data-style-top="station_menu_top">
+        <div class="station-menu-item" data-event-click="hud_action('station_inspect')">Inspect</div>
+    </div>
+
+    <!-- Space-station inspector window (fullscreen; Collapse to dismiss) -->
+    <div id="station-inspector" class="panel" data-if="station_inspector_visible">
+        <div class="win-title">{{ station_insp_title }}<span class="win-close" data-event-click="hud_action('close_station_inspector')">Collapse</span></div>
+        <div class="insp-tabs">
+            <div class="insp-tab" data-class-active="station_insp_show_dock" data-event-click="hud_action('station_tab:0')">Dock</div>
+            <div class="insp-tab" data-class-active="station_insp_show_market" data-event-click="hud_action('station_tab:1')">Market</div>
+            <div class="insp-tab" data-if="station_insp_tab2_visible" data-class-active="station_insp_show_contracts" data-event-click="hud_action('station_tab:2')">Contracts</div>
+        </div>
+        <div class="rule"></div>
+        <div class="station-insp-line" data-if="station_insp_show_dock">{{ station_insp_dock }}</div>
+        <div class="station-insp-line" data-if="station_insp_show_market">{{ station_insp_market }}</div>
+        <div class="station-insp-line" data-if="station_insp_show_contracts">{{ station_insp_contracts }}</div>
+    </div>
+
+</body>
+</rml>
+

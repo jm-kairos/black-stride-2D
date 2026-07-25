@@ -56,9 +56,90 @@ enum VesselFaction {
 
 };
 
+// =====================================================================================
+// Feature B: unified faction id. A ship's faction is a single i16:
+//   >= 0            -> galaxy civilization index (s->galaxy.civs[faction_id]); the empire it serves.
+//   FACTION_PLAYER  -> the player's own fleet (never hostile to itself).
+//   FACTION_PIRATE  -> lawless raiders / unclaimed wild space (always hostile).
+//   FACTION_NONE    -> unset.
+// Runs in parallel with the legacy VesselFaction enum (visuals / friendly-fire) during the
+// migration; stance/diplomacy is resolved from faction_id via galaxy_history_faction_is_hostile.
+// =====================================================================================
+#define FACTION_NONE   ((i16)-1)
+#define FACTION_PLAYER ((i16)-2)
+#define FACTION_PIRATE ((i16)-3)
+
 const char* vessel_faction_name(VesselFaction f);
 
 const char* vessel_faction_desc(VesselFaction f);
+
+// =====================================================================================
+
+// Sensor suite (per-ship). Three concentric detection layers of decreasing radius. Potency
+
+// attributes (accuracy / detection strength) are yet-to-be-defined and will extend this struct.
+
+//   Layer 2 (outer) : long-range anomaly detection (e.g. radiation spikes from fired weapons).
+
+//   Layer 1 (mid)   : identification range (a contact stops fading and can be identified).
+
+//   Layer 0 (inner) : comfort zone; no gameplay effect yet.
+
+// =====================================================================================
+
+#define SENSOR_LAYER0_RADIUS 15000.0f
+
+#define SENSOR_LAYER1_RADIUS 30000.0f
+
+#define SENSOR_LAYER2_RADIUS 50000.0f
+
+struct SensorSuite {
+
+    f32 layer0_radius = SENSOR_LAYER0_RADIUS; // comfort zone
+
+    f32 layer1_radius = SENSOR_LAYER1_RADIUS; // identification range
+
+    f32 layer2_radius = SENSOR_LAYER2_RADIUS; // long-range detection
+
+};
+
+// =====================================================================================
+
+// Defense laser (per-ship point-defense). Auto-engages the nearest HOSTILE PROJECTILE that
+
+// enters the ship's engagement range, snapping a beam onto it and tracking its exact position
+
+// for a short dwell while applying damage-per-second. Destroys the projectile when its HP is
+
+// depleted; survivors are released and may be re-engaged. `range` defaults to 0, which the
+
+// point-defense subsystem resolves to the ship's LIVE Layer 1 sensor radius each frame -- so
+
+// changing Layer 1 changes the laser range with it.
+
+// =====================================================================================
+
+struct DefenseLaser {
+
+    b8  enabled            = TRUE;    // auto-fire when a target is in range
+
+    f32 range              = 0.0f;    // 0 => use sensors.layer1_radius (live-coupled)
+
+    f32 damage_per_second  = 12.0f;   // damage applied to a locked projectile's HP
+
+    f32 dwell_time         = 0.15f;   // seconds the beam tracks one target before releasing
+
+    f32 retarget_cooldown  = 0.08f;   // brief gap before acquiring the next target
+
+    // ---- runtime state (not tuning) ----------------------------------------------------
+
+    i32 target_index       = -1;      // locked projectile pool slot; -1 = none
+
+    f32 dwell_remaining    = 0.0f;
+
+    f32 cooldown_remaining = 0.0f;
+
+};
 
 struct Ship {
 
@@ -70,7 +151,9 @@ struct Ship {
 
     f32           angle;          // world heading in radians (CCW)
 
-    VesselFaction faction;        // who this ship belongs to
+    VesselFaction faction;        // who this ship belongs to (legacy enum; visuals / friendly-fire)
+
+    i16           faction_id;     // Feature B: unified faction (civ index / FACTION_PLAYER / FACTION_PIRATE)
 
     const char*   vessel_name;    // display name shown in encounters / HUD
 
@@ -96,6 +179,15 @@ struct Ship {
 
     i32            active_weapon_idx; // -1 = none selected
 
+    // ---- Unmounted weapon stash (loadout inventory) ------------------------------------
+    // Weapons the ship owns but has NOT mounted on a hardpoint. The flagship-inspector Arsenal
+    // editor drags weapons between this stash (the left "available" list) and weapons[] (the
+    // hardpoints on the right). weapons[] and weapon_stash[] never hold the same pointer.
+
+    struct Weapon* weapon_stash[SHIP_MAX_WEAPONS];
+
+    i32            weapon_stash_count; // valid entries in weapon_stash[0..count-1]
+
     // ---- Weapon hardpoint (ship-local, default center; authored in .ship later) ------
 
     bs_math::Vec2  weapon_fire_offset_local;
@@ -107,6 +199,20 @@ struct Ship {
     // ---- Radiation heat-source emission (0..1) ---------------------------------------
 
     f32           radiation_emission;
+
+    // ---- Sensor suite (three concentric detection layers) ----------------------------
+
+    SensorSuite   sensors;
+
+    // ---- Point-defense laser (auto-targets incoming hostile projectiles) -------------
+
+    DefenseLaser  point_defense;
+
+    // Which hardpoint (weapons[] index) the point-defense currently occupies in the Arsenal
+    // loadout editor, or -1 when it is unmounted (sitting in the defensive inventory). Only the
+    // flagship's inspector manages this; other ships leave the point-defense always-on (slot -1).
+
+    i32           point_defense_slot = -1;
 
 };
 

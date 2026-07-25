@@ -39,24 +39,23 @@ public:
     // Index of the fleet member the player is manually piloting (default 0 = flagship).
     // -1 means "none", but the rest of the code clamps it to the flagship.
     i32 piloted_index() const { return m_piloted_idx; }
+    // HUD accessors: the FLEET SHIP readout + FTL jump banner are now RmlUi documents driven from
+    // game_update (game_push_hud); these expose the private state the snapshot / handlers need.
+    b8 jump_mode_active() const { return m_jump_mode; }
+    // "Pilot unit" / "Auto-pilot / RTS" toggle, invoked when the HUD button is clicked. No-op
+    // while a recenter glide is already in flight (the button renders dimmed in that state).
+    void hud_toggle_pilot_mode();
 private:
     game_state* m_state;
     i32 m_hovered_ship_idx;    // fleet member under the cursor (or -1)
     i32 m_hovered_enemy_idx;   // combat entity index under the cursor (or -1)
     f32 m_dash_angle;
+    b8  m_jump_mode;           // TRUE while awaiting an FTL jump destination (toggled by J)
     RtsSelectionBox m_box;
     // Manual piloting: which fleet member is currently attached to the camera.
     i32 m_piloted_idx;
-    // Camera transition from free-camera to piloted ship.
-    b8 m_camera_transitioning;
-    f32 m_camera_transition_t;
-    bs_math::HierPos2 m_camera_transition_from;
     // Free camera movement state.
     bs_math::Vec2 m_free_camera_vel;
-    bs_math::HierPos2 m_free_camera_drag_target;
-    bs_math::Vec2 m_free_camera_drag_start_mouse;
-    bs_math::HierPos2 m_free_camera_drag_start_pos;
-    b8 m_free_camera_dragging;
     // Helpers.
     void clear_fleet_orders();
     void draw_dashed_circle(bs_math::Vec2 center, f32 radius, u32 segments,

@@ -2,8 +2,11 @@
 #include "game.h"
 #include "render/debug_overlay.h" // g_debug_cell_grid
 #include "sim/action_log.h"       // action_log_push
+#include "sim/combat_arena.h"     // combat_arena_rebuild_player_entities (multi-ship toggle)
 #include "coord_diag.h"        // coord_diag_is_enabled / set_enabled / last_violations
 #include <renderer/bs_ui.h>    // bs_ui_* panel/widget API
+#include "core/view_transform.h" // g_zoom_out_speed_gain
+#include "render/sensor_overlay.h" // g_sensor_fade_distance
 #include <stdio.h>             // snprintf
 #include <math.h>             // sqrt
 
@@ -61,6 +64,37 @@ void build_editor_panel(game_state* s) {
         bool edit_on = s->editor.edit_mode_active ? true : false;
         bs_ui_checkbox("Edit mode active", &edit_on);
         s->editor.edit_mode_active = edit_on ? TRUE : FALSE;
+        // ---- SHIP COMMAND --------------------------------------------------------------------
+        // Default: the player commands only the flagship. Enabling this reveals the escort wing
+        // (already spawned) and lets the RTS layer box-select / order the whole fleet.
+        bs_ui_separator();
+        const f32 SC[4] = { 0.55f, 0.95f, 0.65f, 1.0f };
+        bs_ui_text_colored(SC[0], SC[1], SC[2], SC[3], "SHIP COMMAND");
+        bool multi_on = s->editor.multi_ship_enabled ? true : false;
+        bs_ui_checkbox("Multiple ship command", &multi_on);
+        if ((multi_on ? TRUE : FALSE) != s->editor.multi_ship_enabled) {
+            s->editor.multi_ship_enabled = multi_on ? TRUE : FALSE;
+            i32 n = s->editor.multi_ship_enabled ? s->fleet_state.fleet.spawned_count() : 1;
+            s->fleet_state.fleet.set_count(n);
+            s->fleet_state.fleet.clear_selection();
+            s->fleet_state.fleet.set_piloted(0);
+            combat_arena_rebuild_player_entities(s);
+            action_log_push(s, s->editor.multi_ship_enabled
+                            ? "Multiple ship command ENABLED"
+                            : "Single ship command (flagship only)");
+        }
+        // ---- DISCOVERIES ---------------------------------------------------------------------
+        bool draw_sensor_on = s->editor.draw_discovery_sensor_range ? true : false;
+        bs_ui_checkbox("Draw discovery sensor range", &draw_sensor_on);
+        s->editor.draw_discovery_sensor_range = draw_sensor_on ? TRUE : FALSE;
+        bs_ui_text("Discovery uses Sensor Layer 1 (identification range).");
+        if (bs_ui_button("Open Discoveries", TRUE)) s->show_discoveries = !s->show_discoveries;
+        // ---- UI FONT KIT ---------------------------------------------------------------------
+        // Swaps the in-game RmlUi typefaces live (0 = Neon, 1 = Clean, 2 = Minimal) to compare kits.
+        bs_ui_separator();
+        const f32 UK[4] = { 0.70f, 0.80f, 0.95f, 1.0f };
+        bs_ui_text_colored(UK[0], UK[1], UK[2], UK[3], "UI FONT KIT");
+        bs_ui_combo("Font kit", &s->ui_font_kit, "Neon\0Clean\0Minimal\0");
         // ---- LIGHTS ----------------------------------------------------------------------------
         // Spawn / remove / edit the editor-managed 2D point lights.
         bs_ui_separator();
@@ -155,6 +189,12 @@ void build_editor_panel(game_state* s) {
         s->render.bg_layer0_enabled = layer0_on ? TRUE : FALSE;
         s->render.bg_nebula_enabled = nebula_on ? TRUE : FALSE;
         s->render.bg_layer1_enabled = layer1_on ? TRUE : FALSE;
+        bool planets_on     = s->render.celestial_draw_planets ? true : false;
+        bool testsprites_on = s->render.celestial_draw_testsprites ? true : false;
+        bs_ui_checkbox("Planets + orbit rings", &planets_on);
+        bs_ui_checkbox("Test sprites (demo dots)", &testsprites_on);
+        s->render.celestial_draw_planets     = planets_on ? TRUE : FALSE;
+        s->render.celestial_draw_testsprites = testsprites_on ? TRUE : FALSE;
         s->render.bg_layer2_enabled = layer2_on ? TRUE : FALSE;
         // Depth-based parallax for the celestial backdrop (stars/planets/orbits/test sprites).
         // depth 0 = foreground (1:1 with camera), depth 1 = fully locked to the shared anchor. Keep
@@ -245,6 +285,9 @@ void build_editor_panel(game_state* s) {
             bs_ui_slider_float("Star light radius",    &s->render.star_light_radius_mul, 0.1f, 4.0f);
         }
         s->render.star_fx.build_ui();
+        // Opens the free-floating per-type Planet Editor window (movable/resizable).
+        if (bs_ui_button("Planet Properties...", TRUE))
+            s->render.star_fx.show_planet_editor = s->render.star_fx.show_planet_editor ? FALSE : TRUE;
         // ---- TRAVEL ----------------------------------------------------------------------------
         bs_ui_separator();
         const f32 TR[4] = { 0.55f, 0.95f, 0.75f, 1.0f };
@@ -315,9 +358,63 @@ void build_editor_panel(game_state* s) {
         if (s->galaxy.map_draw_sensor_range) {
             bs_ui_slider_float("Sensor range (units)", &s->galaxy.map_sensor_range, 10000.0f, 500000.0f);
         }
+        // Natural AI trader speeds (u/s of simulation; 1 real second == 1 in-game hour at 1x).
+        bs_ui_slider_float("AI in-system speed (u/s)", &s->galaxy.ai_speed_in_system, 1000.0f, 1000000.0f);
+        bs_ui_slider_float("AI jump speed (u/s)",      &s->galaxy.ai_speed_jump,      10000.0f, 100000000.0f);
         bs_ui_checkbox("Draw system lanes", &s->galaxy.map_draw_lanes);
+        // Progressive zoom-out speed: higher = each wheel notch covers more zoom the further out you are.
+        bs_ui_slider_float("Zoom-out speed gain", &g_zoom_out_speed_gain, 0.0f, 5.0f);
         bool show_mb = (bool)s->show_metaball_ui;
         bs_ui_slider_float("Ship sensor range (units)", &s->ship_sensor_range, 0.0f, 100000.0f);
+        // ---- Three-layer sensor overlay radii (Layer 0 < Layer 1 < Layer 2, press V) --------
+        {
+            SensorSuite& sen = s->player_ship().sensors;
+            const f32 GAP = 1000.0f; // enforced minimum separation between adjacent layers
+            f32 l0 = sen.layer0_radius, l1 = sen.layer1_radius, l2 = sen.layer2_radius;
+            b8 changed = FALSE;
+            // Dynamic bounds keep l0 < l1 < l2: each slider is clamped by its neighbours.
+            changed |= bs_ui_slider_float("Sensor Layer 0 radius", &l0, 1000.0f,   l1 - GAP);
+            changed |= bs_ui_slider_float("Sensor Layer 1 radius", &l1, l0 + GAP,  l2 - GAP);
+            changed |= bs_ui_slider_float("Sensor Layer 2 falloff", &l2, l1 + GAP,  200000.0f);
+            if (changed) {
+                // Re-assert ordering in case a typed value momentarily broke the bounds.
+                if (l1 < l0 + GAP) l1 = l0 + GAP;
+                if (l2 < l1 + GAP) l2 = l1 + GAP;
+                sen.layer0_radius = l0; sen.layer1_radius = l1; sen.layer2_radius = l2;
+                // Propagate to the whole fleet so fleet-wide detection matches the drawn rings.
+                Fleet& fleet = s->fleet_state.fleet;
+                for (i32 i = 0; i < fleet.count(); ++i) fleet.at(i).ship.sensors = sen;
+            }
+        }
+        // Unbounded Layer 2: distance (world units) at which distant contact blips fade to the dim floor.
+        bs_ui_slider_float("Sensor blip fade distance", &g_sensor_fade_distance, 50000.0f, 2000000.0f);
+        // ---- Point-defense laser (auto-intercepts incoming hostile projectiles) --------------
+        // Range is intentionally NOT a slider: it is live-coupled to each ship's Layer 1 radius
+        // (DefenseLaser.range stays 0), so the Layer 1 slider above drives the laser range too.
+        {
+            DefenseLaser& pd = s->player_ship().point_defense;
+            bool pd_on = (bool)pd.enabled;
+            bs_ui_checkbox("Defense laser enabled", &pd_on);
+            b8 changed = (pd.enabled != (b8)pd_on);
+            pd.enabled = (b8)pd_on;
+            changed |= bs_ui_slider_float("Laser DPS",            &pd.damage_per_second, 0.0f, 100.0f);
+            changed |= bs_ui_slider_float("Laser dwell (s)",      &pd.dwell_time,        0.02f, 1.0f);
+            changed |= bs_ui_slider_float("Laser retarget cd (s)", &pd.retarget_cooldown, 0.0f, 0.5f);
+            char rng[64];
+            snprintf(rng, sizeof(rng), "Laser range = Layer 1 (%.0f)", s->player_ship().sensors.layer1_radius);
+            bs_ui_text(rng);
+            if (changed) {
+                // Propagate tuning (not runtime state) to the whole fleet; range stays 0/live-coupled.
+                Fleet& fleet = s->fleet_state.fleet;
+                for (i32 i = 0; i < fleet.count(); ++i) {
+                    DefenseLaser& d = fleet.at(i).ship.point_defense;
+                    d.enabled           = pd.enabled;
+                    d.damage_per_second = pd.damage_per_second;
+                    d.dwell_time        = pd.dwell_time;
+                    d.retarget_cooldown = pd.retarget_cooldown;
+                }
+            }
+        }
         bs_ui_text("Out-of-sensor FX:");
         bs_ui_slider_float("FX sweep speed", &s->out_sensor_fx.sweep_speed, 0.0f, 5.0f);
         bs_ui_slider_float("FX intensity", &s->out_sensor_fx.intensity, 0.0f, 2.0f);
@@ -353,6 +450,28 @@ void build_editor_panel(game_state* s) {
             bs_ui_text(timing_buf);
         }
         // Zoom is controlled by mouse wheel (scroller) in system view.
+    }
+    // ---- FLEET JUMP ----------------------------------------------------------------------
+    bs_ui_separator();
+    const f32 FJ[4] = { 0.55f, 0.95f, 0.65f, 1.0f };
+    bs_ui_text_colored(FJ[0], FJ[1], FJ[2], FJ[3], "FLEET JUMP");
+    {
+        Fleet& fleet = s->fleet_state.fleet;
+        f32 jr = (fleet.count() > 0) ? fleet.at(0).jump_radius : JUMP_RADIUS_DEFAULT;
+        f32 jr_prev = jr;
+        bs_ui_slider_float("Jump radius (units)", &jr, 10000.0f, 500000000.0f);
+        if (jr != jr_prev) fleet.set_all_jump_radius(jr);
+        i32 center_idx = -1;
+        f32 min_r = 0.0f;
+        char buf[96];
+        if (fleet.selected_min_jump(&center_idx, &min_r)) {
+            snprintf(buf, sizeof(buf), "Selected: %d   Min radius: %.0f",
+                     fleet.selected_count(), min_r);
+        } else {
+            snprintf(buf, sizeof(buf), "Selected: %d   (no jump-capable ship)",
+                     fleet.selected_count());
+        }
+        bs_ui_text(buf);
     }
     bs_ui_end_panel();
 }
@@ -408,18 +527,6 @@ void build_transform_panel(game_state* s) {
             s->editor.edit_selection = EditSelection{ EDIT_NONE, -1 };
             s->editor.edit_drag.active = FALSE;
             s->editor.edit_drag.mode   = EDIT_DRAG_NONE;
-        }
-    }
-    bs_ui_end_panel();
-}
-
-// ---- Time-control panel: top-center toggle for pause/resume (visible in ALL modes) ----
-void draw_time_control_panel(game_state* s) {
-    if (bs_ui_begin_panel("TIME", BS_UI_ANCHOR_TOP_CENTER, 12.0f, BsUiType::BS_UI_TYPE_GAME)) {
-        const char* label = (s->time_scale == 0.0f) ? "Resume" : "Pause";
-        if (bs_ui_button(label, TRUE)) {
-            s->time_scale = (s->time_scale == 0.0f) ? 1.0f : 0.0f;
-            action_log_push(s, (s->time_scale == 0.0f) ? "Game paused." : "Game resumed.");
         }
     }
     bs_ui_end_panel();

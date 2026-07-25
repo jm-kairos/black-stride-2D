@@ -1,0 +1,123 @@
+/* =====================================================================================
+   theme.rcss — shared base stylesheet for the Black Stride in-game UI (RmlUi / RCSS).
+
+   RCSS is a CSS-2.1 subset. Fonts are registered at startup by bs_rml_load_fonts(
+   "assets/ui/fonts") — every .ttf in that folder — and referenced by the family name the
+   font advertises. Three shippable OFL font "kits" are bundled and switched live via a
+   <body> class (see the FONT KITS section at the foot of this file and the editor panel):
+     kit-neon    Orbitron / Rajdhani / Share Tech Mono   (bold sci-fi console)
+     kit-clean   Chakra Petch / Inter / JetBrains Mono   (default; readable techy)
+     kit-minimal Exo 2 / Exo 2 / JetBrains Mono           (understated)
+
+   Depth is built from borders + rounded corners + text glow only: the SDLGPU render backend
+   has no shader/filter layer, so gradients and box-shadow are intentionally unused.
+
+   Colour palette (the game's cool "deep space" look):
+     ink #06080e   slate #0e1622   cyan #33ccff   text #d8e6f2   muted #8fa6bd   amber #ffb648
+   ===================================================================================== */
+
+body {
+    font-family: "Inter";       /* base = Clean kit; kit-neon / kit-minimal override below */
+    font-weight: 500;            /* medium — crisper, less spindly than book weight */
+    font-style: normal;
+    font-size: 15px;
+    color: #dce8f4;
+}
+
+/* --- Card / panel container ------------------------------------------------------- */
+/* Clean glass: a soft vertical sheen (a straight vertex-colour gradient — the only gradient the
+   SDLGPU backend can draw) over a translucent base, finished with a lighter top border that reads
+   as a bevel highlight. No box-shadow/blur is available, so depth comes from the gradient + edge. */
+.panel {
+    background-color: #12203099;                             /* translucent fallback if the GPU backdrop is unavailable */
+    decorator: backdrop(#12203098) border-box;               /* real frosted-glass blur of the scene behind the panel */
+    border: 1px #47688c;                                     /* cool steel edge */
+    border-top-color: #7ba2c6;                              /* brighter top = glass bevel highlight */
+    border-radius: 8px;
+    padding: 12px 14px;
+}
+
+.panel.accent {
+    border: 1px #5fd0ff;           /* softer cyan accent frame (was a hard 2px) */
+    border-top-color: #8fe0ff;
+}
+
+/* --- Headings --------------------------------------------------------------------- */
+.title {
+    font-size: 13px;
+    font-weight: 700;              /* bold display weight — reads crisp, not thin */
+    color: #6fd3ff;
+    margin-bottom: 8px;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    font-effect: glow(1px 3px #5fd0ff55);   /* restrained cyan halo */
+}
+
+/* --- Stat rows: a label on the left, a monospaced value on the right --------------- */
+.row {
+    display: block;
+    margin-bottom: 4px;
+}
+
+.label {
+    color: #8fa6bd;
+    margin-right: 6px;
+}
+
+.value {
+    color: #d8e6f2;
+}
+
+.value.amber {
+    color: #ffb648;
+}
+
+/* --- Thin divider ----------------------------------------------------------------- */
+.rule {
+    display: block;
+    height: 1px;
+    background-color: #2f4a63ff;
+    margin: 8px 0;
+}
+
+/* =====================================================================================
+   FONT KITS — live-switchable typeface sets. The game sets ui_kit (0/1/2), which toggles a
+   <body> class (kit-neon / kit-clean / kit-minimal) via data-binding in hud.rml. Three type
+   roles: body text (inherited from <body>), the DISPLAY group (headings/titles/tabs) and the
+   MONO group (numeric & technical readouts). The base rules default to the CLEAN kit, so
+   kit-clean needs no overrides here; only kit-neon and kit-minimal restate the three roles.
+   ===================================================================================== */
+
+/* Base = Clean kit: Chakra Petch (display) / Inter (body, on <body>) / JetBrains Mono (mono). */
+.title, .win-title, .modal-title, .insp-tab, .insp-section-hdr, .fleet-name, #jumpmode {
+    font-family: "Chakra Petch";
+}
+.value, .hud-val, .weapon-row, .arsenal-row, .ship-preview-name, #debug, #tooltip {
+    font-family: "JetBrains Mono";
+}
+
+/* Kit 0 — Neon: Orbitron (display) / Rajdhani (body) / Share Tech Mono (mono). */
+body.kit-neon { font-family: "Rajdhani"; }
+body.kit-neon .title, body.kit-neon .win-title, body.kit-neon .modal-title,
+body.kit-neon .insp-tab, body.kit-neon .insp-section-hdr, body.kit-neon .fleet-name,
+body.kit-neon #jumpmode {
+    font-family: "Orbitron";
+}
+body.kit-neon .value, body.kit-neon .hud-val, body.kit-neon .weapon-row,
+body.kit-neon .arsenal-row, body.kit-neon .ship-preview-name,
+body.kit-neon #debug, body.kit-neon #tooltip {
+    font-family: "Share Tech Mono";
+}
+
+/* Kit 2 — Minimal: Exo 2 (display + body) / JetBrains Mono (mono). */
+body.kit-minimal { font-family: "Exo 2"; }
+body.kit-minimal .title, body.kit-minimal .win-title, body.kit-minimal .modal-title,
+body.kit-minimal .insp-tab, body.kit-minimal .insp-section-hdr, body.kit-minimal .fleet-name,
+body.kit-minimal #jumpmode {
+    font-family: "Exo 2";
+}
+body.kit-minimal .value, body.kit-minimal .hud-val, body.kit-minimal .weapon-row,
+body.kit-minimal .arsenal-row, body.kit-minimal .ship-preview-name,
+body.kit-minimal #debug, body.kit-minimal #tooltip {
+    font-family: "JetBrains Mono";
+}

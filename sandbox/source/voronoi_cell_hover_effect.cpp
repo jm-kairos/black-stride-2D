@@ -1,7 +1,7 @@
 #include "voronoi_cell_hover_effect.h"
 #include "voronoi_galaxy.h"
 #include "game.h"
-#include "core/view_transform.h" // compression_factor, cosmetic_compress
+#include "core/view_transform.h"
 #include <math/bs_hierpos.h>
 #include <math/math_utils.h>
 #include <renderer/renderer.h>
@@ -9,8 +9,6 @@ using namespace bs_math;
 // =====================================================================================
 // Internal helpers
 // =====================================================================================
-// compression_factor / cosmetic_compress now come from core/view_transform.h (via game.h),
-// sharing the same smoothstep curve as stars/ships (this file previously used a linear ramp).
 static i32 pick_voronoi_cell(const Vec2& mouse_rel,
                              const HierPos2* camera_hierpos,
                              f32 zoom,
@@ -18,13 +16,10 @@ static i32 pick_voronoi_cell(const Vec2& mouse_rel,
                              const StarSystem* systems)
 {
     if (!v || v->num_sites <= 0) return -1;
-    f32 comp = compression_factor(zoom);
-    Vec2 mouse_uncompressed = (comp > 0.0f)
-        ? vec2_scale(mouse_rel, 1.0f / comp)
-        : mouse_rel;
+    (void)zoom;
     HierPos2 mouse_abs = hierpos_add_f64(camera_hierpos,
-                                          (f64)mouse_uncompressed.x,
-                                          (f64)mouse_uncompressed.y,
+                                          (f64)mouse_rel.x,
+                                          (f64)mouse_rel.y,
                                           BS_HIERPOS_CELL_SIZE);
     f64 px, py;
     hierpos_to_f64(&mouse_abs, BS_HIERPOS_CELL_SIZE, &px, &py);
@@ -86,8 +81,6 @@ void draw_cell_hover_effect(const GalaxyVoronoi* v,
         HierPos2 h1 = hierpos_from_vec2(vb, BS_HIERPOS_CELL_SIZE);
         Vec2 p0 = hierpos_diff(&h0, &s->camera_state.camera_hierpos, BS_HIERPOS_CELL_SIZE);
         Vec2 p1 = hierpos_diff(&h1, &s->camera_state.camera_hierpos, BS_HIERPOS_CELL_SIZE);
-        p0 = cosmetic_compress(p0, s->camera_state.camera.zoom);
-        p1 = cosmetic_compress(p1, s->camera_state.camera.zoom);
         renderer_draw_line(p0, p1, thickness, col, VORONOI_LAYER_CELESTIAL);
     }
 }

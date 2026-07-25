@@ -29,6 +29,7 @@ void       sdlgpu_backend_draw_mapped_sprite(struct renderer_backend* backend, c
 void       sdlgpu_backend_draw_starfield(struct renderer_backend* backend, const bs_starfield_params* params);
 void       sdlgpu_backend_draw_sunburst(struct renderer_backend* backend, const bs_sunburst_params* params);
 void       sdlgpu_backend_draw_starsurface(struct renderer_backend* backend, const bs_starsurface_params* params);
+void       sdlgpu_backend_draw_planetsurface(struct renderer_backend* backend, const bs_planetsurface_params* params);
 void       sdlgpu_backend_draw_heat_map(struct renderer_backend* backend, const bs_heat_map_params* params);
 void       sdlgpu_backend_draw_nebula(struct renderer_backend* backend, const bs_nebula_params* params);
 

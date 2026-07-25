@@ -5,29 +5,21 @@
 struct game_state;
 
 // =====================================================================================
-// View transform: cosmetic zoom-space compression + the screen<->true-world<->render-space
-// conversions every galaxy-view system shares.
+// View transform: the screen<->true-world<->render-space conversions every galaxy-view
+// system shares.
 //
-// At extreme zoom-out the renderer shrinks camera-relative positions toward the origin so
-// distant systems still fit on screen (and f32 offsets stay small). Stars, ships, voronoi
-// cells and hover FX ALL must use the SAME curve, or they drift apart sub-pixel as the view
-// approaches the galaxy floor. This module owns the single definition every layer calls, plus
-// the paired forward/inverse transforms between screen pixels, true (simulation) world space,
-// and compressed render space.
+// Positions render linearly at every zoom (render = world - camera_hierpos, then camera2d
+// applies zoom). Stars, ships, voronoi cells and hover FX all go through the SAME transforms
+// here so they never drift apart. This module owns the paired forward/inverse transforms
+// between screen pixels, true (simulation) world space, and render space.
 // =====================================================================================
 
 // ---- Pure functions of zoom only (no game_state; trivially unit-testable) --------------
 
-// 1.0 at normal zoom, smoothstepping down toward 0.15 at the galaxy-floor zoom.
-f32 compression_factor(f32 zoom);
-
-// Compress a camera-relative position toward the origin. Purely cosmetic: true galaxy
-// positions are unchanged; only the on-screen offset is scaled by compression_factor(zoom).
-bs_math::Vec2 cosmetic_compress(bs_math::Vec2 pos, f32 zoom);
-
-// Public wrapper so other translation units (RTS controls) can query the compression factor
-// to scale free-camera pan speed by the on-screen scale (zoom*comp).
-f32 game_compression_factor(f32 zoom);
+// Progressive zoom-out speed gain: each wheel notch covers MORE zoom the further out the player
+// already is (0 = constant speed, higher = faster far-out zoom). This lets the wheel pull back far
+// enough to frame the whole galaxy disc. Editor-tunable (see the "Zoom-out speed gain" slider).
+extern f32 g_zoom_out_speed_gain;
 
 // Arena-look weight for the current zoom: 1.0 = full arena/gameplay look, 0.0 = full
 // galaxy-map look, smoothly cross-fading across the arena<->map zoom band. Render sites read
@@ -35,12 +27,11 @@ f32 game_compression_factor(f32 zoom);
 f32 view_arena_weight(f32 zoom);
 
 // ---- game_state-dependent transforms (screen <-> true world <-> render space) ----------
-// In the arena look these are near-identity; under the unified floating-origin path the
-// renderer draws entities at comp*(world - camera_hierpos), and these invert / apply that.
+// The renderer draws entities at (world - camera_hierpos); these invert / apply that.
 
 // Screen pixel -> true (simulation) world point currently under it.
 bs_math::Vec2 game_screen_to_true_world(const game_state* s, bs_math::Vec2 screen_px);
-// True world position -> compressed render-space position the renderer draws entities at.
+// True world position -> render-space position the renderer draws entities at.
 bs_math::Vec2 game_true_world_to_render(const game_state* s, bs_math::Vec2 world);
 // Absolute (true-world) point currently at the screen center.
 bs_math::Vec2 game_camera_center(const game_state* s);

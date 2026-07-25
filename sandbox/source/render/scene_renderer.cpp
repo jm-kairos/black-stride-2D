@@ -6,6 +6,7 @@
 #include "render/parallax_background.h" // draw_parallax_background
 #include "render/frame_lighting.h"      // submit_frame_lighting
 #include "render/ship_scene.h"          // draw_ship_scene
+#include "render/system_content_render.h" // per-system asteroids / resources / dust / stations
 #include "render/gameplay_overlays.h"   // draw_gameplay_overlays
 
 #include <renderer/renderer.h>          // renderer_set_camera
@@ -25,6 +26,16 @@ void render_scene(game_state* s, f32 dt) {
     // ---- Per-frame lighting assembly + submission -- render/frame_lighting.cpp.
     // Runs after the star position is set and before the lit sprite passes.
     submit_frame_lighting(s);
+
+    // ---- Per-system natural asteroids (every system) -- render/system_content_render.cpp.
+    draw_system_asteroids(s);
+
+    // ---- Per-system resource nodes (belt/mid zones) + ambient dust -- render/system_content_render.cpp.
+    draw_system_resources(s);
+    draw_system_decorations(s);
+
+    // ---- Per-system civilian stations (owned systems only) -- render/system_content_render.cpp.
+    draw_system_stations(s);
 
     // ---- Ship rendering -- render/ship_scene.cpp. Runs after the star position + lighting.
     draw_ship_scene(s);

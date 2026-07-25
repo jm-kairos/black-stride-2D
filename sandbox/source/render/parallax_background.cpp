@@ -1,7 +1,7 @@
 #include "render/parallax_background.h"
 
 #include "game.h"
-#include "core/view_transform.h"    // game_camera_center, compression_factor
+#include "core/view_transform.h"    // game_camera_center
 #include "sim/celestial_parallax.h" // celestial_center_render
 #include <renderer/renderer.h>
 #include <renderer/camera2d.h>
@@ -23,7 +23,7 @@ void draw_parallax_background(game_state* s, f32 dt) {
     // render-space offset from the camera center (already relative to camera_hierpos).
     if (s->galaxy.current_system >= 0 && s->galaxy.current_system < s->galaxy.system_count) {
         StarSystem& ss = s->galaxy.systems[s->galaxy.current_system];
-        Vec2 sys_pos = vec2_scale(celestial_center_render(s, &ss.galaxy_center, &s->celestial_anchor, s->render.depth_star), compression_factor(s->camera_state.camera.zoom));
+        Vec2 sys_pos = celestial_center_render(s, &ss.galaxy_center, &s->celestial_anchor, s->render.depth_star);
         s->star_pos = vec2_add(sys_pos, ss.star.position);
     } else {
         s->star_pos = bs_math::Vec2{0,0};

@@ -83,12 +83,7 @@ void draw_hierpos_cell_grid(const game_state* s) {
         }
     }
 
-    // HUD readout (screen-anchored, top-left). Watch local wrap +/-8192 while cell ticks.
-    char hud[160];
-    snprintf(hud, sizeof(hud),
-             "HIERPOS2 GRID\nflag cell=(%lld,%lld) local=(%.1f,%.1f)\ncam  cell=(%lld,%lld)",
-             (long long)fcx, (long long)fcy, flag.local.x, flag.local.y,
-             (long long)s->camera_state.camera_hierpos.cell.x, (long long)s->camera_state.camera_hierpos.cell.y);
-    text_draw(hud, 12.0f, 120.0f, 1.0f, bs_color{ 0.75f, 0.90f, 1.00f, 0.95f },
-              &s->camera_state.camera, s->fb_width, s->fb_height, LAYER_HUD_TEXT);
+    // The screen-anchored HierPos2 readout (flag/cam cell + local) is now an RmlUi HUD document
+    // (see #debug in hud.rml, filled by game_push_hud while g_debug_cell_grid is on). Only the
+    // world-anchored grid lines + per-cell labels above remain renderer-drawn.
 }

@@ -4,6 +4,7 @@
 #include "core/input.h"
 #include "core/event.h"
 #include "renderer/bs_imgui.h" // SDL-free ImGui facade: feed events to ImGui from the pump
+#include "renderer/bs_rml.h"   // SDL-free RmlUi facade: feed events to the in-game UI from the pump
 
 #include <SDL3/SDL.h>
 
@@ -99,6 +100,11 @@ b8 platform_pump_messages(PlatformState* plat_state)
         // so input consumed by a UI panel does not also drive the game. Passing &ev as void* keeps
         // this TU free of ImGui headers (the facade casts it back inside the backend TU).
         bs_imgui_process_event(&ev);
+
+        // Feed the same event to the in-game UI (RmlUi). This updates its hover/focus state and
+        // the bs_rml_wants_mouse/keyboard flags the game gates world input on. Same void* trick as
+        // above keeps this TU free of RmlUi headers.
+        bs_rml_process_event(&ev);
 
         switch (ev.type)
         {

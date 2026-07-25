@@ -16,6 +16,10 @@
 // render systems stay stable for the lifetime of the fleet.
 // =====================================================================================
 #define FLEET_MAX_SHIPS 8
+// Default FTL jump range (world units) for a jump-capable ship. Live-tunable via the editor's
+// FLEET JUMP slider (Fleet::set_all_jump_radius). ~= GALAXY_GRID_CELL (2.5e8) inter-system spacing so
+// one jump reaches a neighbouring star system (real inter-system travel).
+#define JUMP_RADIUS_DEFAULT 250000000.0f
 // Forward declaration: game_state is defined in game.h (autopilot needs projectiles +
 // combat entities for attack orders).
 struct game_state;
@@ -42,6 +46,8 @@ struct FleetShip {
     b8            selected;
     b8            has_move_target;   // TRUE when a move order is active
     b8            has_attack_target; // TRUE when an attack order is active
+    b8            jump_capable;      // TRUE when this ship can perform FTL jumps
+    f32           jump_radius;       // world-space FTL jump range (units)
     bs_math::HierPos2 move_target;   // world-space formation slot / destination
     Ship*         attack_target;     // validated against combat entities each frame
     // Integrate the rigid-body pose from the flight velocities. Mirrors the legacy
@@ -68,6 +74,12 @@ public:
     // Append a new (zero-initialized) ship slot and return it for the caller to populate.
     // Returns the flagship slot if the fleet is already full (never overflows).
     FleetShip& add();
+    // Number of ships ever spawned (high-water mark). set_count can restore up to this.
+    i32        spawned_count() const { return m_spawned; }
+    // Truncate / restore the ACTIVE ship count without destroying escort data beyond it.
+    // Clamps to [1, spawned_count()]; resets piloting to the flagship and clears selection
+    // on any hidden slots so single-ship mode behaves like only the flagship exists.
+    void       set_count(i32 n);
     // Map a Ship* (e.g. stored by a CombatEntity) back to its flight state. NULL if not ours.
     ShipFlight* flight_for_ship(const Ship* ship);
     // ---- Piloting --------------------------------------------------------------------
@@ -91,6 +103,17 @@ public:
     void order_move(bs_math::HierPos2 target);   // selected ships -> formation slots around target
     void order_attack(Ship* target);          // selected ships -> attack target
     void clear_order(i32 idx);                 // cancel a ship's order (e.g. when piloted)
+    // ---- FTL jump --------------------------------------------------------------------
+    // Among the selected, jump-capable ships, find the smallest jump radius and the index of
+    // the ship that owns it (the jump circle's center; ties resolve to the first selected).
+    // Returns FALSE when no selected ship is jump-capable. Outputs are untouched on FALSE.
+    b8   selected_min_jump(i32* out_center_idx, f32* out_radius) const;
+    // Teleport every selected, jump-capable ship to `point`, preserving each ship's offset
+    // from the center ship (formation preserved). Clears their orders and zeroes velocity so
+    // they do not drift after the jump.
+    void jump_selected(i32 center_idx, bs_math::HierPos2 point);
+    // Broadcast a jump radius to every ship (editor slider).
+    void set_all_jump_radius(f32 radius);
     // ---- Simulation ------------------------------------------------------------------
     // Run autopilot for every ordered ship except piloted_idx (-1 = none piloted).
     void update_autopilot(game_state* s, f32 dt, i32 piloted_idx);
@@ -100,5 +123,6 @@ public:
 private:
     FleetShip m_ships[FLEET_MAX_SHIPS];
     i32       m_count;
+    i32       m_spawned;   // high-water mark of ships ever added (escort data survives truncation)
     i32       m_piloted_idx;
 };

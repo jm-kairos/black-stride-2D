@@ -105,7 +105,9 @@ float4 main(PSInput input) : SV_Target0
     float3 corona_rgb = rim_col * emis;                       // premultiplied (rim colour)
 
     // --- Dark surround: OPAQUE BLACK that occludes the background out to `dark_radius`, then
-    //     fades back to the scene. Puts the star in a pocket of dark space (like the real Sun).
+    //     fades back to the scene BEYOND that radius. The whole interior (rr <= dark_radius) stays
+    //     fully opaque so the nebula never bleeds through near the star; only the outer edge
+    //     softens. Zoomed in, that outer edge is off-screen so the screen is solid black.
     //     Keyed to rr (radial) so the black region is a clean circle, not a square. ---
     float fade_band = max(dark_radius * 0.60, 0.5);
     float dark = 1.0 - smoothstep(dark_radius - fade_band, dark_radius, rr);

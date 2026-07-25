@@ -25,7 +25,12 @@ bs_math::HierPos2 celestial_shared_anchor(const game_state* s);
 
 // Camera-relative render offset of a system's center with depth parallax applied. Returns
 // (system_center - cam) - (shared_anchor - cam) * (depth * zoom_fade). The caller adds
-// element-local offsets (star/planet/orbit positions) and applies cosmetic zoom compression.
+// element-local offsets (star/planet/orbit positions).
 // Precision-safe far from the galaxy origin (integer cell differencing).
 bs_math::Vec2 celestial_center_render(const game_state* s, const bs_math::HierPos2* system_center,
                                       const bs_math::HierPos2* shared_anchor, f32 depth);
+
+// The zoom-driven parallax fade weight in [0,1] used inside celestial_center_render (0 = parallax
+// off, at/below bg_parallax_fade_zoom; 1 = full parallax). Returns 0 when parallax is disabled.
+// Exposed so camera code can cancel a followed body's parallax render shift (keep it screen-centered).
+f32 celestial_parallax_fade(const game_state* s);

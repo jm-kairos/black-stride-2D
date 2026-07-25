@@ -12,5 +12,5 @@ struct bs_color;
 // by map weight as the view crosses from arena to galaxy map.
 void draw_fleet_emblems(game_state* s);
 
-// Draw a ship's collider polygon outline (world-space corners scaled by `comp`) on LAYER_DEBUG.
-void draw_collider_outline(const Ship* ship, bs_color color, f32 thickness, f32 comp = 1.0f);
+// Draw a ship's collider polygon outline (world-space corners) on LAYER_DEBUG.
+void draw_collider_outline(const Ship* ship, bs_color color, f32 thickness);

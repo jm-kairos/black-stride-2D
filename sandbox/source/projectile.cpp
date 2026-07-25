@@ -66,7 +66,7 @@ void ProjectileSystem::init() {
 }
 b8 ProjectileSystem::spawn(HierPos2 origin, Vec2 velocity,
                            f32 lifetime, f32 radius, bs_color color, VesselFaction owner,
-                           f32 radiation_emission)
+                           f32 radiation_emission, f32 hp)
 {
     // find first free slot
     for (i32 i = 0; i < MAX_PROJECTILES; ++i) {
@@ -80,6 +80,8 @@ b8 ProjectileSystem::spawn(HierPos2 origin, Vec2 velocity,
             pool[i].color              = color;
             pool[i].owner              = owner;
             pool[i].radiation_emission = radiation_emission;
+            pool[i].hp                 = hp;
+            pool[i].max_hp             = hp;
             ++count;
             return TRUE;
         }
@@ -102,11 +104,11 @@ void ProjectileSystem::update(f32 dt) {
     }
     count = active_count;
 }
-void ProjectileSystem::render(u32 layer, const bs_math::HierPos2* camera, f32 comp) const {
+void ProjectileSystem::render(u32 layer, const bs_math::HierPos2* camera) const {
     for (i32 i = 0; i < MAX_PROJECTILES; ++i) {
         const Projectile& p = pool[i];
         if (!p.active) continue;
-        bs_math::Vec2 draw_pos = vec2_scale(hierpos_diff(&p.position, camera), comp);
+        bs_math::Vec2 draw_pos = hierpos_diff(&p.position, camera);
         f32 speed = vec2_length(p.velocity);
         f32 trail_length = speed * 0.04f;
         if (trail_length < p.radius * 4.0f)
@@ -114,7 +116,7 @@ void ProjectileSystem::render(u32 layer, const bs_math::HierPos2* camera, f32 co
         // ---- Streak (velocity-aligned) ------------------------------------------------------
         bs_sprite streak{};
         streak.position = draw_pos;
-        streak.size     = Vec2{ p.radius * 3.0f * comp, trail_length * comp };
+        streak.size     = Vec2{ p.radius * 3.0f, trail_length };
         streak.origin   = Vec2{ 0.5f, 1.0f }; // anchor bottom edge (head) at position
         streak.rotation = atan2f(p.velocity.y, p.velocity.x) + 3.14159265f / 2.0f;
         streak.uv       = bs_rect{ 0.0f, 0.0f, 1.0f, 1.0f };
@@ -131,7 +133,7 @@ void ProjectileSystem::render(u32 layer, const bs_math::HierPos2* camera, f32 co
             f32 flash_scale = 4.0f + 6.0f * flash_alpha;
             bs_sprite flash{};
             flash.position = draw_pos;
-            flash.size     = Vec2{ p.radius * flash_scale * comp, p.radius * flash_scale * comp };
+            flash.size     = Vec2{ p.radius * flash_scale, p.radius * flash_scale };
             flash.origin   = Vec2{ 0.5f, 0.5f };
             flash.rotation = 0.0f;
             flash.uv       = bs_rect{ 0.0f, 0.0f, 1.0f, 1.0f };

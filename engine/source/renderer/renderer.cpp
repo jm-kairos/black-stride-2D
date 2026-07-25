@@ -2,6 +2,7 @@
 #include "renderer/renderer_backend.h"
 #include "renderer/camera2d.h"
 #include "renderer/bs_imgui.h"
+#include "renderer/bs_rml.h"
 
 #include "core/logger.h"
 #include "core/memory/bs_memory.h"
@@ -76,6 +77,13 @@ b8 renderer_initialize(const char* app_name, struct PlatformState* plat)
         BS_LOG_WARN("Dear ImGui failed to initialize; continuing without the UI overlay.");
     }
 
+    // Bring up RmlUi (the in-game UI). Like ImGui this needs the live GPU device + window, and a
+    // failure is non-fatal: the game still runs, just without the retained-mode HTML/CSS UI.
+    if (!bs_rml_initialize())
+    {
+        BS_LOG_WARN("RmlUi failed to initialize; continuing without the in-game UI.");
+    }
+
     state.initialized = TRUE;
     BS_LOG_INFO("Renderer initialized (backend: SDL3 GPU).");
     return TRUE;
@@ -92,6 +100,10 @@ void renderer_shutdown()
     // owns device-bound resources. bs_imgui_shutdown drains the GPU first and is a no-op if
     // ImGui never initialized.
     bs_imgui_shutdown();
+
+    // Likewise tear down RmlUi before the device is destroyed; it owns GPU buffers/textures and
+    // drains the GPU internally. No-op if RmlUi never initialized.
+    bs_rml_shutdown();
 
     state.backend.shutdown(&state.backend);
     renderer_backend_destroy(&state.backend);
@@ -124,6 +136,10 @@ b8 renderer_begin_frame(f32 dt)
 
     state.frame_active = TRUE;
     state.draw_alpha_mul = 1.0f; // opaque by default; passes opt into fading per frame
+
+    // Advance the in-game UI: sync its size to the swapchain and run layout/animation/hover from
+    // the events already pumped this frame. The actual RmlUi render is sequenced inside end_frame.
+    bs_rml_update();
     return TRUE;
 }
 
@@ -337,6 +353,15 @@ void renderer_draw_starsurface(const bs_starsurface_params* params)
         return;
     }
     state.backend.draw_starsurface(&state.backend, params);
+}
+
+void renderer_draw_planetsurface(const bs_planetsurface_params* params)
+{
+    if (!state.initialized || !state.frame_active || !params || !state.backend.draw_planetsurface)
+    {
+        return;
+    }
+    state.backend.draw_planetsurface(&state.backend, params);
 }
 
 void renderer_draw_heat_map(const bs_heat_map_params* params)

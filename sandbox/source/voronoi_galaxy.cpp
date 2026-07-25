@@ -2,15 +2,12 @@
 #include "jc_voronoi.h"
 #include "voronoi_galaxy.h"
 #include "game.h"
-#include "core/view_transform.h" // cosmetic_compress
+#include "core/view_transform.h"
 #include <math/math_utils.h>
 #include <math/bs_hierpos.h>
 #include <renderer/renderer.h>
 #include <new>
 using namespace bs_math;
-// compression_factor / cosmetic_compress now come from core/view_transform.h (via game.h),
-// so voronoi cells share the SAME smoothstep compression curve as stars/ships (previously this
-// file used a linear ramp and drifted from them at extreme zoom-out).
 // =====================================================================================
 // Internal helpers
 // =====================================================================================
@@ -194,8 +191,6 @@ void draw_voronoi_edges(const GalaxyVoronoi* v, const game_state* s,
         HierPos2 h1 = hierpos_from_vec2(e.p1, BS_HIERPOS_CELL_SIZE);
         Vec2 p0 = hierpos_diff(&h0, &s->camera_state.camera_hierpos, BS_HIERPOS_CELL_SIZE);
         Vec2 p1 = hierpos_diff(&h1, &s->camera_state.camera_hierpos, BS_HIERPOS_CELL_SIZE);
-        p0 = cosmetic_compress(p0, s->camera_state.camera.zoom);
-        p1 = cosmetic_compress(p1, s->camera_state.camera.zoom);
         renderer_draw_line(p0, p1, thickness, edge_col, VORONOI_LAYER_CELESTIAL);
     }
 }
@@ -209,8 +204,6 @@ void draw_delaunay_lanes(const GalaxyVoronoi* v, const StarSystem* systems,
         if (e.site_a < 0 || e.site_b < 0) continue;
         Vec2 pa = hierpos_diff(&systems[e.site_a].galaxy_center, &s->camera_state.camera_hierpos, BS_HIERPOS_CELL_SIZE);
         Vec2 pb = hierpos_diff(&systems[e.site_b].galaxy_center, &s->camera_state.camera_hierpos, BS_HIERPOS_CELL_SIZE);
-        pa = cosmetic_compress(pa, s->camera_state.camera.zoom);
-        pb = cosmetic_compress(pb, s->camera_state.camera.zoom);
         renderer_draw_line(pa, pb, thickness, lane_col, VORONOI_LAYER_UI);
     }
 }

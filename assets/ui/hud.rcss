@@ -1,0 +1,736 @@
+/* =====================================================================================
+   hud.rcss — layout + skin for the in-game HUD document (hud.rml).
+
+   Pairs with the shared palette in theme.rcss. The whole document is a transparent, full-
+   screen overlay: `pointer-events: none` on <body> makes every panel click-through by default
+   (so world picking still works underneath), and only the genuinely interactive elements
+   (encounter buttons, the discoveries close box) opt back in with `pointer-events: auto`.
+   ===================================================================================== */
+
+body {
+    width: 100%;
+    height: 100%;
+    /* Transparent overlay; individual panels paint their own backdrops. */
+    pointer-events: none;
+}
+
+/* --- Shared HUD readout panel (translucent sci-fi slab) --------------------------- */
+.hud-panel {
+    display: block;
+    background-color: #0e1a2999;                              /* translucent fallback if the GPU backdrop is unavailable */
+    decorator: backdrop(#0e1a2998) border-box;               /* real frosted-glass blur of the scene behind the panel */
+    border: 1px #47688c;
+    border-top-color: #7099bf;                              /* glass bevel highlight */
+    border-radius: 6px;
+    padding: 8px 10px;
+}
+
+.hud-row {
+    display: block;
+    margin-bottom: 2px;
+}
+
+.hud-key {
+    display: inline-block;
+    width: 64px;
+    color: #59d0f2;          /* dim cyan label */
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+.hud-val {
+    color: #bfe8fb;
+    font-size: 13px;
+}
+
+/* --- Navigation readout (top-right) ----------------------------------------------- */
+#nav {
+    position: absolute;
+    top: 16px;
+    right: 16px;
+    width: 210px;
+}
+
+/* --- Ship readout (top-right, stacked below nav) ---------------------------------- */
+#ship {
+    position: absolute;
+    top: 118px;
+    right: 16px;
+    width: 210px;
+}
+
+/* --- Time control (top-center): pause + speed tiers on the shared calendar -------- */
+#time {
+    position: absolute;
+    top: 16px;
+    left: 50%;
+    width: 230px;
+    margin-left: -115px;         /* half of border-box width -> centered */
+    box-sizing: border-box;
+    text-align: center;
+}
+
+.time-date {
+    display: block;
+    color: #bfe8fb;
+    font-size: 13px;
+    letter-spacing: 1px;
+    margin-bottom: 6px;
+}
+
+.time-btns {
+    display: block;
+}
+
+.time-btn {
+    display: inline-block;
+    background-color: #1c3a54;
+    decorator: vertical-gradient(#274263 #172a40) border-box;
+    border: 1px #47688c;
+    border-top-color: #789fc3;
+    border-radius: 4px;
+    color: #dce8f4;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 4px 7px;
+    margin: 0 1px;
+    pointer-events: auto;        /* buttons are interactive */
+    transition: decorator border-color color 0.12s quadratic-out;
+}
+
+.time-btn:hover {
+    decorator: vertical-gradient(#315a83 #1e3f5f) border-box;
+    border-color: #5fd0ff;
+}
+
+.time-btn.active {
+    decorator: vertical-gradient(#3a6d99 #24486b) border-box;
+    border-color: #5fd0ff;
+    color: #ffffff;
+    font-effect: glow(1px 2px #33ccff99);
+}
+
+/* --- Action log (bottom-right, right-aligned, fades via data-style-opacity) -------- */
+#log {
+    position: absolute;
+    bottom: 16px;
+    right: 16px;
+    width: 340px;
+    text-align: right;
+}
+
+.log-line {
+    display: block;
+    color: #dbe6f5;
+    font-size: 13px;
+    margin-bottom: 1px;
+}
+
+/* --- Discoveries browser (floating, left side) ------------------------------------ */
+#discoveries {
+    position: absolute;
+    top: 118px;
+    left: 32px;
+    width: 380px;
+    max-height: 440px;
+    overflow: hidden;
+}
+
+.win-title {
+    display: block;
+    color: #cfe8f5;
+    font-size: 15px;
+    font-weight: 700;              /* bold, crisp title (was thin 13px) */
+    margin-bottom: 6px;
+    text-transform: uppercase;
+    letter-spacing: 3px;
+    font-effect: glow(1px 3px #5fd0ff55);   /* restrained cyan halo */
+}
+
+.win-close {
+    float: right;
+    color: #ff8b6a;
+    padding: 0 4px;
+    pointer-events: auto;    /* only the close box is clickable */
+    transition: color 0.12s quadratic-out;   /* ease the hover brighten */
+}
+
+.win-close:hover {
+    color: #ffb6a0;
+}
+
+/* Inspector uses a small pulsing red "Collapse" button instead of a bare X (the window is fullscreen).
+   Scoped to #inspector so other windows keep their plain X close glyph. The pulse breathes the red
+   fill/edge in and out to keep the exit affordance noticeable without being loud. */
+@keyframes collapse-pulse {
+    0%   { background-color: #7a221c; border-color: #b3392f; }
+    100% { background-color: #d1483a; border-color: #ff8a7e; }
+}
+
+#inspector .win-close {
+    float: right;
+    margin-top: -3px;                       /* seat the button within the header band */
+    padding: 3px 12px;
+    color: #ffe4e0;
+    background-color: #b3312a;              /* red button (static fallback if animation is unavailable) */
+    border: 1px #e0574d;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    pointer-events: auto;
+    animation: 1.3s cubic-in-out infinite alternate collapse-pulse;   /* steady attention pulse */
+    transition: background-color color border-color 0.12s quadratic-out;   /* ease hover */
+}
+
+#inspector .win-close:hover {
+    color: #ffffff;
+    background-color: #e05346;
+    border-color: #ff9c92;
+}
+
+.win-count {
+    display: block;
+    color: #8fa6bd;
+    font-size: 12px;
+    margin-bottom: 6px;
+}
+
+.disc-list {
+    display: block;
+}
+
+.disc-line {
+    display: block;
+    font-size: 12px;
+    margin-bottom: 2px;
+}
+
+/* --- Encounter modal (centered) --------------------------------------------------- */
+#encounter {
+    position: absolute;
+    left: 50%;
+    top: 26%;
+    width: 360px;
+    margin-left: -180px;     /* pull back half the width to center horizontally */
+}
+
+.modal-title {
+    display: block;
+    color: #ffffff;
+    font-size: 16px;
+    margin-bottom: 6px;
+}
+
+.modal-row {
+    display: block;
+    color: #cfd9e6;
+    margin-bottom: 3px;
+}
+
+.modal-desc {
+    display: block;
+    color: #9fb2c6;
+    font-style: italic;
+    margin: 6px 0;
+}
+
+.modal-btn {
+    display: block;
+    background-color: #1c3a54;
+    decorator: vertical-gradient(#274263 #172a40) border-box;
+    border: 1px #47688c;
+    border-top-color: #789fc3;
+    border-radius: 5px;
+    color: #dce8f4;
+    font-weight: 600;
+    padding: 6px 8px;
+    margin-top: 6px;
+    text-align: center;
+    pointer-events: auto;    /* buttons are interactive */
+    transition: decorator border-color color 0.12s quadratic-out;   /* ease hover states */
+}
+
+.modal-btn:hover {
+    decorator: vertical-gradient(#315a83 #1e3f5f) border-box;
+    border-color: #5fd0ff;
+}
+
+/* --- Fleet ship panel (top-right, stacked below the nav/ship readouts) ------------ */
+#fleet {
+    position: absolute;
+    top: 160px;
+    right: 16px;
+    width: 210px;
+}
+
+.fleet-name {
+    display: block;
+    color: #59d9f2;
+    font-size: 14px;
+    font-effect: glow(1px 3px #33ccff99);
+}
+
+.fleet-faction {
+    display: block;
+    color: #8fa6bd;
+    font-size: 12px;
+}
+
+.fleet-stat {
+    display: block;
+    color: #cfd9e6;
+    font-size: 12px;
+    margin-bottom: 1px;
+}
+
+.fleet-hdr {
+    display: block;
+    color: #8cd8f2;
+    font-size: 12px;
+    margin-bottom: 3px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+.weapon-row {
+    display: block;
+    color: #cfe0f0;
+    font-size: 12px;
+    padding: 2px 4px;
+    margin-bottom: 1px;
+    border-radius: 3px;
+    pointer-events: auto;        /* fitted weapons are clickable to select */
+}
+
+.weapon-row:hover {
+    background-color: #16304688;
+}
+
+.weapon-row.selected {
+    background-color: #1d4058;
+    color: #ffffff;
+}
+
+.weapon-row.empty {
+    color: #4a5a66;
+    pointer-events: none;        /* empty slots are inert */
+}
+
+.fleet-mode {
+    display: block;
+    background-color: #1c3a54;
+    decorator: vertical-gradient(#274263 #172a40) border-box;
+    border: 1px #47688c;
+    border-top-color: #789fc3;
+    border-radius: 5px;
+    color: #dce8f4;
+    font-weight: 600;
+    padding: 6px 8px;
+    text-align: center;
+    pointer-events: auto;
+    transition: decorator border-color color 0.12s quadratic-out;   /* ease hover states */
+}
+
+.fleet-mode:hover {
+    decorator: vertical-gradient(#315a83 #1e3f5f) border-box;
+    border-color: #5fd0ff;
+}
+
+.fleet-mode.disabled {
+    color: #5a6a76;
+    border-color: #33ccff33;     /* dimmed while a camera transition is in flight */
+}
+
+/* --- FTL jump-mode banner (bottom-center) ----------------------------------------- */
+#jumpmode {
+    position: absolute;
+    bottom: 40px;
+    left: 0;
+    width: 100%;
+    text-align: center;
+    color: #8cf2a6;              /* matches JUMP_CIRCLE_COLOR */
+    font-size: 22px;
+    text-transform: uppercase;
+    letter-spacing: 4px;
+    font-effect: glow(1px 5px #8cf2a6cc);
+}
+
+/* --- HierPos2 debug readout (top-left, dev toggle) -------------------------------- */
+#debug {
+    position: absolute;
+    top: 120px;
+    left: 12px;
+    color: #bfe6ff;
+    font-size: 13px;
+    white-space: pre;            /* honour the '\n' line breaks in debug_text */
+}
+
+/* --- Galaxy-map hover tooltip (cursor-anchored; .panel supplies the themed slab) --- */
+#tooltip {
+    position: absolute;          /* left/top set per-frame via data-style-left/top */
+    display: block;
+    max-width: 460px;
+    color: #cfe0f0;
+    font-size: 13px;
+    white-space: pre;            /* honour the '\n' breaks + column alignment in tip_text */
+    pointer-events: none;        /* stay click-through so world picking works underneath */
+}
+
+/* --- Flagship inspector launcher button (bottom-center) --------------------------- */
+#inspector-btn {
+    position: absolute;
+    bottom: 16px;
+    left: 50%;
+    width: 140px;
+    margin-left: -70px;          /* pull back half the width to centre */
+    background-color: #1c3a54;
+    decorator: vertical-gradient(#274263 #172a40) border-box;
+    border: 1px #47688c;
+    border-top-color: #789fc3;
+    border-radius: 6px;
+    color: #dce8f4;
+    padding: 6px 8px;
+    text-align: center;
+    font-size: 13px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    pointer-events: auto;        /* the launcher is interactive */
+    transition: decorator border-color color 0.12s quadratic-out;   /* ease hover states */
+}
+
+#inspector-btn:hover {
+    decorator: vertical-gradient(#315a83 #1e3f5f) border-box;
+    border-color: #5fd0ff;
+}
+
+/* --- Flagship inspector window (persistent, centred normal-size window) ------------ */
+/* pointer-events:auto makes the window a solid panel (clicks over it never reach the world).
+   Weapon firing is additionally suppressed game-side while the window is open (see game.cpp),
+   so a left-click anywhere -- inside or outside the window -- never fires the active weapon. */
+#inspector {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    box-sizing: border-box;      /* 100% includes padding + border so the window fills, not overflows */
+    margin: 0;
+    padding: 16px 18px;
+    border-radius: 0;            /* edge-to-edge fullscreen: square corners */
+    pointer-events: auto;        /* solid window; does not pass clicks through to the world */
+    display: flex;
+    flex-direction: column;      /* stack header/tabs/rule; let the arsenal row fill the rest */
+}
+
+/* The inspector fills the whole window and is no longer draggable, so the title bar is a plain
+   header band. Bleed it to the window's top edges; the negative margins cancel the panel's 16/18px
+   padding and the padding restores the text position across a tall, readable strip. */
+#inspector .win-title {
+    margin: -16px -18px 10px -18px;
+    padding: 14px 18px 12px 18px;
+    /* A brighter glass "chrome" header band across the top of the window, capped by a hairline
+       rule; square corners follow the fullscreen frame. */
+    decorator: vertical-gradient(#2d425f #1a2941) border-box;
+    border-bottom: 1px #47688c;
+    border-radius: 0;
+}
+
+.insp-tabs {
+    display: block;
+    margin-bottom: 4px;
+}
+
+.insp-tab {
+    display: inline-block;
+    padding: 4px 12px;
+    color: #8fa6bd;
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    border: 1px #2f4a6300;       /* transparent border keeps inactive tabs the same size */
+    border-radius: 4px;
+    transition: color background-color border-color 0.12s quadratic-out;   /* ease tab activation */
+}
+
+.insp-tab.active {
+    color: #6fd3ff;
+    border-color: #5fd0ff88;
+    background-color: #16304a88;
+}
+
+/* Two-pane Arsenal body: left = stacked weapon sections, right = ship preview. */
+.arsenal-cols {
+    display: flex;
+    flex-direction: row;
+    flex: 1 1 auto;              /* fill the vertical space under the tabs down to the window bottom */
+}
+
+.arsenal-left {
+    flex: 1 1 0px;
+    margin-right: 12px;
+}
+
+.arsenal-right {
+    flex: 1 1 0px;
+    display: flex;
+    flex-direction: column;      /* let the ship preview stretch to the full pane height */
+}
+
+.insp-section-hdr {
+    display: block;
+    color: #bfe0f2;
+    font-size: 14px;
+    font-weight: 600;
+    margin-top: 10px;
+    margin-bottom: 5px;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    border-left: 3px #5fd0ff;    /* single restrained accent spine -- hierarchy without ornament */
+    padding-left: 8px;
+}
+
+/* Weapon-symbol drag queue (replaces the old text rows): a horizontal row of small draggable
+   symbols, one per weapon slot. Hover shows a themed tooltip; pressing to drag hides it. */
+.weapon-queue {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: wrap;
+    margin-bottom: 6px;
+}
+
+/* The offensive inventory list doubles as an UNMOUNT drop target: dragging a mounted weapon back
+   here returns it to the stash. It must stay hit-testable and keep a visible drop area even when it
+   holds no weapons, so give it a min-height and a dashed "drop zone" border. */
+.inv-drop {
+    min-height: 44px;
+    padding: 6px;
+    border: 1px #47688c66;       /* neutral steel at rest; cyan is reserved for the drag-over cue */
+    border-radius: 5px;
+    pointer-events: auto;
+    transition: border-color background-color 0.12s quadratic-out;
+}
+
+.inv-drop:hover {
+    border-color: #33ccff;       /* drag-over cue while unmounting */
+    background-color: #12283c55;
+}
+
+/* One-shot "acknowledge" bloom, played once when a weapon becomes the active selection: the border
+   flares bright then settles back to the resting accent cyan. Interest through motion, not ornament. */
+@keyframes sel-flash {
+    0%   { border-color: #bfefff; }
+    100% { border-color: #5fd0ff; }
+}
+
+.weapon-symbol {
+    display: block;
+    width: 32px;
+    height: 32px;
+    margin: 0 6px 6px 0;
+    background-color: #1c3a54;
+    decorator: vertical-gradient(#274263 #172a40) border-box;
+    border: 1px #47688c;
+    border-top-color: #789fc3;   /* bevel highlight */
+    border-radius: 5px;
+    transition: decorator color 0.12s quadratic-out;   /* ease hover; border-color owned by sel-flash */
+    text-align: center;
+    color: #dce8f4;
+    position: relative;          /* anchor for the absolutely-positioned tooltip */
+    pointer-events: auto;        /* interactive: hover tooltip + click-select + drag */
+    drag: clone;                 /* native RmlUi visual drag (a clone follows the cursor) */
+}
+
+.weapon-symbol:hover {
+    decorator: vertical-gradient(#315a83 #1e3f5f) border-box;
+    border-color: #5fd0ff;
+}
+
+.weapon-symbol.selected {
+    decorator: vertical-gradient(#3a6f9a #24506f) border-box;
+    border-color: #5fd0ff;
+    color: #ffffff;
+    animation: 0.4s cubic-out 1 sel-flash;   /* one-shot bloom on select */
+}
+
+.weapon-symbol.empty {
+    color: #4a5a66;
+    decorator: none;             /* placeholders sit flat/recessed, no glassy sheen */
+    border-color: #3f5f8455;
+    background-color: #101c2caa;
+    drag: none;                  /* empty placeholders are not draggable */
+    pointer-events: none;        /* and inert (no hover tooltip) */
+}
+
+.weapon-glyph {
+    display: block;
+    line-height: 32px;           /* vertically centre the single-char placeholder */
+    font-size: 15px;
+    text-align: center;
+}
+
+/* Tooltip child: themed like the star-system tooltip (.panel slab). Shown on hover, hidden the
+   instant the symbol is pressed to begin a drag (the :active rule below wins by source order). */
+.weapon-tip {
+    display: none;
+    position: absolute;
+    bottom: 40px;
+    left: 50%;
+    margin-left: -80px;
+    width: 160px;
+    padding: 6px 8px;
+    background-color: #0b1420ee;
+    border: 1px #33ccffaa;
+    border-radius: 5px;
+    color: #cfe0f0;
+    font-size: 13px;
+    text-align: center;
+    pointer-events: none;
+}
+
+.weapon-symbol:hover  .weapon-tip { display: block; }   /* hover -> tooltip appears */
+.weapon-symbol:active .weapon-tip { display: none;  }   /* press-to-drag -> tooltip hides */
+
+/* Ship-preview placeholder (right pane; a live/rendered preview lands in a later phase). */
+.ship-preview {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    flex: 1 1 auto;              /* fill the right pane top-to-bottom (its whole side of the window) */
+    background-color: #101d2ccc;
+    decorator: vertical-gradient(#182a3ecc #0e1b2ae6) border-box;
+    border: 1px #45638a;
+    border-top-color: #5f88ad;   /* subtle inset-glass framing */
+    border-radius: 8px;
+}
+
+.ship-preview-label {
+    display: block;
+    color: #5f7488;
+    font-size: 14px;
+}
+
+.ship-preview-name {
+    display: block;
+    color: #8fa6bd;
+    font-size: 13px;
+    margin-top: 4px;
+}
+
+/* Ship hardpoints (right pane): a row of discrete, type-agnostic drop-target slot boxes, one per
+   weapon slot. Dragging a weapon symbol from the left onto a slot assigns it (see game.cpp). Larger
+   than the source symbols so they read as the ship's mount points. :hover doubles as a drag-over cue
+   (RmlUi sets :hover on the element under the cursor even while a clone is being dragged). */
+.hardpoints {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: wrap;
+    justify-content: center;
+    margin: 18px 0;
+}
+
+.weapon-slot {
+    display: block;
+    width: 56px;
+    height: 56px;
+    margin: 0 8px;
+    background-color: #1a3350;
+    decorator: vertical-gradient(#274263 #172a40) border-box;
+    border: 2px #47688c;
+    border-top-color: #789fc3;   /* bevel highlight */
+    border-radius: 8px;
+    transition: decorator color 0.12s quadratic-out;   /* ease hover; border-color owned by sel-flash */
+    text-align: center;
+    color: #dce8f4;
+    position: relative;          /* anchor for the absolutely-positioned tooltip */
+    pointer-events: auto;        /* must be hit-testable to receive drops */
+    drag: clone;                 /* mounted slots are drag sources (rearrange / unmount) */
+}
+
+.weapon-slot:hover {
+    decorator: vertical-gradient(#315a83 #1e3f5f) border-box;
+    border-color: #5fd0ff;       /* drag-over highlight */
+}
+
+.weapon-slot.selected {
+    decorator: vertical-gradient(#3a6f9a #24506f) border-box;
+    border-color: #5fd0ff;
+    color: #ffffff;
+    animation: 0.4s cubic-out 1 sel-flash;   /* one-shot bloom on select */
+}
+
+.weapon-slot.empty {
+    color: #4a5a66;
+    decorator: none;             /* empty hardpoints sit flat/recessed */
+    border-color: #3f5f8455;
+    background-color: #101c2c88;
+    drag: none;                  /* empty hardpoints hold nothing to drag (still drop targets) */
+}
+
+.weapon-slot .weapon-glyph {
+    line-height: 56px;           /* vertically centre the glyph in the taller slot box */
+    font-size: 24px;
+}
+
+/* Hardpoint tooltip: same slab as the source symbols, lifted above the taller 56px slot box. */
+.weapon-slot .weapon-tip     { bottom: 64px; }
+.weapon-slot:hover  .weapon-tip { display: block; }
+.weapon-slot:active .weapon-tip { display: none;  }
+
+/* --- Space-station right-click context menu (cursor-anchored) ---------------------- */
+#station-menu {
+    position: absolute;          /* left/top set per-frame via data-style-left/top */
+    display: block;
+    padding: 4px;
+    min-width: 120px;
+    pointer-events: auto;        /* solid, clickable menu */
+}
+
+.station-menu-item {
+    display: block;
+    padding: 6px 12px;
+    color: #cfe0f0;
+    font-size: 13px;
+    border-radius: 4px;
+    pointer-events: auto;
+}
+
+.station-menu-item:hover {
+    background-color: #315a83;
+    color: #ffffff;
+}
+
+/* --- Space-station inspector window (fullscreen; Collapse to dismiss) -------------- */
+#station-inspector {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    box-sizing: border-box;
+    margin: 0;
+    padding: 16px 18px;
+    border-radius: 0;
+    pointer-events: auto;
+    display: flex;
+    flex-direction: column;
+}
+
+#station-inspector .win-title {
+    margin: -16px -18px 10px -18px;
+    padding: 14px 18px 12px 18px;
+    decorator: vertical-gradient(#2d425f #1a2941) border-box;
+    border-bottom: 1px #47688c;
+    border-radius: 0;
+}
+
+.station-insp-line {
+    white-space: pre;
+    color: #bfe8fb;
+    font-size: 13px;
+    padding: 4px 0;
+}

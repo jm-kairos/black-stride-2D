@@ -15,6 +15,8 @@ struct Projectile {
     f32           radiation_emission; // 0..1 heat-source strength; 0 means invisible to detector
     bs_color      color;      // tint
     VesselFaction owner;      // who fired it
+    f32           hp;         // health; point-defense lasers deplete this, <=0 => destroyed
+    f32           max_hp;     // HP at spawn (for beam intensity / future UI)
 };
 struct ProjectileSystem {
     Projectile pool[MAX_PROJECTILES];
@@ -26,11 +28,11 @@ struct ProjectileSystem {
     // spawn a new projectile; returns TRUE if a free slot was found
     b8 spawn(bs_math::HierPos2 origin, bs_math::Vec2 velocity,
              f32 lifetime, f32 radius, bs_color color, VesselFaction owner,
-             f32 radiation_emission = 0.0f);
+             f32 radiation_emission = 0.0f, f32 hp = 1.0f);
     // advance all active projectiles; retire those whose lifetime expired
     void update(f32 dt);
-    // submit draw commands for all active projectiles. Positions are transformed into the
-    // compressed render space relative to `camera` (render = hierpos_diff(pos, camera) * comp).
-    void render(u32 layer, const bs_math::HierPos2* camera, f32 comp = 1.0f) const;
+    // submit draw commands for all active projectiles. Positions are transformed into render
+    // space relative to `camera` (render = hierpos_diff(pos, camera)).
+    void render(u32 layer, const bs_math::HierPos2* camera) const;
     const bs_glow_params* glow_override; // NULL => use global glow; else per-bullet glow
 };

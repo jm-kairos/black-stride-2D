@@ -4,6 +4,7 @@
 #include "core/geom2d.h"   // point_in_polygon, point_to_segment
 #include <core/input.h>    // input_is_button_down / input_was_button_down / BUTTON_LEFT
 #include <renderer/bs_imgui.h> // bs_imgui_wants_mouse
+#include <renderer/bs_rml.h>   // bs_rml_wants_mouse
 #include <math.h>          // atan2f, fabsf, sqrtf
 
 using namespace bs_math;
@@ -136,7 +137,7 @@ void update_edit_mode(game_state* s) {
         s->editor.edit_drag.mode   = EDIT_DRAG_NONE;
         return;
     }
-    if (bs_imgui_wants_mouse()) return; // cursor over a panel; ignore world picks
+    if (bs_imgui_wants_mouse() || bs_rml_wants_mouse()) return; // cursor over a panel; ignore world picks
     Vec2 cursor = mouse_true_world(s);
     HierPos2 cursor_hp = mouse_true_hierpos(s);
     (void)cursor;

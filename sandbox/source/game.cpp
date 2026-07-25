@@ -14,6 +14,8 @@
 
 #include "projectile.h"
 
+#include "sim/point_defense.h"
+
 #include "ss_generation.h"
 
 #include "voronoi_cell_hover_effect.h"
@@ -35,12 +37,17 @@
 #include <renderer/camera2d.h>
 
 #include <renderer/bs_imgui.h> // bs_imgui_wants_mouse: gate world input while ImGui owns the cursor
+#include <renderer/bs_rml.h>   // bs_rml_*: in-game UI (RmlUi) documents + input gating
+#include "render/galaxy_map_render.h" // galaxy_pick_planet: hit-test a planet under the cursor
+#include "sim/celestial_parallax.h" // celestial_parallax_fade: keep a followed planet screen-centered
 
 #include <renderer/bs_ui.h>
 
 #include <math.h>   // powf
 
 #include <stdio.h>  // snprintf, vsnprintf
+
+#include <string.h> // strcmp, memset (RmlUi HUD snapshot + action polling)
 
 #include <stdarg.h> // va_list, va_start, va_end (action_log_push)
 
@@ -127,8 +134,9 @@ const f32 SHIP_MAX_TURN     = 3.0f;    // rad/s
 
 // =====================================================================================
 
-// Action Log helpers (action_log_push / build_action_log_panel) now live in
-// sim/action_log.cpp (declared via sim/action_log.h, included by game.h).
+// Action Log data helper (action_log_push) lives in sim/action_log.cpp (declared via
+// sim/action_log.h, included by game.h). The rolling log is rendered by the RmlUi HUD
+// (game_push_hud below), which replaced the old bs_ui build_action_log_panel.
 
 // =====================================================================================
 
@@ -204,13 +212,17 @@ b8 game_init(Game* game_inst) {
 
     s->render.star_light_enabled     = TRUE;
 
-    s->render.bg_layer0_enabled      = TRUE;
+    s->render.bg_layer0_enabled      = FALSE;   // far starfield hidden by default
 
-    s->render.bg_layer1_enabled      = TRUE;
+    s->render.bg_layer1_enabled      = FALSE;   // mid starfield hidden by default
 
     s->render.bg_layer2_enabled      = TRUE;
 
-    s->render.bg_nebula_enabled      = TRUE;
+    s->render.bg_nebula_enabled      = FALSE;   // nebula/dust cloud hidden by default
+
+    s->render.celestial_draw_planets     = TRUE;  // planets + orbit rings
+
+    s->render.celestial_draw_testsprites = FALSE; // volumetric-light demo dots (dev-only)
 
     s->render.bg_parallax_enabled    = TRUE;
 
@@ -298,6 +310,12 @@ b8 game_init(Game* game_inst) {
 
     s->editor.edit_mode_active = FALSE;
 
+    // Player commands a SINGLE ship (the flagship) by default. The EDITOR PANEL "Multiple ship
+    // command" checkbox reveals the escort wing (see build_editor_panel).
+    s->editor.multi_ship_enabled = FALSE;
+
+    s->editor.draw_discovery_sensor_range = FALSE;
+
     s->editor.edit_selection   = EditSelection{ EDIT_NONE, -1 };
 
     s->editor.edit_drag        = EditorDrag{ FALSE, EDIT_DRAG_NONE, bs_math::HierPos2{}, bs_math::HierPos2{}, 0.0f };
@@ -305,6 +323,21 @@ b8 game_init(Game* game_inst) {
     s->action_log.count = 0;
 
     s->action_log.inactivity_timer = 0.0f;
+
+    s->show_discoveries = false;
+
+    s->show_flagship_inspector = false;
+    s->hovered_station_id = -1;
+    s->station_menu_visible = false;
+    s->station_menu_station_id = -1;
+    s->station_menu_x = 0;
+    s->station_menu_y = 0;
+    s->show_station_inspector = false;
+    s->inspect_station_id = -1;
+    s->station_insp_tab = 0;
+    s->pending_weapon_drag = -1;    // Arsenal drag-drop: no source armed
+    s->pending_weapon_drag_kind = 0;
+    s->ui_font_kit = 1;             // default to the "Clean" kit (Chakra Petch / Inter / JetBrains Mono)
 
     s->view.alt_movement_active = FALSE;
 
@@ -328,17 +361,29 @@ b8 game_init(Game* game_inst) {
 
         fs.ship.origin = hierpos_from_vec2(Vec2{ 25000.0f, 0.0f }, BS_HIERPOS_CELL_SIZE);
 
+        fs.ship.faction_id = FACTION_PLAYER;
+
         fs.ship.glow   = s->render.glow_params;
 
         fs.ship.radiation_emission = 0.05f;
 
         for (i32 i = 0; i < SHIP_MAX_WEAPONS; ++i) fs.ship.weapons[i] = nullptr;
 
-        fs.ship.weapons[0]       = weapon_create_ballistic_cannon(fs.ship.faction);
+        // The flagship's cannon starts UNMOUNTED in the loadout stash; the player mounts it onto a
+        // hardpoint from the Arsenal inspector. Until mounted, the flagship has no active weapon.
+        fs.ship.weapon_count      = 0;
 
-        fs.ship.weapon_count     = 1;
+        fs.ship.active_weapon_idx = -1;
 
-        fs.ship.active_weapon_idx = 0;
+        fs.ship.weapon_stash[0]     = weapon_create_ballistic_cannon(fs.ship.faction);
+
+        fs.ship.weapon_stash_count  = 1;
+
+        // Point-defense also starts UNMOUNTED in the defensive inventory (disabled until the player
+        // drags it onto a hardpoint from the Arsenal inspector).
+        fs.ship.point_defense.enabled = FALSE;
+
+        fs.ship.point_defense_slot    = -1;
 
     }
 
@@ -378,6 +423,8 @@ b8 game_init(Game* game_inst) {
 
             fs.ship.faction     = player_faction;
 
+            fs.ship.faction_id  = FACTION_PLAYER;
+
             fs.ship.vessel_name = "Escort";
 
             fs.ship.glow        = s->render.glow_params;
@@ -404,13 +451,15 @@ b8 game_init(Game* game_inst) {
 
     }
 
-    s->fleet_state.enemy_ship.origin     = hierpos_from_vec2(Vec2{ 1e4f, 0.0f }, BS_HIERPOS_CELL_SIZE);
+    s->fleet_state.enemy_ship.origin     = hierpos_from_vec2(Vec2{ 85000.0f, 25000.0f }, BS_HIERPOS_CELL_SIZE);
 
     s->fleet_state.enemy_ship.angle      = 2.36f;
 
     s->fleet_state.enemy_orbit_phase     = 0.0f;
 
     s->fleet_state.enemy_ship.faction    = VESSEL_PIRATE;
+
+    s->fleet_state.enemy_ship.faction_id = FACTION_PIRATE;
 
     s->fleet_state.enemy_ship.vessel_name = "Raider-class Interceptor";
 
@@ -428,14 +477,42 @@ b8 game_init(Game* game_inst) {
 
     s->fleet_state.enemy_ship.weapons[0] = weapon_create_ballistic_cannon(s->fleet_state.enemy_ship.faction);
 
+    // Extend the enemy's effective firing range ~10x by lengthening its projectile lifetime
+
+    // (reach = speed * lifetime). Lets it land shots for long-range sensor-detection testing.
+
+    if (BallisticWeapon* enemy_cannon = static_cast<BallisticWeapon*>(s->fleet_state.enemy_ship.weapons[0])) {
+
+        enemy_cannon->projectile_lifetime *= 10.0f;
+
+        // Slow the cadence: long-lived projectiles (rate * lifetime) would otherwise saturate the
+
+        // 256-slot pool and firing would stall. 0.5/s * 200s = ~100 live shots, well under the cap.
+
+        enemy_cannon->fire_rate         = 0.5f;
+
+        enemy_cannon->cooldown_duration = 1.0f / enemy_cannon->fire_rate;
+
+    }
+
     s->fleet_state.enemy_ship.weapon_count = 1;
 
     s->fleet_state.enemy_ship.active_weapon_idx = 0;
+
+    // Default to single-ship command: the escorts are spawned above (so their data + weapons exist
+    // and can be revealed instantly), but only the flagship is ACTIVE until the player enables
+    // "Multiple ship command" in the EDITOR PANEL.
+    if (!s->editor.multi_ship_enabled) s->fleet_state.fleet.set_count(1);
 
     // ---- Combat arena: projectile pool + combat entities + sensor/heat/encounter tunables --
     // (projectiles, combat_entities registration, out_sensor_fx, heat-signature params and the
     //  encounter state now live in sim/combat_arena.cpp -> combat_arena_init.)
     combat_arena_init(s);
+
+    // ---- General Ship AI: load the NPC hull template and reserve the NPC combat-entity window --
+    // The NPC window begins right after the persistent fleet + enemy slots registered above.
+    ai_ships_init(s);
+    s->npc_combat_base = s->combat_entity_count;
 
     // Camera starts zoomed out (global mode), centered on the flagship.
 
@@ -447,13 +524,26 @@ b8 game_init(Game* game_inst) {
 
     s->camera_state.zoom_smooth_rate = 16.0f;
 
+    s->planet_approach = {};
+
     s->camera_state.camera.position = hierpos_to_vec2(&s->player_ship().origin, BS_HIERPOS_CELL_SIZE);
 
     s->view.mode            = MODE_GLOBAL;
 
-    // Floating-origin camera starts at system 0's galaxy center.
+    // Control-mode intent starts as piloting (matches free_camera_active's FALSE default) so the
+    // first galaxy-map round trip restores piloting.
+    s->camera_state.global_free_camera_saved = FALSE;
 
-    s->camera_state.camera_hierpos = s->galaxy.systems[0].galaxy_center;
+    // Camera->ship recenter glide (TAB re-pilot / HUD pilot button / galaxy on-screen re-entry).
+    s->camera_state.recentering       = FALSE;
+    s->camera_state.recenter_t        = 0.0f;
+    s->camera_state.recenter_from_pos = {};
+
+    // Floating-origin camera starts at the home system, which the galaxy generator pins to the
+    // origin (node 0 == "Sol"). Set before galaxy_map_init so its initial cache materialisation
+    // (which focuses on camera_hierpos) populates the home neighbourhood.
+
+    s->camera_state.camera_hierpos = bs_math::HierPos2{ bs_math::GridCell{ 0, 0 }, bs_math::Vec2{ 0.0f, 0.0f } };
 
     // Drag anchors zeroed so system-view middle-mouse panning starts clean.
 
@@ -463,14 +553,32 @@ b8 game_init(Game* game_inst) {
 
     s->camera_state.system_zoom        = ZOOM_SYSTEM;
 
-    // Galaxy cluster generation + all galaxy-map animation/draw/recenter state now lives in
-    // sim/galaxy_map.cpp (galaxy_map_init).
-    galaxy_map_init(s);
+    // ---- New Game (Phase A): DEFER galaxy generation until after the setup screen --------
+    // game_init only prepares the setup screen; the galaxy + history are generated by the staged
+    // APP_GENERATING pipeline (game_update) once the player clicks "Generate". Nothing below this
+    // depends on the galaxy existing, and game_update/game_render early-return until APP_PLAYING.
+    s->app_phase    = APP_SETUP;
+    s->gen_stage    = 0;
+    s->gen_progress = 0.0f;
+    s->gen_label    = "";
+    s->setup.seed                = 0x9E3779B97F4A7C15ull;
+    s->setup.galaxy_size         = 10000;
+    s->setup.galaxy_shape        = 0;   // spiral
+    s->setup.history_depth_years = 1000000;
+    s->setup.chronicle_detail    = 1;   // balanced
+    s->setup.abundance           = 1;   // sparse
+    s->setup.civ_density         = 1;   // moderate (a few dozen)
+    s->setup.conflict            = 1;   // balanced
+    s->setup.ambition            = 1;   // steady
+    s->setup.cataclysm           = 1;   // rare
+    s->setup.starting_era        = 0;
 
     // (Sensor range, heat-signature params and encounter state are set by combat_arena_init above.)
     s->time_scale             = 1.0f;
 
     s->elapsed_time           = 0.0f;
+
+    s->sim_hours              = 0.0;
 
     // (Galaxy cluster generation + galaxy-map state init moved to galaxy_map_init above.)
 
@@ -586,6 +694,13 @@ b8 game_init(Game* game_inst) {
 
     ship_visual_resolve_textures(&s->fleet_state.enemy_ship.visual);
 
+    // ---- In-game UI (RmlUi): register the font faces in assets/ui/fonts, then create the
+    // HUD data model and load + show the HUD document. The HUD (nav / ship / encounter /
+    // action-log / discoveries) is driven each frame from game_update via game_push_hud().
+    bs_rml_load_fonts("assets/ui/fonts");
+    if (!bs_rml_hud_init("assets/ui/hud.rml"))
+        BS_LOG_WARN("game_init: RmlUi HUD failed to initialize.");
+
     return TRUE;
 
 }
@@ -596,7 +711,7 @@ b8 game_init(Game* game_inst) {
 
 // =====================================================================================
 
-// compression_factor / cosmetic_compress / game_compression_factor / view_arena_weight and the
+// view_arena_weight and the
 // screen<->true-world<->render-space transforms (game_screen_to_true_world/render, camera_center,
 // hierpos variants) now live in core/view_transform.cpp (declared via core/view_transform.h,
 // included by game.h).
@@ -641,7 +756,7 @@ b8 game_init(Game* game_inst) {
 // sim/ship_control.cpp (declared via sim/ship_control.h, included by game.h).
 
 // =====================================================================================
-// build_action_log_panel moved to sim/action_log.cpp (declared via sim/action_log.h).
+// The action log is rendered by the RmlUi HUD (game_push_hud); the old bs_ui panel is retired.
 // =====================================================================================
 
 // ---- Floating-origin re-centering (big_space-style) -----------------------------------------
@@ -656,19 +771,13 @@ b8 game_init(Game* game_inst) {
 
 //
 
-// Seamlessness: when compression_factor == 1 the rendered position is hierpos_diff(entity,
+// Seamlessness: the rendered position is hierpos_diff(entity, camera_hierpos) and the view
 
-// camera_hierpos) and the view subtracts camera.position. Folding `delta` shifts both by -delta,
+// subtracts camera.position. Folding `delta` shifts both by -delta, which cancels exactly -> no
 
-// which cancels exactly -> no visible pop. Below the compression threshold cosmetic_compress
-
-// scales hierpos_diff but not camera.position, so folding would not cancel; we skip the rebase
-
-// there (stars are sub-pixel at that zoom, so large coordinates are invisible anyway).
+// visible pop.
 
 static void galaxy_camera_rebase(game_state* s) {
-
-    if (compression_factor(s->camera_state.camera.zoom) < 1.0f) return; // extreme zoom-out: skip (see note)
 
     Vec2 delta = s->camera_state.camera.position;
 
@@ -688,13 +797,665 @@ static void galaxy_camera_rebase(game_state* s) {
 
     s->camera_state.system_drag_cam         = vec2_sub(s->camera_state.system_drag_cam,         delta);
 
-    // map_recenter_from_pos / target_pos are HierPos2 (absolute), so they are invariant under the
+    // camera_state.recenter_from_pos is a HierPos2 (absolute), so it is invariant under the
 
-    // floating-origin rebase and need no adjustment here.
+    // floating-origin rebase and needs no adjustment here.
 
 }
 
 // update_enemy_orbit now lives in sim/combat_arena.cpp (combat_arena_update_enemy_orbit).
+
+// Phase A: the staged New Game generation pipeline. One heavy step per frame (so the progress bar
+// advances between them); when the last stage completes we enter APP_PLAYING. Deterministic.
+static void run_generation_stage(game_state* s) {
+    const i32 STAGE_COUNT = 5;
+    switch (s->gen_stage) {
+        case 0: s->gen_label = "Placing star systems";  galaxy_map_worldgen(s);       s->gen_stage++; break;
+        case 1: s->gen_label = "Surveying habitability";                              s->gen_stage++; break;
+        case 2: s->gen_label = "Seeding civilizations"; galaxy_history_sim_begin(s);   s->gen_stage++; break;
+        case 3: {   // multi-frame: simulate deep-time history in budgeted chunks (progress by year)
+            s->gen_label = "Simulating history";
+            b8 done = galaxy_history_sim_step(s, 250);
+            if (done) { galaxy_history_finalize_view(s); galaxy_history_log_summary(s); galaxy_history_seed_garrison(s); ship_missions_seed(s); s->gen_stage++; }
+            break;
+        }
+        case 4: s->gen_label = "Finalizing";            galaxy_map_finalize(s);         s->gen_stage++; break;
+        default:                                                                      s->gen_stage++; break;
+    }
+    f32 base = (f32)s->gen_stage / (f32)STAGE_COUNT;
+    if (s->gen_stage == 3) base = (3.0f + galaxy_history_sim_progress(s)) / (f32)STAGE_COUNT;
+    s->gen_progress = base;
+    if (s->gen_stage >= STAGE_COUNT) { s->app_phase = APP_PLAYING; s->gen_progress = 1.0f; s->gen_label = "Ready"; }
+}
+
+// ---- Flagship loadout stash helpers ------------------------------------------------------
+// The Arsenal inspector moves weapon pointers between the ship's unmounted stash (weapon_stash[])
+// and its hardpoints (weapons[]). These small helpers keep the stash compact and the mounted
+// weapon bookkeeping (weapon_count / active_weapon_idx) consistent after every move.
+static void ship_stash_append(Ship& sh, Weapon* w) {
+    if (!w) return;
+    if (sh.weapon_stash_count < SHIP_MAX_WEAPONS)
+        sh.weapon_stash[sh.weapon_stash_count++] = w;
+}
+
+static void ship_stash_remove_at(Ship& sh, i32 k) {
+    if (k < 0 || k >= sh.weapon_stash_count) return;
+    for (i32 i = k; i < sh.weapon_stash_count - 1; ++i)
+        sh.weapon_stash[i] = sh.weapon_stash[i + 1];
+    sh.weapon_stash[--sh.weapon_stash_count] = nullptr;
+}
+
+static void ship_rehome_weapons(Ship& sh) {
+    // weapon_count spans slot 0..last-fitted so the update/fire loops cover every mounted weapon.
+    i32 last = -1;
+    for (i32 k = 0; k < SHIP_MAX_WEAPONS; ++k) if (sh.weapons[k]) last = k;
+    sh.weapon_count = last + 1;
+    // Keep the active index pointing at a live weapon (or -1 when none are mounted).
+    if (sh.active_weapon_idx < 0 || sh.active_weapon_idx >= sh.weapon_count ||
+        !sh.weapons[sh.active_weapon_idx]) {
+        sh.active_weapon_idx = -1;
+        for (i32 k = 0; k < SHIP_MAX_WEAPONS; ++k) if (sh.weapons[k]) { sh.active_weapon_idx = k; break; }
+    }
+}
+
+// ---- RmlUi HUD snapshot ------------------------------------------------------------------
+// Gather the in-game HUD state (nav / ship / encounter / action-log / discoveries) into a
+// plain-old-data snapshot, push it to the RmlUi data model, then drain any button clicks the
+// document produced this frame. The engine owns the RmlUi data model; the game only ever sees
+// this POD facade (RmlUi symbols are not exported from engine.dll). Replaces the old bs_ui
+// immediate-mode panels (draw_nav_ship_hud / draw_encounter_panel / build_action_log_panel /
+// build_discoveries_panel).
+static void game_push_hud(game_state* s, f32 dt) {
+    static bs_rml_hud_state hud;
+    memset(&hud, 0, sizeof(hud));
+
+    // ---- Navigation + Ship (arena-side affordance, hidden in edit mode) -----------------
+    if (s->view_arena_w > 0.5f && !s->editor.edit_mode_active) {
+        i32 nearest = galaxy_nearest_node(s, &s->galaxy.map_entities[0].galaxy_pos);
+        if (nearest >= 0) {
+            f64 sx, sy, nx, ny;
+            hierpos_to_f64(&s->galaxy.map_entities[0].galaxy_pos, BS_HIERPOS_CELL_SIZE, &sx, &sy);
+            hierpos_to_f64(&s->galaxy.nodes[nearest].galaxy_center, BS_HIERPOS_CELL_SIZE, &nx, &ny);
+            f64 dist = sqrt((sx - nx) * (sx - nx) + (sy - ny) * (sy - ny));
+
+            hud.nav_visible = TRUE;
+            snprintf(hud.nav_sector, sizeof(hud.nav_sector), "Alpha");
+            snprintf(hud.nav_system, sizeof(hud.nav_system), "%s",
+                     s->galaxy.nodes[nearest].name[0] ? s->galaxy.nodes[nearest].name : "?");
+            if (dist >= 1000000.0)
+                snprintf(hud.nav_distance, sizeof(hud.nav_distance), "%.2f M u", dist / 1000000.0);
+            else if (dist >= 1000.0)
+                snprintf(hud.nav_distance, sizeof(hud.nav_distance), "%.2f k u", dist / 1000.0);
+            else
+                snprintf(hud.nav_distance, sizeof(hud.nav_distance), "%.0f u", dist);
+            snprintf(hud.nav_zone, sizeof(hud.nav_zone), "%d", get_system_zone(s, s->galaxy.current_system));
+
+            if (!s->camera_state.free_camera_active) {
+                hud.ship_visible = TRUE;
+                f32 speed = vec2_length(s->player_flight().velocity);
+                snprintf(hud.ship_speed, sizeof(hud.ship_speed), "%.1f u/s", speed);
+            }
+        }
+    }
+
+    // ---- Time control (top-center): pause + speed tiers on the shared in-game calendar --
+    if (!s->editor.edit_mode_active) {
+        hud.time_visible = TRUE;
+        i64 total_hours = (i64)s->sim_hours;
+        i32 day = (i32)((total_hours % HOURS_PER_YEAR) / HOURS_PER_DAY) + 1;
+        snprintf(hud.time_date, sizeof(hud.time_date), "Year %d, Day %d",
+                 s->galaxy.clock.present_year, day);
+        // Active tier index for button highlight (0=Pause,1=1x,2=3x,3=5x,4=10x).
+        f32 ts = s->time_scale;
+        hud.time_tier = (ts >= 10.0f) ? 4 : (ts >= 5.0f) ? 3 : (ts >= 3.0f) ? 2 : (ts >= 1.0f) ? 1 : 0;
+    }
+
+    // ---- Encounter modal (centered) -----------------------------------------------------
+    if (s->encounter_active && !s->editor.edit_mode_active) {
+        hud.enc_visible = TRUE;
+        snprintf(hud.enc_name, sizeof(hud.enc_name), "%s", s->fleet_state.enemy_ship.vessel_name);
+        Vec2 delta = hierpos_diff(&s->player_ship().origin, &s->fleet_state.enemy_ship.origin, BS_HIERPOS_CELL_SIZE);
+        snprintf(hud.enc_distance, sizeof(hud.enc_distance), "%.1f m", vec2_length(delta));
+        snprintf(hud.enc_faction, sizeof(hud.enc_faction), "%s",
+                 vessel_faction_name(s->fleet_state.enemy_ship.faction));
+        snprintf(hud.enc_desc, sizeof(hud.enc_desc), "%s",
+                 vessel_faction_desc(s->fleet_state.enemy_ship.faction));
+    }
+
+    // ---- Action log (bottom-right; game-driven idle fade after 3s) ----------------------
+    if (!s->editor.edit_mode_active) {
+        s->action_log.inactivity_timer += dt;
+        f32 alpha = 1.0f;
+        if (s->action_log.inactivity_timer > 3.0f) {
+            f32 t = (s->action_log.inactivity_timer - 3.0f) / 2.0f;
+            if (t > 1.0f) t = 1.0f;
+            alpha = 1.0f - t * 0.85f; // fade to 15%
+        }
+        hud.log_visible = TRUE;
+        hud.log_alpha   = alpha;
+        i32 first = s->action_log.count - BS_RML_LOG_MAX;
+        if (first < 0) first = 0;
+        i32 n = 0;
+        for (i32 i = first; i < s->action_log.count && n < BS_RML_LOG_MAX; ++i, ++n)
+            snprintf(hud.log[n].text, sizeof(hud.log[n].text), "%s", s->action_log.entries[i]);
+        hud.log_count = n;
+    }
+
+    // ---- Discoveries browser (newest first) ---------------------------------------------
+    if (s->show_discoveries) {
+        static const char* kind_labels[] = { "Patrol", "Miner", "Trader", "Warship", "Station", "Other" };
+        hud.disc_visible = TRUE;
+        snprintf(hud.disc_count_label, sizeof(hud.disc_count_label), "%d objects logged", s->discovery_log_count);
+        i32 n = 0;
+        for (i32 i = s->discovery_log_count - 1; i >= 0 && n < BS_RML_DISC_MAX; --i, ++n) {
+            const DiscoveryLogEntry& e = s->discovery_log[i];
+            const char* kind  = (e.kind < 6) ? kind_labels[e.kind] : kind_labels[5];
+            const char* color = "#ccd9e6ff"; // neutral
+            if      (e.kind == DISCOVERY_KIND_STATION)                                     color = "#8cbff2ff";
+            else if (e.kind == DISCOVERY_KIND_PATROL || e.kind == DISCOVERY_KIND_WARSHIP)  color = "#f28c73ff";
+            else if (e.kind == DISCOVERY_KIND_MINER)                                       color = "#8cf28cff";
+            else if (e.kind == DISCOVERY_KIND_TRADER)                                      color = "#f2d859ff";
+            snprintf(hud.disc[n].text, sizeof(hud.disc[n].text), "[%.1fs] %s  -  %s  (%s)",
+                     e.time, e.system, e.name, kind);
+            snprintf(hud.disc[n].color, sizeof(hud.disc[n].color), "%s", color);
+        }
+        hud.disc_count = n;
+    }
+
+    // ---- Fleet ship panel (top-right; piloted-ship combat readout + controls) -----------
+    if (!s->editor.edit_mode_active) {
+        FleetShip* piloted = s->fleet_state.fleet.piloted();
+        if (!piloted) piloted = &s->fleet_state.fleet.at(0);
+        if (piloted) {
+            Ship* ship = &piloted->ship;
+            hud.fleet_visible = TRUE;
+            snprintf(hud.fleet_name, sizeof(hud.fleet_name), "%s",
+                     ship->vessel_name ? ship->vessel_name : "Ship");
+            snprintf(hud.fleet_faction, sizeof(hud.fleet_faction), "%s", vessel_faction_name(ship->faction));
+            snprintf(hud.fleet_speed, sizeof(hud.fleet_speed), "%.0f", vec2_length(piloted->flight.velocity));
+            snprintf(hud.fleet_heading, sizeof(hud.fleet_heading), "%.0f", ship->angle * bs_math::BS_RAD2DEG);
+            snprintf(hud.fleet_health, sizeof(hud.fleet_health), "%s", "--");
+            i32 wn = 0;
+            for (i32 i = 0; i < SHIP_MAX_WEAPONS && wn < BS_RML_WEAPON_MAX; ++i, ++wn) {
+                bs_rml_weapon_line& row = hud.fleet_weapon[wn];
+                if (i >= ship->weapon_count || !ship->weapons[i]) {
+                    snprintf(row.text, sizeof(row.text), "-- empty --");
+                    row.action[0] = '\0';   // empty slots enqueue nothing
+                    row.empty      = TRUE;
+                    row.selected   = FALSE;
+                    continue;
+                }
+                Weapon* w = ship->weapons[i];
+                const char* name = w->name ? w->name : "?";
+                if (w->ready())
+                    snprintf(row.text, sizeof(row.text), "%d  %s  READY", i + 1, name);
+                else
+                    snprintf(row.text, sizeof(row.text), "%d  %s  %.0f%%", i + 1, name,
+                             w->cooldown_progress() * 100.0f);
+                snprintf(row.action, sizeof(row.action), "weapon:%d", i);
+                row.empty    = FALSE;
+                row.selected = (i == ship->active_weapon_idx);
+            }
+            hud.fleet_weapon_count = wn;
+            b8 in_free_camera = s->camera_state.free_camera_active;
+            snprintf(hud.fleet_mode_label, sizeof(hud.fleet_mode_label), "%s",
+                     in_free_camera ? "Pilot unit" : "Auto-pilot / RTS");
+            hud.fleet_mode_enabled = s->camera_state.recentering ? FALSE : TRUE;
+        }
+    }
+
+    // ---- FTL jump-mode banner (bottom-center) -------------------------------------------
+    if (!s->editor.edit_mode_active && s->rts_controls.jump_mode_active())
+        hud.jump_visible = TRUE;
+
+    // Active UI font kit (editor-panel selectable): drives the body class that swaps typefaces.
+    hud.ui_kit = s->ui_font_kit;
+
+    // ---- Flagship inspector (persistent window; bottom-center Inspector button) ---------
+    // The launcher button shows during gameplay; the window shows while it is open. The single
+    // Arsenal tab is a two-pane drag-and-drop loadout editor:
+    //   - LEFT pane = UNMOUNTED inventory the flagship owns: arsenal_inv holds offensive weapons in
+    //     the loadout stash (draggable, action "inv:K"); arsenal_def holds defensive systems
+    //     (point-defense, scaffold). The offensive list is also an unmount drop target ("stash").
+    //   - RIGHT pane = arsenal_hp, one row per ship hardpoint (weapons[] slot): every row is a drop
+    //     target (drop "slot:M") and, when occupied, a drag source (action "hp:M").
+    // A weapon lives in EITHER the inventory OR a hardpoint, never both, so dropping onto a
+    // hardpoint MOVES it (removing it from the left list). Defensive drops are a scaffold no-op.
+    if (!s->editor.edit_mode_active) {
+        hud.inspector_btn_visible = TRUE;
+        if (s->show_flagship_inspector) {
+            Ship& fs = s->player_ship();
+            hud.inspector_visible = TRUE;
+            snprintf(hud.insp_ship_name, sizeof(hud.insp_ship_name), "%s",
+                     fs.vessel_name ? fs.vessel_name : "Flagship");
+            // LEFT: unmounted offensive inventory. Render a FIXED number of bays (SHIP_MAX_WEAPONS)
+            // so an empty "+" placeholder persists after a weapon is dragged out onto a hardpoint --
+            // the list keeps its slots instead of collapsing. Real weapons fill the leading bays
+            // (drag sources, action "inv:K"); the remaining bays are inert "+" placeholders.
+            i32 iv = 0;
+            for (i32 k = 0; k < SHIP_MAX_WEAPONS && iv < BS_RML_WEAPON_MAX; ++k, ++iv) {
+                bs_rml_weapon_line& row = hud.arsenal_inv[iv];
+                Weapon* w = (k < fs.weapon_stash_count) ? fs.weapon_stash[k] : nullptr;
+                if (w) {
+                    const char* name = w->name ? w->name : "?";
+                    snprintf(row.text,   sizeof(row.text),   "%s", name);                    // tooltip = name
+                    snprintf(row.glyph,  sizeof(row.glyph),  "%c", name[0] ? name[0] : '*'); // placeholder
+                    snprintf(row.action, sizeof(row.action), "inv:%d", k);                   // dragstart source
+                    row.drop[0]  = '\0';
+                    row.empty    = FALSE;
+                    row.selected = FALSE;
+                } else {
+                    snprintf(row.text,  sizeof(row.text),  "Empty weapon bay");
+                    snprintf(row.glyph, sizeof(row.glyph), "+");
+                    row.action[0] = '\0';
+                    row.drop[0]   = '\0';
+                    row.empty      = TRUE;
+                    row.selected   = FALSE;
+                }
+            }
+            hud.arsenal_inv_count = iv;
+            // Defensive systems: the point-defense laser, shown in the inventory ONLY while it is
+            // unmounted (point_defense_slot < 0). Once mounted it appears on its hardpoint instead.
+            if (fs.point_defense_slot < 0) {
+                bs_rml_weapon_line& drow = hud.arsenal_def[0];
+                snprintf(drow.text,  sizeof(drow.text),  "Point Defense Laser");
+                snprintf(drow.glyph, sizeof(drow.glyph), "P");
+                snprintf(drow.action, sizeof(drow.action), "defdrag");
+                drow.drop[0]   = '\0';
+                drow.empty     = FALSE;
+                drow.selected  = FALSE;
+                hud.arsenal_def_count = 1;
+            } else {
+                hud.arsenal_def_count = 0;
+            }
+            // RIGHT: ship hardpoints, one box per weapons[] slot. A slot may hold an offensive
+            // weapon OR the point-defense (type-agnostic). Occupied slots are drop targets AND drag
+            // sources; empty slots are inert "+" drop targets.
+            i32 hp = 0;
+            for (i32 i = 0; i < SHIP_MAX_WEAPONS && hp < BS_RML_WEAPON_MAX; ++i, ++hp) {
+                bs_rml_weapon_line& row = hud.arsenal_hp[hp];
+                snprintf(row.drop, sizeof(row.drop), "slot:%d", i);
+                if (fs.weapons[i]) {
+                    Weapon* w = fs.weapons[i];
+                    const char* name = w->name ? w->name : "?";
+                    snprintf(row.text,   sizeof(row.text),   "%s", name);
+                    snprintf(row.glyph,  sizeof(row.glyph),  "%c", name[0] ? name[0] : '*');
+                    snprintf(row.action, sizeof(row.action), "hp:%d", i);              // dragstart source (weapon)
+                    row.empty    = FALSE;
+                    row.selected = (i == fs.active_weapon_idx);
+                } else if (fs.point_defense_slot == i) {
+                    snprintf(row.text,   sizeof(row.text),   "Point Defense Laser");
+                    snprintf(row.glyph,  sizeof(row.glyph),  "P");
+                    snprintf(row.action, sizeof(row.action), "hpd:%d", i);             // dragstart source (point-defense)
+                    row.empty    = FALSE;
+                    row.selected = fs.point_defense.enabled ? TRUE : FALSE;
+                } else {
+                    snprintf(row.text,  sizeof(row.text),  "Empty hardpoint %d", i + 1);
+                    snprintf(row.glyph, sizeof(row.glyph), "+");
+                    row.action[0] = '\0';
+                    row.empty      = TRUE;
+                    row.selected   = FALSE;
+                }
+            }
+            hud.arsenal_hp_count = hp;
+        }
+    }
+
+    // ---- HierPos2 debug readout (top-left; dev toggle from the COORDINATE SPACE panel) ---
+    if (g_debug_cell_grid) {
+        const HierPos2& flag = s->player_ship().origin;
+        hud.debug_visible = TRUE;
+        snprintf(hud.debug_text, sizeof(hud.debug_text),
+                 "HIERPOS2 GRID\nflag cell=(%lld,%lld) local=(%.1f,%.1f)\ncam  cell=(%lld,%lld)",
+                 (long long)flag.cell.x, (long long)flag.cell.y, flag.local.x, flag.local.y,
+                 (long long)s->camera_state.camera_hierpos.cell.x,
+                 (long long)s->camera_state.camera_hierpos.cell.y);
+    }
+
+    // ---- Galaxy-map hover tooltip (cursor-anchored star-system / map-entity readout) -----
+    // Computed here in the update path (camera + map entities are already finalized this frame)
+    // so the RmlUi HUD consumes the snapshot the same frame it is built — no cursor lag. Skipped
+    // in edit mode, matching the other in-game HUD panels. tip_left/tip_top must ALWAYS hold a
+    // valid CSS length even while hidden: data-if only toggles `display`, so the element stays in
+    // the DOM and its data-style-left/top bindings still evaluate every frame — an empty string
+    // would log "Syntax error parsing inline property declaration 'left: ;'".
+    snprintf(hud.tip_left, sizeof(hud.tip_left), "0px");
+    snprintf(hud.tip_top,  sizeof(hud.tip_top),  "0px");
+    if (!s->editor.edit_mode_active) {
+        i32 mx = 0, my = 0;
+        input_get_mouse_position(&mx, &my);
+        i32 tx = 0, ty = 0;
+        if (galaxy_map_hover_tooltip(s, mx, my, hud.tip_text, (i32)sizeof(hud.tip_text), &tx, &ty)) {
+            hud.tip_visible = TRUE;
+            snprintf(hud.tip_left, sizeof(hud.tip_left), "%dpx", tx);
+            snprintf(hud.tip_top,  sizeof(hud.tip_top),  "%dpx", ty);
+        }
+    }
+
+    // ---- Space-station interaction: cursor-anchored right-click menu + fullscreen Inspect window --
+    hud.station_menu_visible = s->station_menu_visible ? TRUE : FALSE;
+    snprintf(hud.station_menu_left, sizeof(hud.station_menu_left), "%dpx", s->station_menu_x);
+    snprintf(hud.station_menu_top,  sizeof(hud.station_menu_top),  "%dpx", s->station_menu_y);
+    hud.station_inspector_visible = s->show_station_inspector ? TRUE : FALSE;
+    {
+        const char* sysname = "Unknown System";
+        i32 sid = s->inspect_station_id;
+        if (sid >= 0) {
+            i32 node = sid >> 8;   // station_id packs (node << 8) | index
+            if (node >= 0 && node < s->galaxy.node_count) sysname = s->galaxy.nodes[node].name;
+        }
+        snprintf(hud.station_insp_title, sizeof(hud.station_insp_title), "SPACE STATION \xE2\x80\x94 %s", sysname);
+
+        // Tab visibility: which tabs exist for this station.
+        b8 has_contracts = FALSE;
+        if (sid >= 0) {
+            u8 rooms[4];
+            i32 rc = station_rooms(s, sid, rooms, 4);
+            for (i32 r = 0; r < rc; ++r) if (rooms[r] == ROOM_CONTRACTS) { has_contracts = TRUE; break; }
+        }
+        hud.station_insp_tab2_visible = has_contracts;
+
+        // Active tab (clamp to valid range).
+        i32 tab = s->station_insp_tab;
+        if (tab < 0) tab = 0;
+        if (tab > 2) tab = 2;
+        if (tab == 2 && !has_contracts) tab = 1;   // contracts tab doesn't exist: fall back
+        hud.station_insp_show_dock      = (tab == 0) ? TRUE : FALSE;
+        hud.station_insp_show_market    = (tab == 1) ? TRUE : FALSE;
+        hud.station_insp_show_contracts = (tab == 2) ? TRUE : FALSE;
+
+        // ---- Tab content strings (\n-separated, pre-formatted; white-space:pre in RCSS) ----
+        hud.station_insp_dock[0]      = '\0';
+        hud.station_insp_market[0]    = '\0';
+        hud.station_insp_contracts[0] = '\0';
+
+        if (sid >= 0) {
+            // DOCK tab: list missions whose current dock stage is at this station.
+            // A mission docks at its origin station (MISSION_STAGE_ORIGIN_DOCK) or destination
+            // station (MISSION_STAGE_MARKET_DOCK). Cooldown missions are at the origin station too.
+            if (tab == 0) {
+                i32 off = 0;
+                #define DOCK_SNPRINTF(fmt, ...) \
+                    off += snprintf(hud.station_insp_dock + off, sizeof(hud.station_insp_dock) - off, fmt, __VA_ARGS__)
+                if (s->galaxy.missions) {
+                    for (i32 mi = 0; mi < s->galaxy.mission_count; ++mi) {
+                        const ShipMission& m = s->galaxy.missions[mi];
+                        if (!m.active) continue;
+                        b8 at_origin = (m.stage == MISSION_STAGE_ORIGIN_DOCK || m.stage == MISSION_STAGE_COOLDOWN)
+                                       && m.station_id == sid;
+                        b8 at_dest = (m.stage == MISSION_STAGE_MARKET_DOCK) && m.dest_station_id == sid;
+                        if (!at_origin && !at_dest) continue;
+                        const char* stage_lbl = (m.stage == MISSION_STAGE_ORIGIN_DOCK) ? "Loading"
+                                              : (m.stage == MISSION_STAGE_MARKET_DOCK) ? "Unloading"
+                                              : "Idle";
+                        i32 other_node = at_origin ? m.dest_node : m.home_node;
+                        const char* other_name = "?";
+                        if (other_node >= 0 && other_node < s->galaxy.node_count)
+                            other_name = s->galaxy.nodes[other_node].name;
+                        if (off > 0 && off < (i32)sizeof(hud.station_insp_dock))
+                            off += snprintf(hud.station_insp_dock + off, sizeof(hud.station_insp_dock) - off, "\n");
+                        DOCK_SNPRINTF("Trader #%d \xE2\x80\x94 %s (route: %s)", mi, stage_lbl, other_name);
+                    }
+                }
+                if (off == 0)
+                    snprintf(hud.station_insp_dock, sizeof(hud.station_insp_dock), "No ships docked.");
+                #undef DOCK_SNPRINTF
+            }
+
+            // MARKET tab: one line per trade good with stock and price.
+            if (tab == 1) {
+                MarketGood gm[GOOD_COUNT];
+                station_market_get(s, sid, gm);
+                f32 rev = station_revenue_get(s, sid);
+                snprintf(hud.station_insp_market, sizeof(hud.station_insp_market),
+                         "%-6s  %5.0fu @ %5.0fcr\n%-6s  %5.0fu @ %5.0fcr\n%-6s  %5.0fu @ %5.0fcr\nRevenue: %.0f cr",
+                         TRADE_GOOD_NAMES[0], gm[0].stock, gm[0].price,
+                         TRADE_GOOD_NAMES[1], gm[1].stock, gm[1].price,
+                         TRADE_GOOD_NAMES[2], gm[2].stock, gm[2].price,
+                         rev);
+            }
+
+            // CONTRACTS tab: list missions issued by this station (station_id == sid).
+            if (tab == 2 && has_contracts) {
+                i32 off = 0;
+                #define CON_SNPRINTF(fmt, ...) \
+                    off += snprintf(hud.station_insp_contracts + off, sizeof(hud.station_insp_contracts) - off, fmt, __VA_ARGS__)
+                static const char* STAGE_LABELS[] = {
+                    "Loading at origin",      // MISSION_STAGE_ORIGIN_DOCK
+                    "Departing origin",       // MISSION_STAGE_ACQUIRE
+                    "En route to jump point", // MISSION_STAGE_TO_JUMP
+                    "In transit (jumping)",   // MISSION_STAGE_JUMP
+                    "Crossing system",        // MISSION_STAGE_CROSS
+                    "Final approach",         // MISSION_STAGE_FINAL_APPROACH
+                    "Unloading at destination",// MISSION_STAGE_MARKET_DOCK
+                    "Cooldown"                // MISSION_STAGE_COOLDOWN
+                };
+                // Station cumulative revenue header.
+                f32 rev = station_revenue_get(s, sid);
+                CON_SNPRINTF("Station revenue: %.0f credits\n", rev);
+                if (s->galaxy.missions) {
+                    for (i32 mi = 0; mi < s->galaxy.mission_count; ++mi) {
+                        const ShipMission& m = s->galaxy.missions[mi];
+                        if (m.station_id != sid) continue;
+                        const char* dest_name = "?";
+                        if (m.dest_node >= 0 && m.dest_node < s->galaxy.node_count)
+                            dest_name = s->galaxy.nodes[m.dest_node].name;
+                        const char* good_name = (m.cargo_good < GOOD_COUNT) ? TRADE_GOOD_NAMES[m.cargo_good] : "?";
+                        const char* stage_lbl = (m.stage < 8) ? STAGE_LABELS[m.stage] : "Unknown";
+                        if (off > 0 && off < (i32)sizeof(hud.station_insp_contracts))
+                            off += snprintf(hud.station_insp_contracts + off, sizeof(hud.station_insp_contracts) - off, "\n\n");
+                        if (m.active) {
+                            CON_SNPRINTF("Contract #%d\n  Destination : %s\n  Cargo       : %s \xE2\x80\x94 %.0f units\n  Reward      : %.0f credits\n  Status      : %s",
+                                         mi, dest_name, good_name, m.cargo_units, m.reward_credits, stage_lbl);
+                            if (m.return_cargo_units > 0.0f && m.return_cargo_good < GOOD_COUNT) {
+                                const char* ret_name = TRADE_GOOD_NAMES[m.return_cargo_good];
+                                CON_SNPRINTF("\n  Return      : %s \xE2\x80\x94 %.0f units\n  Return reward: %.0f credits",
+                                             ret_name, m.return_cargo_units, m.return_reward);
+                            }
+                        } else {
+                            CON_SNPRINTF("Contract #%d\n  Destination : %s\n  Status      : Cooldown (%.1fh to new contract)",
+                                         mi, dest_name, m.respawn_hours);
+                        }
+                    }
+                }
+                if (off == 0)
+                    snprintf(hud.station_insp_contracts, sizeof(hud.station_insp_contracts), "No contracts available.");
+                #undef CON_SNPRINTF
+            }
+        }
+    }
+
+    bs_rml_hud_update(&hud);
+
+    // ---- Drain the button clicks the document produced this frame -----------------------
+    char action[BS_RML_ACTION_CAP];
+    while (bs_rml_hud_poll_action(action, sizeof(action)) > 0) {
+        if (strcmp(action, "close_discoveries") == 0) {
+            s->show_discoveries = false;
+            continue;
+        }
+        // Time control: "time:M" sets the speed multiplier directly (0=pause, 1/3/5/10 = tiers).
+        // Parse the full integer after the prefix so multi-digit tiers (e.g. "time:10") work.
+        if (strncmp(action, "time:", 5) == 0) {
+            i32 mult = 0;
+            for (const char* p = action + 5; *p >= '0' && *p <= '9'; ++p) mult = mult * 10 + (*p - '0');
+            s->time_scale = (f32)mult;
+            if (mult == 0) action_log_push(s, "Game paused.");
+            else           action_log_push(s, "Speed set to %dx.", mult);
+            continue;
+        }
+        // Fleet ship panel: pilot/auto-pilot toggle + weapon selection.
+        if (strcmp(action, "fleet_mode") == 0) {
+            s->rts_controls.hud_toggle_pilot_mode();
+            continue;
+        }
+        if (strncmp(action, "weapon:", 7) == 0) {
+            i32 wi = action[7] - '0';
+            FleetShip* p = s->fleet_state.fleet.piloted();
+            if (!p) p = &s->fleet_state.fleet.at(0);
+            if (p && wi >= 0 && wi < p->ship.weapon_count) p->ship.active_weapon_idx = wi;
+            continue;
+        }
+        // Flagship inspector: toggle/close the window + arsenal weapon selection (flagship-targeted).
+        if (strcmp(action, "toggle_inspector") == 0) {
+            s->show_flagship_inspector = !s->show_flagship_inspector;
+            continue;
+        }
+        if (strcmp(action, "close_inspector") == 0) {
+            s->show_flagship_inspector = false;
+            continue;
+        }
+        if (strcmp(action, "station_inspect") == 0) {
+            s->inspect_station_id      = s->station_menu_station_id;
+            s->show_station_inspector  = true;
+            s->station_menu_visible    = false;
+            s->station_insp_tab        = 0;   // default to Dock tab
+            continue;
+        }
+        if (strcmp(action, "close_station_inspector") == 0) {
+            s->show_station_inspector = false;
+            continue;
+        }
+        if (strncmp(action, "station_tab:", 12) == 0) {
+            s->station_insp_tab = action[12] - '0';
+            continue;
+        }
+        // Arsenal drag source armed on dragstart. "inv:K" = an unmounted weapon in the loadout
+        // stash; "hp:M" = a weapon mounted on hardpoint M; "defdrag" = the point-defense from the
+        // defensive inventory; "hpd:M" = the point-defense mounted on hardpoint M. The following
+        // drop reads this armed source (kind): "slot:M" onto a hardpoint, "stash" onto the offensive
+        // inventory (unmount weapon), or "defstash" onto the defensive inventory (unmount PD).
+        if (strncmp(action, "inv:", 4) == 0) {
+            s->pending_weapon_drag      = action[4] - '0';
+            s->pending_weapon_drag_kind = 1;   // unmounted offensive weapon (stash)
+            continue;
+        }
+        if (strncmp(action, "hpd:", 4) == 0) {
+            s->pending_weapon_drag      = action[4] - '0';
+            s->pending_weapon_drag_kind = 3;   // mounted point-defense
+            continue;
+        }
+        if (strncmp(action, "hp:", 3) == 0) {
+            s->pending_weapon_drag      = action[3] - '0';
+            s->pending_weapon_drag_kind = 0;   // mounted offensive weapon
+            continue;
+        }
+        if (strcmp(action, "defdrag") == 0) {
+            s->pending_weapon_drag      = 0;   // src unused for the point-defense
+            s->pending_weapon_drag_kind = 2;   // unmounted point-defense (defensive inventory)
+            continue;
+        }
+        // Arsenal drop onto a hardpoint slot M (type-agnostic — a slot holds an offensive weapon OR
+        // the point-defense). The armed source kind decides the action; a displaced occupant returns
+        // to its own inventory (weapon -> offensive stash, point-defense -> defensive inventory).
+        if (strncmp(action, "slot:", 5) == 0) {
+            i32 dst = action[5] - '0';
+            Ship& fs = s->player_ship();
+            i32 src  = s->pending_weapon_drag;
+            i32 kind = s->pending_weapon_drag_kind;
+            if (dst >= 0 && dst < SHIP_MAX_WEAPONS) {
+                if (kind == 1 && src >= 0 && src < fs.weapon_stash_count) {
+                    // Mount an unmounted offensive weapon onto hardpoint dst; evict any occupant.
+                    Weapon* mounting = fs.weapon_stash[src];
+                    if (fs.weapons[dst]) {
+                        ship_stash_append(fs, fs.weapons[dst]);       // occupant weapon -> offensive stash
+                    } else if (fs.point_defense_slot == dst) {
+                        fs.point_defense_slot    = -1;                // occupant PD -> defensive inventory
+                        fs.point_defense.enabled = FALSE;
+                    }
+                    fs.weapons[dst] = mounting;
+                    ship_stash_remove_at(fs, src);
+                    if (fs.active_weapon_idx < 0) fs.active_weapon_idx = dst; // first mount becomes active
+                    ship_rehome_weapons(fs);
+                    action_log_push(s, "%s mounted on hardpoint %d.",
+                                    mounting && mounting->name ? mounting->name : "Weapon", dst + 1);
+                } else if (kind == 0 && src >= 0 && src < SHIP_MAX_WEAPONS && src != dst && fs.weapons[src]) {
+                    // Rearrange a mounted offensive weapon from hardpoint src onto hardpoint dst.
+                    if (fs.weapons[dst]) {
+                        Weapon* tmp     = fs.weapons[src];            // dst holds a weapon -> swap
+                        fs.weapons[src] = fs.weapons[dst];
+                        fs.weapons[dst] = tmp;
+                        if      (fs.active_weapon_idx == src) fs.active_weapon_idx = dst;
+                        else if (fs.active_weapon_idx == dst) fs.active_weapon_idx = src;
+                    } else if (fs.point_defense_slot == dst) {
+                        fs.weapons[dst]       = fs.weapons[src];      // dst holds PD -> exchange places
+                        fs.weapons[src]       = nullptr;
+                        fs.point_defense_slot = src;
+                        if (fs.active_weapon_idx == src) fs.active_weapon_idx = dst;
+                    } else {
+                        fs.weapons[dst] = fs.weapons[src];            // dst empty -> move
+                        fs.weapons[src] = nullptr;
+                        if (fs.active_weapon_idx == src) fs.active_weapon_idx = dst;
+                    }
+                    ship_rehome_weapons(fs);
+                    action_log_push(s, "Weapon moved to hardpoint %d.", dst + 1);
+                } else if (kind == 2 && fs.point_defense_slot != dst) {
+                    // Mount the point-defense (from the defensive inventory) onto hardpoint dst.
+                    if (fs.weapons[dst]) {
+                        ship_stash_append(fs, fs.weapons[dst]);       // occupant weapon -> offensive stash
+                        fs.weapons[dst] = nullptr;
+                    }
+                    fs.point_defense_slot    = dst;
+                    fs.point_defense.enabled = TRUE;
+                    ship_rehome_weapons(fs);
+                    action_log_push(s, "Point Defense Laser mounted on hardpoint %d.", dst + 1);
+                } else if (kind == 3 && src == fs.point_defense_slot && src != dst) {
+                    // Move the mounted point-defense from hardpoint src onto hardpoint dst.
+                    if (fs.weapons[dst]) {
+                        fs.weapons[src] = fs.weapons[dst];            // dst holds a weapon -> exchange places
+                        fs.weapons[dst] = nullptr;
+                        if (fs.active_weapon_idx == dst) fs.active_weapon_idx = src;
+                    }
+                    fs.point_defense_slot = dst;
+                    ship_rehome_weapons(fs);
+                    action_log_push(s, "Point Defense Laser moved to hardpoint %d.", dst + 1);
+                }
+            }
+            s->pending_weapon_drag = -1;
+            continue;
+        }
+        // Arsenal drop onto the offensive inventory (left list): UNMOUNT a mounted weapon back into
+        // the stash. Any other source dropped here is a no-op.
+        if (strcmp(action, "stash") == 0) {
+            Ship& fs = s->player_ship();
+            i32 src  = s->pending_weapon_drag;
+            i32 kind = s->pending_weapon_drag_kind;
+            if (kind == 0 && src >= 0 && src < SHIP_MAX_WEAPONS && fs.weapons[src]) {
+                Weapon* w = fs.weapons[src];
+                fs.weapons[src] = nullptr;
+                ship_stash_append(fs, w);
+                ship_rehome_weapons(fs);
+                action_log_push(s, "%s returned to inventory.", w->name ? w->name : "Weapon");
+            }
+            s->pending_weapon_drag = -1;
+            continue;
+        }
+        // Arsenal drop onto the defensive inventory (left list): UNMOUNT the point-defense. Any other
+        // source dropped here is a no-op.
+        if (strcmp(action, "defstash") == 0) {
+            Ship& fs = s->player_ship();
+            i32 kind = s->pending_weapon_drag_kind;
+            if (kind == 3 && fs.point_defense_slot >= 0) {
+                i32 slot = fs.point_defense_slot;
+                fs.point_defense_slot    = -1;
+                fs.point_defense.enabled = FALSE;
+                ship_rehome_weapons(fs);
+                action_log_push(s, "Point Defense Laser returned to inventory (was hardpoint %d).", slot + 1);
+            }
+            s->pending_weapon_drag = -1;
+            continue;
+        }
+        const char* msg = nullptr;
+        if      (strcmp(action, "engage")  == 0) msg = "Engage selected.";
+        else if (strcmp(action, "avoid")   == 0) msg = "Avoid selected.";
+        else if (strcmp(action, "hail")    == 0) msg = "Hail selected.";
+        else if (strcmp(action, "observe") == 0) msg = "Observe selected.";
+        if (msg) {
+            s->encounter_active = FALSE;
+            action_log_push(s, "%s", msg);
+        }
+    }
+}
 
 b8 game_update(Game* game_inst, f32 dt) {
 
@@ -714,11 +1475,41 @@ b8 game_update(Game* game_inst, f32 dt) {
 
     BS_PROFILE(&s->profiler, PROF_UPDATE_TOTAL);
 
+    // Phase A: while in the New Game setup screen or the staged generation, run only the generation
+    // step (if any) and skip the entire gameplay update — the galaxy does not exist yet.
+    if (s->app_phase != APP_PLAYING) {
+        if (s->app_phase == APP_GENERATING) run_generation_stage(s);
+        return TRUE;
+    }
+
     if (dt > 0.05f) dt = 0.05f; // clamp hitches
 
     f32 sim_dt = dt * s->time_scale;
 
     if (sim_dt > 0.05f) sim_dt = 0.05f; // still clamp scaled hitches
+
+    // Advance the shared in-game calendar: 1 real second = 1 in-game hour at 1x (scaled by time_scale
+    // through sim_dt). This single clock drives both local gameplay and the galaxy history/news.
+    s->sim_hours += (f64)sim_dt;
+
+    galaxy_history_live_tick(s, sim_dt);   // Phase C1: the galaxy lives on the shared calendar clock
+    ship_missions_update(s, sim_dt);       // Cross-system Ship AI: advance macro travelers along lanes
+
+    // Feature B: the local patrol serves the OWNER of the player's current system (the flagship's
+    // nearest node). In wild / unclaimed space it defaults to pirates. Each frame we tag the patrol
+    // hull with that faction, label it, and resolve hostility per-faction (folds transitive stance).
+    {
+        i32 pnode  = galaxy_nearest_node(s, &s->fleet_state.fleet.flagship().ship.origin);
+        i32 powner = galaxy_history_owner_at_node(s, pnode);
+        s->galaxy.current_owner_civ = (i16)powner;
+
+        i16 pfac = (powner >= 0) ? (i16)powner : FACTION_PIRATE;
+        s->fleet_state.enemy_ship.faction_id = pfac;
+        galaxy_history_faction_label(s, pfac, s->fleet_state.patrol_name,
+                                     (i32)sizeof(s->fleet_state.patrol_name));
+        s->fleet_state.enemy_ship.vessel_name = s->fleet_state.patrol_name;
+        s->galaxy.current_hostile = galaxy_history_faction_is_hostile(s, pfac);
+    }
 
     s->profiler.begin(PROF_OUT_SENSOR_FX);
 
@@ -757,46 +1548,66 @@ b8 game_update(Game* game_inst, f32 dt) {
 
     }
 
-    // ---- TAB key: recenter the camera on the player ship, then follow it (works at any zoom) --
+    // ---- V key: toggle the flagship's three-layer sensor rings in global mode -----------
+
+    if (input_is_key_down(KEY_V) && !input_was_key_down(KEY_V) && s->view.mode == MODE_GLOBAL) {
+
+        s->show_sensor_layers = !s->show_sensor_layers;
+
+        action_log_push(s, "Sensor layers %s.", s->show_sensor_layers ? "ON" : "OFF");
+
+    }
+
+    // ---- TAB key: toggle pilot <-> auto-pilot/RTS. Piloting -> instant detach to the free camera
+    // at the current view. Auto-pilot -> smooth glide back onto the ship, ending in ship-follow. --
 
     if (input_is_key_down(KEY_TAB) && !input_was_key_down(KEY_TAB)) {
 
-        s->galaxy.map_recentering       = TRUE;
+        s->planet_approach.engaged = FALSE; s->planet_approach.weight = 0.0f; // TAB toggle releases any planet capture
 
-        s->galaxy.map_recenter_t        = 0.0f;
+        if (!s->camera_state.free_camera_active) {
 
-        s->galaxy.map_recenter_from_pos = game_camera_center_hierpos(s); // true-world start center for the ease
+            // Piloting -> auto-pilot / RTS: detach the free camera where the view currently sits.
 
-        s->camera_state.free_camera_active    = TRUE;                  // detached while animating; follow at the end
+            s->camera_state.free_camera_active       = TRUE;
 
-        action_log_push(s, "'TAB' key pressed - camera recentering on player ship");
+            s->camera_state.free_camera_pos          = game_camera_center_hierpos(s);
+
+            s->camera_state.global_free_camera_saved = TRUE; // deliberate free-camera intent (Model A)
+
+            action_log_push(s, "Auto-pilot / RTS - free camera.");
+
+        } else {
+
+            // Auto-pilot -> piloting: glide the detached center onto the ship, then follow.
+
+            s->camera_state.recentering       = TRUE;
+
+            s->camera_state.recenter_t        = 0.0f;
+
+            s->camera_state.recenter_from_pos = game_camera_center_hierpos(s);
+
+            // Taking manual control stops the ship following RTS orders (matches Fleet::set_piloted),
+
+            // so a stale move/attack target can't fly it back to the last assigned position later.
+
+            if (FleetShip* p = s->fleet_state.fleet.piloted()) { p->clear_move_target(); p->clear_attack_target(); }
+
+            action_log_push(s, "Piloting - recentering on ship.");
+
+        }
 
     }
 
     // ---- M key: retired. The arena <-> galaxy-map "look" is now driven continuously by zoom, so
     // there is no discrete mode to toggle here anymore. ----------------------------------------
 
-    // ---- P key: toggle detached free camera <-> following the piloted ship (works at any zoom) --
+    // ---- P key: RETIRED. Pilot <-> auto-pilot/RTS is toggled by TAB (and the HUD pilot button). --
 
-    if (input_is_key_down(KEY_P) && !input_was_key_down(KEY_P)) {
-
-        if (!s->camera_state.free_camera_active) {
-
-            s->camera_state.free_camera_active = TRUE;
-
-            s->camera_state.free_camera_pos    = game_camera_center_hierpos(s);
-
-            action_log_push(s, "Free camera active.");
-
-        } else {
-
-            s->camera_state.free_camera_active = FALSE;
-
-            action_log_push(s, "Free camera disabled - following ship.");
-
-        }
-
-    }
+    // ---- Planet approach is now a PASSIVE, zoom-based feed-forward follow (see the capture block
+    // in the camera update below): no click to engage and no key to release. Zoom toward a planet
+    // and the camera captures + follows it; pan/zoom away and it eases off. (The old double-click
+    // travel+lock and the X-release were removed in favour of this.) ------------------------------
 
     // ---- Profiling A/B toggles (F6..F9): isolate GPU fill cost of individual layers ----------
 
@@ -824,6 +1635,117 @@ b8 game_update(Game* game_inst, f32 dt) {
 
     }
 
+    if (input_is_key_down(KEY_F10) && !input_was_key_down(KEY_F10)) {
+
+        s->galaxy.map_draw_habitability = s->galaxy.map_draw_habitability ? FALSE : TRUE;
+
+        action_log_push(s, s->galaxy.map_draw_habitability ? "[F10] Habitability overlay ON" : "[F10] Habitability overlay OFF");
+
+    }
+
+    if (input_is_key_down(KEY_F11) && !input_was_key_down(KEY_F11)) {
+
+        s->galaxy.map_draw_civs = s->galaxy.map_draw_civs ? FALSE : TRUE;
+
+        action_log_push(s, s->galaxy.map_draw_civs ? "[F11] Civilization markers ON" : "[F11] Civilization markers OFF");
+
+    }
+
+    if (input_is_key_down(KEY_F12) && !input_was_key_down(KEY_F12)) {
+
+        bs_rml_debugger_toggle(); // dev tool: RmlUi element inspector / live RCSS (in-game UI)
+
+        action_log_push(s, "[F12] RmlUi debugger toggled");
+
+    }
+
+    if (input_is_key_down(KEY_L) && !input_was_key_down(KEY_L)) {
+
+        s->galaxy.show_legends = s->galaxy.show_legends ? FALSE : TRUE;
+
+        action_log_push(s, s->galaxy.show_legends ? "[L] Galaxy legends ON" : "[L] Galaxy legends OFF");
+
+    }
+
+    if (input_is_key_down(KEY_N) && !input_was_key_down(KEY_N)) {
+
+        s->galaxy.show_news = s->galaxy.show_news ? FALSE : TRUE;
+
+        action_log_push(s, s->galaxy.show_news ? "[N] Galactic news ON" : "[N] Galactic news OFF");
+
+    }
+
+    if (input_is_key_down(KEY_I) && !input_was_key_down(KEY_I)) {
+
+        s->galaxy.show_inspector = s->galaxy.show_inspector ? FALSE : TRUE;
+
+        action_log_push(s, s->galaxy.show_inspector ? "[I] Civ inspector ON" : "[I] Civ inspector OFF");
+
+    }
+
+    if (input_is_key_down(KEY_H) && !input_was_key_down(KEY_H)) {
+
+        s->galaxy.show_houses = s->galaxy.show_houses ? FALSE : TRUE;
+
+        action_log_push(s, s->galaxy.show_houses ? "[H] Dynastic houses ON" : "[H] Dynastic houses OFF");
+
+    }
+
+    if (input_is_key_down(KEY_O) && !input_was_key_down(KEY_O)) {
+
+        s->show_discoveries = !s->show_discoveries;
+
+        action_log_push(s, s->show_discoveries ? "[O] Discoveries browser ON" : "[O] Discoveries browser OFF");
+
+    }
+
+    // Feature B: the F3 debug faction-pin has been retired. Real jump-travel now resolves the
+    // current system's owner from the flagship's nearest node, so the patrol reflects the true
+    // faction wherever you fly. Test transitive stance by aiding a civ (F5) then entering an enemy's
+    // space. (s->galaxy.debug_force_civ is left unused for save-format stability.)
+
+    // DEBUG (F3): teleport the fleet to a civ-vs-civ war frontier so the garrison grind is verifiable.
+    // Repeated presses cycle through frontiers; a border that is not already at war is forced to war.
+    if (input_is_key_down(KEY_F3) && !input_was_key_down(KEY_F3)) {
+        static i32 s_last_frontier = -1;
+        i32 ca = -1, cb = -1;
+        i32 node = galaxy_history_debug_war_frontier(s, s_last_frontier, &ca, &cb);
+        if (node >= 0) {
+            s_last_frontier = node;
+            HierPos2 dest = s->galaxy.nodes[node].galaxy_center;
+            HierPos2 flag = s->fleet_state.fleet.flagship().ship.origin;
+            Vec2 delta = hierpos_diff(&dest, &flag);
+            for (i32 i = 0; i < s->fleet_state.fleet.count(); ++i) {
+                FleetShip& fs = s->fleet_state.fleet.at(i);
+                fs.ship.origin = hierpos_add_vec2(&fs.ship.origin, delta);
+                fs.flight.velocity = bs_math::Vec2{ 0.0f, 0.0f };
+                fs.clear_move_target();
+                fs.clear_attack_target();
+            }
+            s->camera_state.free_camera_pos = dest;   // move the RTS free camera along too
+            s->npc_spawned_node = -1;                 // force the garrison to re-materialize here
+            char msg[128];
+            snprintf(msg, sizeof(msg), "[F3] War frontier: %s vs %s (open I to watch the garrison)",
+                     (ca >= 0 ? s->galaxy.civs[ca].name : "?"), (cb >= 0 ? s->galaxy.civs[cb].name : "?"));
+            action_log_push(s, msg);
+        } else {
+            action_log_push(s, "[F3] No inter-civ frontier found");
+        }
+    }
+
+    // Phase C2 debug: perturb the faction whose space the player is in (proxy for real actions).
+    if (input_is_key_down(KEY_F4) && !input_was_key_down(KEY_F4)) {
+        i32 pc = s->galaxy.current_owner_civ;
+        if (pc >= 0) { galaxy_history_player_raid(s, pc, s->galaxy.civs[pc].power * 0.2f + 5.0f);
+                       action_log_push(s, "[F4] Raided the current faction"); }
+    }
+
+    if (input_is_key_down(KEY_F5) && !input_was_key_down(KEY_F5)) {
+        i32 pc = s->galaxy.current_owner_civ;
+        if (pc >= 0) { galaxy_history_player_aid(s, pc, 20.0f);
+                       action_log_push(s, "[F5] Aided the current faction"); }
+    }
+
     if (input_is_key_down(KEY_F9) && !input_was_key_down(KEY_F9)) {
 
         b8 imm = renderer_is_present_immediate() ? FALSE : TRUE;
@@ -836,9 +1758,10 @@ b8 game_update(Game* game_inst, f32 dt) {
 
     }
 
-    // Cache which system the ship is in (always updated for gameplay logic).
+    // Reconcile the materialised hot cache with the systems nearest the camera and cache which
+    // system is current (galaxy_materialize_update sets s->galaxy.current_system).
 
-    s->galaxy.current_system = find_system_by_cell(&s->galaxy.map_entities[0].galaxy_pos, &s->galaxy.galaxy_voronoi, s->galaxy.systems);
+    galaxy_materialize_update(s);
 
     update_zoom_and_mode(s, dt);
 
@@ -898,13 +1821,7 @@ b8 game_update(Game* game_inst, f32 dt) {
 
         // Middle-mouse drag: screen-space delta -> world delta (no live-camera feedback loop).
 
-        if (!input_is_button_down(BUTTON_MIDDLE)) {
-
-            s->galaxy.map_drag_needs_fresh_press = FALSE;
-
-        }
-
-        if (!s->galaxy.map_drag_needs_fresh_press && input_is_button_down(BUTTON_MIDDLE)) {
+        if (input_is_button_down(BUTTON_MIDDLE)) {
 
             if (!input_was_button_down(BUTTON_MIDDLE)) {
 
@@ -964,9 +1881,11 @@ b8 game_update(Game* game_inst, f32 dt) {
 
         turn_commanded = control_ship_global(s, pf, sim_dt);
 
-        // ---- Weapon firing (left click, gated on ImGui not owning the cursor) ------------
+        // ---- Weapon firing (left click, gated on neither UI layer owning the cursor) ------
 
-        if (!s->editor.edit_mode_active && !s->camera_state.free_camera_active && !bs_imgui_wants_mouse()) {
+        // Also suppressed while the flagship inspector is open: it is a management window, so a
+        // left-click anywhere (inside or outside its bounds) must never fire the active weapon.
+        if (!s->editor.edit_mode_active && !s->camera_state.free_camera_active && !s->show_flagship_inspector && !bs_imgui_wants_mouse() && !bs_rml_wants_mouse()) {
 
             // weapon slot switching: 1-4
 
@@ -1044,9 +1963,13 @@ b8 game_update(Game* game_inst, f32 dt) {
 
     // ---- RTS controls update (orders, selection, hover) --------------------------------
 
+    // Runs on REAL dt (not sim_dt): input, free-camera panning, and UI marquee animations must be
+
+    // unaffected by the time scale -- they keep working while paused and never speed up at 3x/5x/10x.
+
     s->profiler.begin(PROF_RTS);
 
-    s->rts_controls.update(sim_dt);
+    s->rts_controls.update(dt);
 
     s->profiler.end(PROF_RTS);
 
@@ -1088,14 +2011,29 @@ b8 game_update(Game* game_inst, f32 dt) {
 
         s->profiler.end(PROF_SHIP_COLLISION);
 
-        // Hardcoded demo: enemy ship orbits the player flagship.
+        // Static enemy: track + fire on the flagship when it enters the detector radius.
 
-        combat_arena_update_enemy_orbit(s, sim_dt);
+        combat_arena_update_enemy_ai(s, sim_dt);
+
+        // General Ship AI: population manager + per-agent behavior (move + fire).
+
+        ai_ships_update(s, sim_dt);
 
     }
 
+    // General Ship AI: (re)register active NPC agents into the combat-entity pool each frame so the
+
+    // projectile sweep + RTS targeting see them. Runs every frame (incl. edit mode) before the sync.
+
+    ai_ships_register_combat(s);
+
     // ---- Sync combat entity positions / velocities from their ships (sim/combat_arena.cpp) --
     combat_arena_sync_entities(s, sim_dt);
+
+    // ---- Point-defense lasers: intercept incoming hostile projectiles (sim/point_defense.cpp) --
+    // Runs after positions are synced and BEFORE projectiles advance, so destroyed threats
+    // never move / collide this frame. Records active beams into s->defense_beams for the overlay.
+    point_defense_update(s, sim_dt);
 
     // ---- Update projectiles + projectile/entity collision (sim/combat_arena.cpp) ------------
     combat_arena_update_projectiles(s, sim_dt);
@@ -1104,11 +2042,16 @@ b8 game_update(Game* game_inst, f32 dt) {
     // Rebuild the generic map entity list every frame (sim/galaxy_map.cpp).
     galaxy_map_sync_entities(s);
 
+    // ---- Orbital motion: advance planets BEFORE the camera rebase below, so a followed planet's
+    // camera target matches where the planet is actually drawn this frame. Otherwise the 1-frame
+    // lag is magnified at high zoom and the camera "zooms past" the planet. ----------------------
+    galaxy_map_update_orbits(s, sim_dt);
+
     // Camera follows the piloted ship, or holds a detached free-camera / edit center -- the SAME
 
     // model at every zoom (arena and galaxy-map looks). The renderer draws each entity at
 
-    // comp*(world - camera_hierpos), then camera2d subtracts camera.position; we choose ONE
+    // (world - camera_hierpos), then camera2d subtracts camera.position; we choose ONE
 
     // true-world center per frame, fold it into camera_hierpos (canonicalized, keeps f32 coords
 
@@ -1116,30 +2059,249 @@ b8 game_update(Game* game_inst, f32 dt) {
 
     {
 
-        // Recenter animation (TAB): ease the detached center onto the piloted ship, then follow.
+        // Recenter glide (TAB re-pilot / HUD pilot button / galaxy on-screen re-entry): ease the
+        // detached center onto the piloted ship, then hand control back to ship-follow (piloting).
 
-        if (s->galaxy.map_recentering) {
+        if (s->camera_state.recentering) {
 
-            s->galaxy.map_recenter_t += dt / 0.80f; // ~0.8 second duration
+            s->camera_state.recenter_t += dt / 0.80f; // ~0.8 second duration
 
-            if (s->galaxy.map_recenter_t > 1.0f) s->galaxy.map_recenter_t = 1.0f;
+            if (s->camera_state.recenter_t > 1.0f) s->camera_state.recenter_t = 1.0f;
 
-            f32 eased = s->galaxy.map_recenter_t * s->galaxy.map_recenter_t * (3.0f - 2.0f * s->galaxy.map_recenter_t);
+            f32 eased = s->camera_state.recenter_t * s->camera_state.recenter_t * (3.0f - 2.0f * s->camera_state.recenter_t);
 
             HierPos2 ship = piloted_ship_origin(s);
 
-            s->camera_state.free_camera_pos = hierpos_lerp(&s->galaxy.map_recenter_from_pos, &ship, eased,
+            s->camera_state.free_camera_pos = hierpos_lerp(&s->camera_state.recenter_from_pos, &ship, eased,
 
                                               BS_HIERPOS_CELL_SIZE);
 
-            if (s->galaxy.map_recenter_t >= 1.0f) {
+            if (s->camera_state.recenter_t >= 1.0f) {
 
-                s->galaxy.map_recentering    = FALSE;
+                s->camera_state.recentering        = FALSE;
 
                 s->camera_state.free_camera_active = FALSE; // hand control back to ship-follow
 
+                s->camera_state.global_free_camera_saved = FALSE; // deliberate piloting intent (Model A)
+
             }
 
+        }
+
+        // ---- Planet approach: passive zoom-triggered feed-forward follow (replaces the double-
+        // click follow). Zoom toward an orbiting planet -> it is captured and followed. The camera
+        // moves WITH the planet each frame (velocity feed-forward -> no catch-up lag however fast
+        // the planet crosses the screen when zoomed in) and softly corrects the residual gap to
+        // keep it centred. WASD is a small bounded pan (it fights the correction). Engage/release
+        // ease via `weight`. PURE CAMERA: the simulation (planet positions) is untouched.
+        // galaxy_map_update_orbits ran just above, so positions match this frame's render.
+        if (!s->camera_state.recentering) {
+            static const f32 AP_SIZE_LO_PX   = 4.0f;    // apparent planet size where capture begins (also where the hold fades out)
+            static const f32 AP_SIZE_HI_PX   = 16.0f;   // ...and where it is fully size-eligible
+            static const f32 AP_BIG_PX       = 24.0f;   // already this big + centred -> engage w/o zooming
+            static const f32 AP_ACQUIRE_FRAC = 0.30f;   // acquire radius / half-min screen dimension
+            static const f32 AP_HOLD_FRAC    = 1.00f;   // HOLD prox edge: full follow across the clamp region, fades only when panned ~a screen-half away
+            static const f32 AP_OFFSET_FRAC  = 0.35f;   // max WASD pan offset: planet stays within this * half-min of centre
+            static const f32 AP_INNER_FRAC   = 0.35f;   // within this fraction of the edge -> full prox
+            static const f32 AP_ENGAGE_RATE  = 4.0f;    // 1/s weight ease-in
+            static const f32 AP_RELEASE_RATE = 2.0f;    // 1/s weight ease-out
+            static const f32 AP_LEAVE_RATE   = 8.0f;    // 1/s faster ease-out when zooming OUT to leave
+            static const f32 AP_SETTLE_DUR   = 0.40f;   // s: smooth ease-to-centre window on acquire (no hard snap)
+            static const f32 AP_SETTLE_RATE  = 9.0f;    // 1/s exponential ease rate during the acquire settle
+
+            auto& ap = s->planet_approach;
+            const f32 zoom = s->camera_state.camera.zoom;
+            const f32 eff_depth = s->render.depth_planet * celestial_parallax_fade(s);
+            f32 denom = 1.0f - eff_depth; if (denom < 0.05f) denom = 0.05f;
+            f32 screen_scale = zoom * denom; if (screen_scale < 1e-9f) screen_scale = 1e-9f;
+            f32 half_min = 0.5f * (f32)((s->fb_width < s->fb_height) ? s->fb_width : s->fb_height);
+            f32 poff_max = 0.85f * (f32)GALAXY_MATERIALIZE_RADIUS;
+
+            HierPos2 cam_center = s->camera_state.free_camera_active
+                                ? s->camera_state.free_camera_pos : piloted_ship_origin(s);
+
+            // 1) Nearest planet (parallax-corrected abs pos) to the camera centre, across systems.
+            // Also record the currently-HELD planet's own apparent size (independent of which planet
+            // is nearest) so a WASD pan can never swap or drop the lock -- see the sticky hold below.
+            i32 best_slot = -1, best_pi = -1; f32 best_dist = 3.4e38f, best_size_px = 0.0f;
+            HierPos2 best_target{};
+            b8 held_found = FALSE; f32 held_size_px = 0.0f, held_dist = 3.4e38f;
+            for (i32 sl = 0; sl < s->galaxy.system_count; ++sl) {
+                StarSystem& ss = s->galaxy.systems[sl];
+                b8 sl_is_held_sys = ap.engaged &&
+                    ss.galaxy_center.cell.x == ap.system_center.cell.x && ss.galaxy_center.cell.y == ap.system_center.cell.y &&
+                    ss.galaxy_center.local.x == ap.system_center.local.x && ss.galaxy_center.local.y == ap.system_center.local.y;
+                for (i32 i = 0; i < ss.planet_count; ++i) {
+                    const CelestialBody& p = ss.planets[i];
+                    if (p.semi_major_axis * zoom < 2.0f) continue; // orbit sub-2px -> ignore
+                    Vec2 poff = vec2_scale(p.position, 1.0f / denom);
+                    f32 pl = vec2_length(poff); if (pl > poff_max) poff = vec2_scale(poff, poff_max / pl);
+                    HierPos2 target = hierpos_add_vec2(&ss.galaxy_center, poff);
+                    f32 dist = vec2_length(hierpos_diff(&target, &cam_center, BS_HIERPOS_CELL_SIZE));
+                    const PlanetTypeParams& pe = s->render.star_fx.planet_params[(i32)ss.planet_props[i].type];
+                    f32 size_px = p.radius * pe.size_mul * zoom;
+                    if (dist < best_dist) {
+                        best_dist = dist; best_slot = sl; best_pi = i; best_target = target;
+                        best_size_px = size_px;
+                    }
+                    if (sl_is_held_sys && i == ap.planet_index) { held_found = TRUE; held_size_px = size_px; held_dist = dist; }
+                }
+            }
+
+            // Zoom-direction intent. Zooming OUT of a captured planet means "leave": latch ap.leaving
+            // so the screen clamp lets go and WASD can freely navigate toward other planets, while the
+            // (framing-based) follow below keeps the planet in view and fades out smoothly. Zooming
+            // back IN clears it so the clamp re-frames the planet. ap_zoom_in reused by step 3 acquire.
+            b8 ap_zoom_in  = s->camera_state.target_zoom > s->camera_state.camera.zoom * 1.005f;
+            b8 ap_zoom_out = s->camera_state.target_zoom < s->camera_state.camera.zoom * 0.995f;
+            if (ap.engaged) {
+                if (ap_zoom_out)     ap.leaving = TRUE;
+                else if (ap_zoom_in) ap.leaving = FALSE;
+            }
+
+            // 2) Target weight. STICKY HOLD: once a planet is captured it stays held no matter which
+            // planet is now nearest, so WASD panning never swaps the lock to a neighbour. The follow
+            // strength is FRAMING-based (apparent size * screen proximity): FULL while the planet is
+            // large & near centre, fading GENTLY as it shrinks (zoom-out) or is panned ~a screen-half
+            // away -- so zooming out keeps it in view and releases the lock smoothly instead of the
+            // follow cutting out and the planet flying off. The hold prox radius (AP_HOLD_FRAC) is
+            // generous so proximity stays 1 across the on-screen clamp region (no judder while panning).
+            // Not yet engaged -> acquire needs apparent-size eligibility * screen-space proximity.
+            f32 w_target = 0.0f; b8 same_as_held = FALSE;
+            if (ap.engaged && held_found) {
+                same_as_held = TRUE;
+                f32 held_sdist_px = held_dist * screen_scale;
+                f32 R_edge_px = AP_HOLD_FRAC * half_min;
+                f32 R_in_px   = R_edge_px * AP_INNER_FRAC;
+                f32 tp = clampf((R_edge_px - held_sdist_px) / fmaxf(R_edge_px - R_in_px, 1.0f), 0.0f, 1.0f);
+                f32 w_prox = tp * tp * (3.0f - 2.0f * tp);
+                f32 ts = clampf((held_size_px - AP_SIZE_LO_PX) / fmaxf(AP_SIZE_HI_PX - AP_SIZE_LO_PX, 1.0f), 0.0f, 1.0f);
+                f32 w_size = ts * ts * (3.0f - 2.0f * ts);
+                w_target = w_size * w_prox;
+            } else if (best_slot >= 0) {
+                f32 R_edge_px = AP_ACQUIRE_FRAC * half_min;
+                f32 R_in_px   = R_edge_px * AP_INNER_FRAC;
+                f32 sdist_px  = best_dist * screen_scale;
+                f32 tp = clampf((R_edge_px - sdist_px) / fmaxf(R_edge_px - R_in_px, 1.0f), 0.0f, 1.0f);
+                f32 w_prox = tp * tp * (3.0f - 2.0f * tp);
+                f32 ts = clampf((best_size_px - AP_SIZE_LO_PX) / fmaxf(AP_SIZE_HI_PX - AP_SIZE_LO_PX, 1.0f), 0.0f, 1.0f);
+                f32 w_size = ts * ts * (3.0f - 2.0f * ts);
+                w_target = w_size * w_prox;
+            }
+
+            // 3) Acquire when the player zooms toward a centred, visible planet (or one already big
+            // & centred). Engage at FULL follow strength IMMEDIATELY -- no weight ramp. A gradual
+            // ramp leaves the camera un-centred while the pre-lock cursor-pin parallax drift shoots
+            // the planet away (worst at a low parallax-fade threshold -> high eff_depth). Instant
+            // full follow == the "already locked" state (stable); the correction eases the residual.
+            // Pre-lock APPROACH signal: a visible planet near the view centre that we're zooming
+            // toward. camera_controller reads this to disable the cursor-pin during the approach, so
+            // the zoom homes on the planet instead of letting the parallax drift shoot it off (worst
+            // at a low parallax-fade threshold). 'engaged' is handled by the same gate separately.
+            f32 best_sdist_px = (best_slot >= 0) ? best_dist * screen_scale : 3.4e38f;
+            s->planet_approach.candidate = (best_slot >= 0 && best_size_px > 2.5f && ap_zoom_in &&
+                                            best_sdist_px < AP_ACQUIRE_FRAC * half_min);
+            // Lock on the FIRST zoom-in frame toward a centred visible planet -- BEFORE the pre-lock
+            // cursor-pin drift can accumulate (per-frame zoom is small/eased, so the planet is still
+            // centred on frame 1; waiting for it to grow to ~12px let the drift shoot it off first).
+            b8 ap_centered = best_sdist_px < AP_ACQUIRE_FRAC * half_min;
+            if (best_slot >= 0 && !same_as_held && !ap.leaving && best_size_px > 2.5f && ap_centered &&
+                (ap_zoom_in || best_size_px > AP_BIG_PX)) {
+                ap.engaged = TRUE; ap.planet_index = best_pi; ap.leaving = FALSE;
+                ap.system_center   = s->galaxy.systems[best_slot].galaxy_center;
+                ap.planet_abs_prev = best_target;
+                ap.weight          = 1.0f;                        // instant full follow -> no drift/lag (prevents shoot)
+                ap.settle_t        = AP_SETTLE_DUR;               // smooth ease-to-centre instead of a hard snap
+                s->camera_state.free_camera_active = TRUE;
+                s->camera_state.free_camera_pos    = cam_center;  // start the ease from the CURRENT view (no jump);
+                                                                  // step 4 glides it to the planet over AP_SETTLE_DUR
+                same_as_held = TRUE;
+            }
+
+            // 4) Feed-forward follow of the held planet (kept through the whole release fade).
+            if (ap.engaged) {
+                i32 slot = -1;
+                for (i32 sl = 0; sl < s->galaxy.system_count; ++sl) {
+                    const HierPos2& gc = s->galaxy.systems[sl].galaxy_center;
+                    if (gc.cell.x == ap.system_center.cell.x && gc.cell.y == ap.system_center.cell.y &&
+                        gc.local.x == ap.system_center.local.x && gc.local.y == ap.system_center.local.y) { slot = sl; break; }
+                }
+                StarSystem* fs = (slot >= 0) ? &s->galaxy.systems[slot] : nullptr;
+                if (!fs || ap.planet_index < 0 || ap.planet_index >= fs->planet_count) {
+                    ap.weight += (0.0f - ap.weight) * (1.0f - expf(-AP_RELEASE_RATE * dt)); // system gone -> fade out
+                    if (ap.weight < 0.003f) { ap.engaged = FALSE; ap.weight = 0.0f; ap.leaving = FALSE; }
+                } else {
+                    s->galaxy.current_system = slot; // keep the arena renderer drawing this system
+                    Vec2 poff = vec2_scale(fs->planets[ap.planet_index].position, 1.0f / denom);
+                    f32 pl = vec2_length(poff); if (pl > poff_max) poff = vec2_scale(poff, poff_max / pl);
+                    HierPos2 target = hierpos_add_vec2(&fs->galaxy_center, poff);
+
+                    f32 target_w = same_as_held ? w_target : 0.0f;
+                    f32 rate = (target_w > ap.weight) ? AP_ENGAGE_RATE
+                                                      : (ap.leaving ? AP_LEAVE_RATE : AP_RELEASE_RATE);
+                    ap.weight += (target_w - ap.weight) * (1.0f - expf(-rate * dt));
+
+                    // FULL-strength velocity FEED-FORWARD (NOT scaled by the release weight): move WITH
+                    // the planet's motion AND its parallax-denom motion exactly each frame, so it never
+                    // drifts out of frame -- while the camera KEEPS whatever offset WASD has set. Full
+                    // velocity is CRITICAL for planets FAR from their star: the follow target
+                    // (galaxy_center + planet.position/denom) moves a LARGE world distance as the
+                    // zoom-fade denom changes on zoom-out, so any under-follow (weight<1) there would
+                    // "shoot" a distant planet off screen. ap.weight is only the acquire/release timer.
+                    // Centred by the transient acquire settle just below (a smooth ease, not a snap).
+                    Vec2 vel = hierpos_diff(&target, &ap.planet_abs_prev, BS_HIERPOS_CELL_SIZE);
+                    s->camera_state.free_camera_pos =
+                        hierpos_add_vec2(&s->camera_state.free_camera_pos, vel);
+                    ap.planet_abs_prev = target;
+
+                    // Smooth ACQUIRE SETTLE: on lock the camera eases to centre the planet over a
+                    // short window instead of snapping. weight is already 1 so the feed-forward above
+                    // tracks the planet (no drift) while this closes the initial off-centre gap. It is
+                    // time-boxed (AP_SETTLE_DUR) so it hands off to pure feed-forward + WASD free-pan
+                    // and never fights panning afterwards. Skipped while leaving.
+                    if (ap.settle_t > 0.0f && !ap.leaving) {
+                        ap.settle_t -= dt;
+                        Vec2 gap = hierpos_diff(&target, &s->camera_state.free_camera_pos, BS_HIERPOS_CELL_SIZE);
+                        f32 a = 1.0f - expf(-AP_SETTLE_RATE * dt);
+                        s->camera_state.free_camera_pos =
+                            hierpos_add_vec2(&s->camera_state.free_camera_pos, vec2_scale(gap, a));
+                        if (ap.settle_t < 0.0f) ap.settle_t = 0.0f;
+                    }
+
+                    // Soft screen-edge clamp: WASD (applied earlier by rts_controls) pans the camera
+                    // freely around the locked planet, but never far enough to push it off screen. Only
+                    // the OFFSET magnitude is bounded, and only AT the boundary -- the feed-forward
+                    // above still tracks the planet, so this never re-centres or reintroduces the
+                    // parallax-fade coupling (which would fight the WASD offset the player set).
+                    // Skipped while LEAVING (zooming out) so WASD is free to navigate to other planets.
+                    Vec2 off = hierpos_diff(&s->camera_state.free_camera_pos, &target, BS_HIERPOS_CELL_SIZE);
+                    f32 off_px = vec2_length(off) * screen_scale;
+                    f32 off_max_px = AP_OFFSET_FRAC * half_min;
+                    if (!ap.leaving && off_px > off_max_px && off_px > 1e-6f) {
+                        Vec2 off_clamped = vec2_scale(off, off_max_px / off_px);
+                        s->camera_state.free_camera_pos = hierpos_add_vec2(&target, off_clamped);
+                    }
+
+                    // Zoom cap: tighten toward 0.32*fb_h apparent size as capture strengthens, so the
+                    // player can't zoom infinitely into the planet. Loosened while weight is low.
+                    const PlanetTypeParams& fpe = s->render.star_fx.planet_params[(i32)fs->planet_props[ap.planet_index].type];
+                    f32 body_scale = fs->planets[ap.planet_index].radius * fpe.size_mul;
+                    if (body_scale > 1.0f) {
+                        f32 cap = (0.32f * (f32)s->fb_height) / body_scale;
+                        // Approaching the planet -> ease zoom-IN speed down as the camera nears the
+                        // framed size (deceleration), so it glides in gently instead of rushing.
+                        f32 zt = clampf((s->camera_state.camera.zoom / cap - 0.4f) / 0.6f, 0.0f, 1.0f);
+                        ap.zoom_damp = zt * zt * (3.0f - 2.0f * zt);
+                        if (ap.weight > 0.05f) {
+                            f32 eff_cap = cap + (1.0f - ap.weight) * 100.0f;
+                            if (s->camera_state.target_zoom > eff_cap) s->camera_state.target_zoom = eff_cap;
+                            if (s->camera_state.camera.zoom  > eff_cap) s->camera_state.camera.zoom  = eff_cap;
+                        }
+                    }
+
+                    if (target_w <= 0.0f && ap.weight < 0.003f) { ap.engaged = FALSE; ap.weight = 0.0f; ap.leaving = FALSE; }
+                }
+            }
         }
 
         HierPos2 true_center;
@@ -1168,14 +2330,18 @@ b8 game_update(Game* game_inst, f32 dt) {
 
     }
 
+    // ---- Discovery system: reveal NPC ships + system stations the player has approached.
+    // Runs after NPC updates so this frame's positions are current.
+    discovery_update(s, sim_dt);
+
     // ---- Coordinate diagnostics: dump/verify HierPos2 state now that the frame's positions
 
     // and the camera anchor are finalized (throttled; compiled out in release builds).
 
     coord_diag_update(s, dt);
 
-    // ---- Orbital motion (always simulated, only visible in system view) --------------------
-    galaxy_map_update_orbits(s, sim_dt);
+    // ---- In-game UI (RmlUi): push the HUD snapshot + drain button clicks (APP_PLAYING only).
+    game_push_hud(s, dt);
 
     return TRUE;
 
@@ -1216,7 +2382,7 @@ b8 game_update(Game* game_inst, f32 dt) {
 // ---- Time-control panel: top-center toggle for pause/resume (visible in ALL modes) ----
 // draw_time_control_panel now lives in ui/editor_ui.cpp (declared via ui/editor_ui.h).
 
-// game_compression_factor / view_arena_weight moved to core/view_transform.cpp (see game.h).
+// view_arena_weight moved to core/view_transform.cpp (see game.h).
 
 // PROFILER panel -- bottom-left, collapsible per-subsystem CPU timing readout (Profiler system).
 // build_profiler_panel now lives in ui/editor_ui.cpp (declared via ui/editor_ui.h).
@@ -1230,6 +2396,11 @@ b8 game_render(Game* game_inst, f32 dt) {
     BS_PROFILE(&s->profiler, PROF_RENDER_TOTAL);
 
     s->elapsed_time += dt;
+
+    // Phase A: the New Game setup screen + generation progress are the only things drawn until
+    // gameplay begins (the galaxy is not generated yet, so skip all world rendering).
+    if (s->app_phase == APP_SETUP)      { build_new_game_setup(s);      return TRUE; }
+    if (s->app_phase == APP_GENERATING) { build_generation_progress(s); return TRUE; }
 
     // STEP 2: continuous arena<->map blend weight for this frame, derived purely from zoom. Draw
 
@@ -1250,21 +2421,55 @@ b8 game_render(Game* game_inst, f32 dt) {
 
     s->profiler.begin(PROF_UI);
 
-    // Action Log Panel -- bottom-right HUD. Shows last 3 messages (fades after 3s), expands to
+    // Action Log, Encounter modal, Nav/Ship HUD and the Discoveries browser are now RmlUi
 
-    // full 30-entry history on hover. Logs significant player actions.
-
-    if (!s->editor.edit_mode_active)
-
-        build_action_log_panel(s, dt);
-
-    // ---- Encounter panel (centered, modal) -----------------------------------------------
-
-    draw_encounter_panel(s);
+    // documents driven from game_update (game_push_hud). ImGui remains for editor/dev tools.
 
     // Editor Panel (always visible: contains the "Edit mode active" checkbox)
 
     build_editor_panel(s);
+
+    // Free-floating per-type Planet Editor window (toggled by the button in the editor panel)
+
+    if (s->render.star_fx.show_planet_editor)
+
+        s->render.star_fx.build_planet_editor();
+
+    // Galaxy Legends browser (chronicle of civilizations; toggled with L)
+
+    if (s->galaxy.show_legends)
+
+        galaxy_history_build_legends(s);
+
+    // Galactic News feed (live events from the ongoing simulation; toggled with N)
+
+    if (s->galaxy.show_news)
+
+        galaxy_history_build_news(s);
+
+    // Live Civ Inspector (owner of the player's current system + reputation; toggled with I)
+
+    if (s->galaxy.show_inspector)
+
+        galaxy_history_build_inspector(s);
+
+    // Discoveries browser (single-ship discovery log; toggled with O) is now an RmlUi document
+
+    // driven from game_update (game_push_hud); s->show_discoveries still gates its visibility.
+
+    // Dynastic Houses heredity tree (successor kingdoms rising and falling per lineage; toggled with H)
+
+    if (s->galaxy.show_houses)
+
+        galaxy_history_build_houses(s);
+
+    // Government interaction window (Parliament / Royal Court / Sacred Synod / Charter Council),
+
+    // launched from the Live Civ Inspector for the civ that owns the player's current system.
+
+    if (s->galaxy.show_gov_window)
+
+        galaxy_history_build_gov_interaction(s);
 
     // Transform panel: only in edit mode when an entity is selected
 
@@ -1272,21 +2477,13 @@ b8 game_render(Game* game_inst, f32 dt) {
 
         build_transform_panel(s);
 
-    // Time-control panel (visible in ALL modes, even edit mode)
-
-    draw_time_control_panel(s);
-
     // Per-subsystem CPU profiler panel (collapsible)
 
     build_profiler_panel(s);
 
-    // ---- Navigation HUD + Ship HUD (arena-side affordance, hidden in edit mode) -------------
+    // Navigation HUD + Ship HUD (arena-side affordance) are now RmlUi documents driven from
 
-    // Shown on the arena side of the blend band; suppressed on the galaxy-map side to avoid
-
-    // cluttering the map. Uses the arena weight midpoint so it fades in with the arena look.
-
-    draw_nav_ship_hud(s);
+    // game_update (game_push_hud), rendered beneath the ImGui editor overlay.
 
     // Periodic stats to the log (the only on-screen text is the diagnostic helm-status HUD above).
 
