@@ -9,6 +9,7 @@
 #include <renderer/renderer.h>
 #include <renderer/bs_imgui.h>
 #include <renderer/bs_rml.h>   // bs_rml_wants_mouse: in-game UI (RmlUi) owns the cursor
+#include "render/galaxy_map_render.h" // galaxy_pick_planet: planet under the cursor (map look)
 #include <renderer/camera2d.h>
 using namespace bs_math;
 // =====================================================================================
@@ -175,6 +176,20 @@ void RtsControls::update(f32 dt) {
             station_right_consumed           = TRUE;      // don't also issue an RTS move order
         } else if ((lclick || rclick) && ui_free && m_state->station_menu_visible) {
             m_state->station_menu_visible = false;        // click outside the menu dismisses it
+        }
+
+        // ---- Planet left-click -> planet inspector window (galaxy-map look only) ------------
+        // Uses the draw-accurate hit-test so only planets the player can actually see react.
+        // Selection is stored as (system galaxy_center, planet index): the cache slot can be
+        // recycled, the center cannot. The window persists until its Close box (like the
+        // station inspector); clicking empty space keeps normal RTS behavior.
+        if (lclick && ui_free && m_state->view_arena_w < 1.0f) {
+            i32 pick_slot = -1, pick_planet = -1;
+            if (galaxy_pick_planet(m_state, (f32)mx, (f32)my, &pick_slot, &pick_planet)) {
+                m_state->show_planet_inspector = true;
+                m_state->planet_insp_center    = m_state->galaxy.systems[pick_slot].galaxy_center;
+                m_state->planet_insp_planet    = pick_planet;
+            }
         }
     }
     m_dash_angle += HOVER_DASH_ROTATION_SPEED * dt;

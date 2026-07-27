@@ -335,6 +335,9 @@ b8 game_init(Game* game_inst) {
     s->show_station_inspector = false;
     s->inspect_station_id = -1;
     s->station_insp_tab = 0;
+    s->show_planet_inspector = false;
+    s->planet_insp_center = bs_math::HierPos2{};
+    s->planet_insp_planet = -1;
     s->pending_weapon_drag = -1;    // Arsenal drag-drop: no source armed
     s->pending_weapon_drag_kind = 0;
     s->ui_font_kit = 1;             // default to the "Clean" kit (Chakra Petch / Inter / JetBrains Mono)
@@ -1269,6 +1272,137 @@ static void game_push_hud(game_state* s, f32 dt) {
         }
     }
 
+    // ---- Planet inspector window (left-click a planet on the galaxy map) -----------------
+    // Selection is (system galaxy_center, planet index): resolve the cached slot by identity
+    // each frame and auto-close if the system left the materialisation cache. Every value gets
+    // its qualitative label HERE (game-side) — the engine data model only displays strings.
+    // The gauge width strings must ALWAYS hold valid CSS (same caveat as tip_left/tip_top).
+    snprintf(hud.planet_insp_hab_w, sizeof(hud.planet_insp_hab_w), "0%%");
+    snprintf(hud.planet_insp_haz_w, sizeof(hud.planet_insp_haz_w), "0%%");
+    if (s->show_planet_inspector && s->planet_insp_planet >= 0) {
+        i32 pslot = -1;
+        for (i32 si = 0; si < s->galaxy.system_count; ++si) {
+            const bs_math::HierPos2& gc = s->galaxy.systems[si].galaxy_center;
+            if (gc.cell.x == s->planet_insp_center.cell.x && gc.cell.y == s->planet_insp_center.cell.y &&
+                gc.local.x == s->planet_insp_center.local.x && gc.local.y == s->planet_insp_center.local.y) {
+                pslot = si;
+                break;
+            }
+        }
+        if (pslot < 0 || s->planet_insp_planet >= s->galaxy.systems[pslot].planet_count) {
+            s->show_planet_inspector = false;   // system evicted from the cache (player flew away)
+        } else {
+            const StarSystem& ss = s->galaxy.systems[pslot];
+            i32 pi = s->planet_insp_planet;
+            const PlanetProperties& pp = ss.planet_props[pi];
+            const EvolvedBody& eb = ss.evo.bodies[1 + pi];
+            b8 giant = eb.comp.gas > 0.35f;
+            hud.planet_insp_visible = TRUE;
+
+            static const char* ROMAN[MAX_SYSTEM_PLANETS] = { "I", "II", "III", "IV", "V", "VI" };
+            snprintf(hud.planet_insp_title, sizeof(hud.planet_insp_title), "%s %s",
+                     ss.name ? ss.name : "Unknown", ROMAN[pi]);
+
+            // Classification + trait tags.
+            {
+                i32 off = snprintf(hud.planet_insp_subtitle, sizeof(hud.planet_insp_subtitle), "%s %s",
+                                   planet_subtype_name(pp.type, pp.genome.subtype), planet_type_name(pp.type));
+                const char* tags[3];
+                i32 nt = planet_trait_names(pp.genome.trait_bits, tags, 3);
+                for (i32 t = 0; t < nt && off > 0 && off < (i32)sizeof(hud.planet_insp_subtitle) - 1; ++t)
+                    off += snprintf(hud.planet_insp_subtitle + off, sizeof(hud.planet_insp_subtitle) - (size_t)off,
+                                    "  [%s]", tags[t]);
+            }
+
+            // Gameplay gauges: habitability + hazard.
+            i32 habp = (i32)(eb.habitability * 100.0f + 0.5f);
+            i32 hazp = (i32)(eb.env_hazard * 100.0f + 0.5f);
+            snprintf(hud.planet_insp_hab_w, sizeof(hud.planet_insp_hab_w), "%d%%", habp);
+            snprintf(hud.planet_insp_haz_w, sizeof(hud.planet_insp_haz_w), "%d%%", hazp);
+            snprintf(hud.planet_insp_hab_label, sizeof(hud.planet_insp_hab_label), "Habitability  %d%%", habp);
+            const char* hazl = hazp < 25 ? "Low" : hazp < 50 ? "Moderate" : hazp < 75 ? "High" : "Extreme";
+            snprintf(hud.planet_insp_haz_label, sizeof(hud.planet_insp_haz_label), "Hazard  %s", hazl);
+
+            // Orbit / physical / environment stats (each with its qualitative label).
+            {
+                f32 grav = eb.radius_earth > 0.01f ? eb.mass_earth / (eb.radius_earth * eb.radius_earth) : 0.0f;
+                const char* eccl = eb.eccentricity < 0.05f ? "Circular" : eb.eccentricity < 0.15f ? "Mild" : "Eccentric";
+                const char* atml = giant ? "Bottomless"
+                                 : eb.atmo_pressure < 0.01f ? "None"
+                                 : eb.atmo_pressure < 0.1f  ? "Trace"
+                                 : eb.atmo_pressure < 0.5f  ? "Thin"
+                                 : eb.atmo_pressure < 2.0f  ? "Moderate"
+                                 : eb.atmo_pressure < 10.0f ? "Dense" : "Crushing";
+                const char* magl = eb.magnetic_field < 0.25f ? "Weak" : eb.magnetic_field < 0.6f ? "Moderate" : "Strong";
+                f32 geo = eb.tectonics > eb.volcanism ? eb.tectonics : eb.volcanism;
+                const char* geol = geo < 0.1f ? "Dead" : geo < 0.35f ? "Quiet" : geo < 0.7f ? "Active" : "Violent";
+                const char* biol = eb.life < 0.05f ? "Sterile" : eb.life < 0.4f ? "Microbial" : eb.life < 0.8f ? "Complex" : "Flourishing";
+                i32 off = snprintf(hud.planet_insp_stats, sizeof(hud.planet_insp_stats),
+                    "Orbit        %.2f AU  (%s)\n"
+                    "Mass         %.2f Me    Radius  %.2f Re\n"
+                    "Temperature  %.0f K  (%.0f C)\n"
+                    "Gravity      %.2f g\n"
+                    "Atmosphere   %s (%.2f atm)",
+                    eb.orbit_au, eccl, eb.mass_earth, eb.radius_earth,
+                    eb.temperature_k, eb.temperature_k - 273.15f, grav,
+                    atml, eb.atmo_pressure);
+                if (!giant && off > 0 && off < (i32)sizeof(hud.planet_insp_stats) - 1)
+                    off += snprintf(hud.planet_insp_stats + off, sizeof(hud.planet_insp_stats) - (size_t)off,
+                        "\nWater        %.0f%% coverage", eb.water_frac * 100.0f);
+                if (off > 0 && off < (i32)sizeof(hud.planet_insp_stats) - 1)
+                    off += snprintf(hud.planet_insp_stats + off, sizeof(hud.planet_insp_stats) - (size_t)off,
+                        "\nMagnetic     %s", magl);
+                if (!giant && off > 0 && off < (i32)sizeof(hud.planet_insp_stats) - 1)
+                    off += snprintf(hud.planet_insp_stats + off, sizeof(hud.planet_insp_stats) - (size_t)off,
+                        "\nGeology      %s\nBiosphere    %s", geol, biol);
+            }
+
+            // Resources + bulk-composition survey line (mining gameplay).
+            {
+                const char* rml = eb.res_metal < 0.2f ? "Poor" : eb.res_metal < 0.45f ? "Moderate" : eb.res_metal < 0.7f ? "Rich" : "Abundant";
+                const char* rvl = eb.res_volatiles < 0.2f ? "Poor" : eb.res_volatiles < 0.45f ? "Moderate" : eb.res_volatiles < 0.7f ? "Rich" : "Abundant";
+                snprintf(hud.planet_insp_comp, sizeof(hud.planet_insp_comp),
+                    "Metals       %s (%.0f%%)\n"
+                    "Volatiles    %s (%.0f%%)\n"
+                    "Survey       %.0f%% metal  %.0f%% rock  %.0f%% ice  %.0f%% gas",
+                    rml, eb.res_metal * 100.0f, rvl, eb.res_volatiles * 100.0f,
+                    eb.comp.metal * 100.0f, eb.comp.silicate * 100.0f,
+                    eb.comp.ice * 100.0f, eb.comp.gas * 100.0f);
+            }
+
+            // Moons of this planet (evo parent links).
+            {
+                hud.planet_insp_moons[0] = '\0';
+                i32 moon_base = 1 + ss.evo.planet_count;
+                i32 moff = 0, letter = 0;
+                for (i32 m = 0; m < ss.evo.moon_count; ++m) {
+                    const EvolvedBody& mb = ss.evo.bodies[moon_base + m];
+                    if (mb.parent != (i8)(1 + pi)) continue;
+                    if (moff < 0 || moff >= (i32)sizeof(hud.planet_insp_moons) - 1) break;
+                    moff += snprintf(hud.planet_insp_moons + moff, sizeof(hud.planet_insp_moons) - (size_t)moff,
+                        "%s%s-%c   %s  %.0f K%s",
+                        moff > 0 ? "\n" : "", ROMAN[pi], (char)('a' + letter),
+                        planet_type_name(mb.type), mb.temperature_k,
+                        mb.volcanism > 0.5f ? "  (tidal volcanism)" : "");
+                    ++letter;
+                }
+            }
+
+            // Chronicle: this body's evolution events + system-wide ones (disk dispersal).
+            {
+                hud.planet_insp_events[0] = '\0';
+                i32 eoff = 0;
+                for (i32 e = 0; e < ss.evo.event_count; ++e) {
+                    const EvolutionEvent& ev = ss.evo.events[e];
+                    if (ev.body != (i8)(1 + pi) && ev.other != (i8)(1 + pi) && ev.body != -1) continue;
+                    if (eoff < 0 || eoff >= (i32)sizeof(hud.planet_insp_events) - 1) break;
+                    eoff += snprintf(hud.planet_insp_events + eoff, sizeof(hud.planet_insp_events) - (size_t)eoff,
+                        "%sEpoch %-2d  %s", eoff > 0 ? "\n" : "", (i32)ev.epoch, evo_event_name(ev.kind));
+                }
+            }
+        }
+    }
+
     bs_rml_hud_update(&hud);
 
     // ---- Drain the button clicks the document produced this frame -----------------------
@@ -1318,6 +1452,10 @@ static void game_push_hud(game_state* s, f32 dt) {
         }
         if (strcmp(action, "close_station_inspector") == 0) {
             s->show_station_inspector = false;
+            continue;
+        }
+        if (strcmp(action, "close_planet_inspector") == 0) {
+            s->show_planet_inspector = false;
             continue;
         }
         if (strncmp(action, "station_tab:", 12) == 0) {

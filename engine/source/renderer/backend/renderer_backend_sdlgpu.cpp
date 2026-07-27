@@ -4071,6 +4071,18 @@ struct BsRmlHudModel
     Rml::String                 station_insp_dock;
     Rml::String                 station_insp_market;
     Rml::String                 station_insp_contracts;
+
+    bool                        planet_insp_visible = false;
+    Rml::String                 planet_insp_title;
+    Rml::String                 planet_insp_subtitle;
+    Rml::String                 planet_insp_stats;
+    Rml::String                 planet_insp_comp;
+    Rml::String                 planet_insp_moons;
+    Rml::String                 planet_insp_events;
+    Rml::String                 planet_insp_hab_w = "0%";
+    Rml::String                 planet_insp_haz_w = "0%";
+    Rml::String                 planet_insp_hab_label;
+    Rml::String                 planet_insp_haz_label;
 };
 
 static BsRmlHudModel          g_hud_model;
@@ -4196,6 +4208,18 @@ b8 bs_rml_hud_init(const char* rml_path)
     c.Bind("station_insp_dock",           &g_hud_model.station_insp_dock);
     c.Bind("station_insp_market",         &g_hud_model.station_insp_market);
     c.Bind("station_insp_contracts",      &g_hud_model.station_insp_contracts);
+
+    c.Bind("planet_insp_visible",   &g_hud_model.planet_insp_visible);
+    c.Bind("planet_insp_title",     &g_hud_model.planet_insp_title);
+    c.Bind("planet_insp_subtitle",  &g_hud_model.planet_insp_subtitle);
+    c.Bind("planet_insp_stats",     &g_hud_model.planet_insp_stats);
+    c.Bind("planet_insp_comp",      &g_hud_model.planet_insp_comp);
+    c.Bind("planet_insp_moons",     &g_hud_model.planet_insp_moons);
+    c.Bind("planet_insp_events",    &g_hud_model.planet_insp_events);
+    c.Bind("planet_insp_hab_w",     &g_hud_model.planet_insp_hab_w);
+    c.Bind("planet_insp_haz_w",     &g_hud_model.planet_insp_haz_w);
+    c.Bind("planet_insp_hab_label", &g_hud_model.planet_insp_hab_label);
+    c.Bind("planet_insp_haz_label", &g_hud_model.planet_insp_haz_label);
 
     // Click actions from the encounter buttons / discoveries close box enqueue a short string that
     // the game drains with bs_rml_hud_poll_action. The engine never mutates game state directly.
@@ -4395,6 +4419,18 @@ void bs_rml_hud_update(const bs_rml_hud_state* s)
     bs_rml_assign(g_hud_model.station_insp_dock,      s->station_insp_dock,      sizeof(s->station_insp_dock));
     bs_rml_assign(g_hud_model.station_insp_market,    s->station_insp_market,    sizeof(s->station_insp_market));
     bs_rml_assign(g_hud_model.station_insp_contracts, s->station_insp_contracts, sizeof(s->station_insp_contracts));
+
+    g_hud_model.planet_insp_visible = s->planet_insp_visible ? true : false;
+    bs_rml_assign(g_hud_model.planet_insp_title,     s->planet_insp_title,     sizeof(s->planet_insp_title));
+    bs_rml_assign(g_hud_model.planet_insp_subtitle,  s->planet_insp_subtitle,  sizeof(s->planet_insp_subtitle));
+    bs_rml_assign(g_hud_model.planet_insp_stats,     s->planet_insp_stats,     sizeof(s->planet_insp_stats));
+    bs_rml_assign(g_hud_model.planet_insp_comp,      s->planet_insp_comp,      sizeof(s->planet_insp_comp));
+    bs_rml_assign(g_hud_model.planet_insp_moons,     s->planet_insp_moons,     sizeof(s->planet_insp_moons));
+    bs_rml_assign(g_hud_model.planet_insp_events,    s->planet_insp_events,    sizeof(s->planet_insp_events));
+    bs_rml_assign(g_hud_model.planet_insp_hab_w,     s->planet_insp_hab_w,     sizeof(s->planet_insp_hab_w));
+    bs_rml_assign(g_hud_model.planet_insp_haz_w,     s->planet_insp_haz_w,     sizeof(s->planet_insp_haz_w));
+    bs_rml_assign(g_hud_model.planet_insp_hab_label, s->planet_insp_hab_label, sizeof(s->planet_insp_hab_label));
+    bs_rml_assign(g_hud_model.planet_insp_haz_label, s->planet_insp_haz_label, sizeof(s->planet_insp_haz_label));
 
     // Poll-style HUD: everything may change each frame, so just dirty the whole model.
     g_hud_handle.DirtyAllVariables();

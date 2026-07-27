@@ -625,7 +625,7 @@ enum EvoEventKind : u8 {
     EVO_EV_LIFE_EMERGED,    // biosphere crossed the emergence threshold
 };
 
-struct EvolutionEvent { u8 epoch; u8 kind; i8 body; i8 other; }; // body/other = bodies[] index (-1 = n/a)
+struct EvolutionEvent { u8 epoch; u8 kind; i8 body; i8 other; }; // body/other = bodies[] index (-1 = n/a, -2 = a protoplanet that did not survive)
 
 struct EvolvedSystem {
     EvolvedBody    bodies[MAX_SYSTEM_BODIES]; // [0]=star, [1..planet_count]=planets sorted by a, then moons, then belts
@@ -3317,6 +3317,16 @@ struct game_state {
     i32              inspect_station_id;        // station currently shown in the Inspect window (-1 = none)
 
     i32              station_insp_tab;          // active tab: 0=Dock, 1=Market, 2=Contracts
+
+
+
+    // ---- Planet inspector (left-click a planet on the galaxy map -> RML window) -------------------
+
+    bool              show_planet_inspector;    // planet inspector window open (RML)
+
+    bs_math::HierPos2 planet_insp_center;       // galaxy_center of the selected planet's system (cache-slot-independent identity)
+
+    i32               planet_insp_planet;       // planet index within that system (-1 = none)
 
 
 

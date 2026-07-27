@@ -221,6 +221,21 @@ typedef struct bs_rml_hud_state
     char               station_insp_dock[512];      // docked ships list (\n-separated, pre-formatted)
     char               station_insp_market[160];    // market goods list (\n-separated, pre-formatted)
     char               station_insp_contracts[1024]; // mission contracts list (\n-separated, pre-formatted)
+
+    // Planet inspector: a floating window opened by left-clicking a planet on the galaxy map.
+    // All text is pre-formatted GAME-SIDE (values + qualitative labels); *_w fields are CSS width
+    // strings ("NN%") binding the habitability/hazard gauge bar fills.
+    b8   planet_insp_visible;
+    char planet_insp_title[96];      // "Veyra III"
+    char planet_insp_subtitle[96];   // "Temperate Terran World" + trait tags
+    char planet_insp_stats[768];     // orbit/mass/radius/temperature/gravity + environment lines
+    char planet_insp_comp[256];      // resources + bulk composition survey lines
+    char planet_insp_moons[384];     // moon list ("" hides the section)
+    char planet_insp_events[768];    // chronicle lines ("" hides the section)
+    char planet_insp_hab_w[16];      // habitability gauge fill width ("62%")
+    char planet_insp_haz_w[16];      // hazard gauge fill width
+    char planet_insp_hab_label[32];  // "Habitability 62%"
+    char planet_insp_haz_label[32];  // "Hazard: Moderate"
 } bs_rml_hud_state;
 
 // Create the "hud" data model, load the HUD document at `rml_path`, and show it. Call once after

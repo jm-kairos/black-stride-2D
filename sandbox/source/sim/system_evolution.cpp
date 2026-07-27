@@ -389,6 +389,27 @@ static void build_body_array(ProtoCore* cores, i32 n, const StarProperties& star
     }
     out->belt_count = bc;
     out->body_count = belt_base + bc;
+
+    // Remap accretion-phase chronicle entries from ProtoCore slot indices to final bodies[]
+    // indices so the per-planet chronicle (UI) can attribute them. Cores that did not survive
+    // as a planet or belt map to -2 ("a lost protoplanet"). MOON_CAPTURED already logs final
+    // indices, and phase-3/4 events are logged after this point, so only the listed kinds remap.
+    {
+        i8 core_to_body[EVO_MAX_CORES];
+        for (i32 i = 0; i < n; ++i) core_to_body[i] = -2;
+        for (i32 k = 0; k < pc; ++k) core_to_body[order[k]] = (i8)(1 + k);
+        i32 bi = 0;
+        for (i32 i = 0; i < n && bi < bc; ++i)
+            if (cores[i].is_belt) core_to_body[i] = (i8)(belt_base + bi++);
+        for (i32 e = 0; e < out->event_count; ++e) {
+            EvolutionEvent* ev = &out->events[e];
+            if (ev->kind != EVO_EV_GIANT_FORMED && ev->kind != EVO_EV_MIGRATED
+                && ev->kind != EVO_EV_MERGER && ev->kind != EVO_EV_EJECTED
+                && ev->kind != EVO_EV_BELT_FORMED && ev->kind != EVO_EV_MOON_IMPACT) continue;
+            if (ev->body  >= 0 && ev->body  < (i8)n) ev->body  = core_to_body[ev->body];
+            if (ev->other >= 0 && ev->other < (i8)n) ev->other = core_to_body[ev->other];
+        }
+    }
 }
 
 // =====================================================================================
