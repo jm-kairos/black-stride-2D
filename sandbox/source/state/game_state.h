@@ -546,6 +546,14 @@ struct PlanetProperties {
 
 
 
+    f32 water_frac;         // evolved surface water coverage 0..1
+
+
+
+    f32 life;               // evolved biosphere accumulation 0..1
+
+
+
     b8  has_atmosphere;
 
 

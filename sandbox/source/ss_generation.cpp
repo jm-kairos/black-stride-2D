@@ -337,7 +337,9 @@ static f32 wg_subtype_physics_weight(const WGSubtype& st, const StarProperties& 
     if (st.traits & TRAIT_VOLCANIC) w *= 0.6f + 1.2f * hot;
     if (st.traits & TRAIT_METALLIC) w *= 0.6f + 1.0f * metal;
     if (st.traits & TRAIT_CRATERED) w *= 0.7f + 0.8f * age_norm;
-    if (st.traits & TRAIT_VERDANT)  w *= 0.5f + 1.5f * p.habitability;
+    if (st.traits & TRAIT_VERDANT)  w *= 0.3f + 1.7f * p.life;                        // living looks need an actual biosphere
+    if (st.traits & TRAIT_OCEANIC)  w *= 0.25f + 1.5f * wg_clamp01(p.water_frac / 0.6f); // sea-covered looks need actual water
+    if (st.traits & TRAIT_ARID)     w *= 1.3f - p.water_frac;                          // desert looks fade as water rises
     return w;
 }
 
@@ -504,17 +506,29 @@ void generate_star_system(StarSystem* sys, u64 seed, Vec2 galaxy_pos,
         pp.radius_earth   = b->radius_earth;
         pp.temperature_k  = b->temperature_k;
         pp.habitability   = b->habitability;
+        pp.water_frac     = b->water_frac;
+        pp.life           = b->life;
         pp.has_atmosphere = b->atmo_pressure > 0.05f;
         pp.has_rings      = b->comp.gas > 0.35f && rng_f32() < 0.45f;
         pp.genome = worldgen_planet_genome(sp, pp,
                         galaxy_splitmix64(seed ^ (0xC2B2AE3D27D4EB4Full * (u64)(i + 1))));
-        // Evolved state biases the visual genome (traits earned by history, not just type).
+        // Physical-claim traits are authoritative from the evolved state: clear whatever the
+        // visual archetype baked in and re-derive each from history. Purely visual bits
+        // (CLOUDY/STORMY/BANDED/EXOTIC) stay with the archetype/anomaly.
+        const u16 PHYS_TRAITS = (u16)(TRAIT_OCEANIC | TRAIT_VERDANT | TRAIT_ARID | TRAIT_ICY_CAPS
+                                    | TRAIT_VOLCANIC | TRAIT_METALLIC | TRAIT_CRATERED);
+        pp.genome.trait_bits &= (u16)~PHYS_TRAITS;
+        b8 solid = b->comp.gas <= 0.35f;
+        if (solid && b->water_frac > 0.55f) pp.genome.trait_bits |= TRAIT_OCEANIC;
+        if (solid && b->water_frac < 0.12f && b->temperature_k > 250.0f
+                  && b->atmo_pressure > 0.05f) pp.genome.trait_bits |= TRAIT_ARID;
+        if (solid && b->water_frac > 0.05f && b->temperature_k > 185.0f
+                  && b->temperature_k < 285.0f) pp.genome.trait_bits |= TRAIT_ICY_CAPS;
         if (b->volcanism  > 0.65f) pp.genome.trait_bits |= TRAIT_VOLCANIC;
-        if (b->water_frac > 0.60f) pp.genome.trait_bits |= TRAIT_OCEANIC;
-        if (b->atmo_pressure > 1.5f && b->comp.gas < 0.35f) pp.genome.trait_bits |= TRAIT_CLOUDY;
         if (b->life       > 0.50f) pp.genome.trait_bits |= TRAIT_VERDANT;
-        if (b->comp.metal > 0.40f) pp.genome.trait_bits |= TRAIT_METALLIC;
+        if (solid && b->comp.metal > 0.40f) pp.genome.trait_bits |= TRAIT_METALLIC;
         if (b->env_hazard > 0.60f && b->atmo_pressure < 0.05f) pp.genome.trait_bits |= TRAIT_CRATERED;
+        if (b->atmo_pressure > 1.5f && b->comp.gas < 0.35f) pp.genome.trait_bits |= TRAIT_CLOUDY;
         sys->planet_props[i] = pp;
 
         // Render color from planet type (slight per-planet jitter) + radius from physical size.
@@ -575,11 +589,20 @@ void generate_star_system(StarSystem* sys, u64 seed, Vec2 galaxy_pos,
         mp.radius_earth   = mb->radius_earth;
         mp.temperature_k  = mb->temperature_k;
         mp.habitability   = mb->habitability;
+        mp.water_frac     = mb->water_frac;
+        mp.life           = mb->life;
         mp.has_atmosphere = mb->atmo_pressure > 0.05f;
         mp.has_rings      = FALSE;
         mp.genome = worldgen_planet_genome(sp, mp,
                         galaxy_splitmix64(seed ^ (0x8AE8F87FDE30A967ull * (u64)(m + 1))));
+        // Same physical-trait reconciliation as planets (moons mostly clear the mask).
+        const u16 PHYS_TRAITS = (u16)(TRAIT_OCEANIC | TRAIT_VERDANT | TRAIT_ARID | TRAIT_ICY_CAPS
+                                    | TRAIT_VOLCANIC | TRAIT_METALLIC | TRAIT_CRATERED);
+        mp.genome.trait_bits &= (u16)~PHYS_TRAITS;
         if (mb->volcanism > 0.5f) mp.genome.trait_bits |= TRAIT_VOLCANIC; // tidal-heated moons glow
+        if (mb->water_frac > 0.55f) mp.genome.trait_bits |= TRAIT_OCEANIC;
+        if (mb->comp.metal > 0.40f) mp.genome.trait_bits |= TRAIT_METALLIC;
+        if (mb->env_hazard > 0.60f && mb->atmo_pressure < 0.05f) mp.genome.trait_bits |= TRAIT_CRATERED;
         sys->moon_props[m] = mp;
     }
     for (i32 m = sys->moon_count; m < MAX_SYSTEM_MOONS; ++m) {

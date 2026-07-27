@@ -463,6 +463,10 @@ static void phase3_geophysics(EvolvedSystem* out, const StarProperties& star, u6
 
         b8 was_thick = FALSE, stripped_logged = FALSE, life_logged = FALSE, water_logged = FALSE;
 
+        // Cooling timescale grows with mass: small bodies (Mars) freeze out in a couple of
+        // Gyr while super-Earths stay geologically active for the age of the galaxy.
+        f32 cool_tau = 2.0f + 2.5f * sqrtf(clampf(m, 0.05f, 12.0f));
+
         for (i32 e = 0; e < EVO_GEO_EPOCHS; ++e) {
             i32 epoch_abs = 1 + EVO_ACCRETION_EPOCHS + e;
             GalaxyRng r = evo_rng(seed, i, epoch_abs + 300);
@@ -475,7 +479,7 @@ static void phase3_geophysics(EvolvedSystem* out, const StarProperties& star, u6
             }
 
             // Radiogenic + primordial heat decays with age; small bodies cool fastest.
-            f32 heat = expf(-age / 3.0f) * clamp01(sqrtf(m) * 1.1f);
+            f32 heat = expf(-age / cool_tau) * clamp01(sqrtf(m) * 1.1f);
             b->tectonics = clamp01(heat * galaxy_rng_range(&r, 0.8f, 1.2f));
             b->volcanism = clamp01(heat * galaxy_rng_range(&r, 0.6f, 1.3f) + tidal);
             if (m < 0.5f) b->magnetic_field *= 0.75f; // small cores freeze out
@@ -526,6 +530,11 @@ static void phase3_geophysics(EvolvedSystem* out, const StarProperties& star, u6
                 }
             }
         }
+
+        // Dynamo needs a molten, convecting core: as the interior heat dies the magnetic
+        // field decays with it (a cooled-out world can't keep a Strong field).
+        f32 final_heat = expf(-star.age_gyr / cool_tau) * clamp01(sqrtf(m) * 1.1f);
+        b->magnetic_field *= clamp01(0.25f + 1.4f * final_heat);
     }
 }
 
@@ -666,6 +675,7 @@ void system_evolution_selftest() {
     i32 total_planets = 0, total_moons = 0, total_belts = 0, total_giants = 0;
     i32 habitable = 0, with_life = 0, with_water = 0;
     i32 fail_comp = 0, fail_hill = 0, fail_moon = 0, fail_finite = 0, fail_count = 0, fail_det = 0;
+    i32 massive_dead = 0, dead_strong_dynamo = 0;
     i32 type_hist[PLANET_TYPE_COUNT] = {};
 
     EvolvedSystem sys, sys2;
@@ -698,6 +708,12 @@ void system_evolution_selftest() {
                 if (b->habitability > 0.4f) ++habitable;
                 if (b->life > 0.3f) ++with_life;
                 if (b->water_frac > 0.15f) ++with_water;
+                // Geophysics consistency: massive solid worlds shouldn't be geologically
+                // dead, and dead worlds shouldn't keep a strong core dynamo.
+                if (b->comp.gas <= 0.35f) {
+                    if (b->mass_earth > 2.0f && b->tectonics < 0.1f) ++massive_dead;
+                    if (b->tectonics < 0.15f && b->magnetic_field > 0.6f) ++dead_strong_dynamo;
+                }
             }
             if (b->kind == BODY_MOON) {
                 const EvolvedBody* p = &sys.bodies[b->parent];
@@ -726,6 +742,8 @@ void system_evolution_selftest() {
                 type_hist[PLANET_ICE_GIANT], type_hist[PLANET_FROZEN]);
     BS_LOG_INFO("[evo selftest] invariants: determinism_fail=%d count_fail=%d comp_fail=%d hill_fail=%d moon_fail=%d finite_fail=%d",
                 fail_det, fail_count, fail_comp, fail_hill, fail_moon, fail_finite);
+    BS_LOG_INFO("[evo selftest] consistency: massive_dead=%d dead_strong_dynamo=%d",
+                massive_dead, dead_strong_dynamo);
 
     // Detailed chronicle for one seed (phase-by-phase visibility).
     u64 seed = galaxy_seed_for(master, 0);
