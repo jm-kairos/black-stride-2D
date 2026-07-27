@@ -92,7 +92,8 @@ body {
 .title, .win-title, .modal-title, .insp-tab, .insp-section-hdr, .fleet-name, #jumpmode {
     font-family: "Chakra Petch";
 }
-.value, .hud-val, .weapon-row, .arsenal-row, .ship-preview-name, #debug, #tooltip {
+.value, .hud-val, .weapon-row, .arsenal-row, .ship-preview-name, #debug, #tooltip,
+.planet-insp-line {
     font-family: "JetBrains Mono";
 }
 
@@ -105,7 +106,7 @@ body.kit-neon #jumpmode {
 }
 body.kit-neon .value, body.kit-neon .hud-val, body.kit-neon .weapon-row,
 body.kit-neon .arsenal-row, body.kit-neon .ship-preview-name,
-body.kit-neon #debug, body.kit-neon #tooltip {
+body.kit-neon #debug, body.kit-neon #tooltip, body.kit-neon .planet-insp-line {
     font-family: "Share Tech Mono";
 }
 
@@ -118,6 +119,6 @@ body.kit-minimal #jumpmode {
 }
 body.kit-minimal .value, body.kit-minimal .hud-val, body.kit-minimal .weapon-row,
 body.kit-minimal .arsenal-row, body.kit-minimal .ship-preview-name,
-body.kit-minimal #debug, body.kit-minimal #tooltip {
+body.kit-minimal #debug, body.kit-minimal #tooltip, body.kit-minimal .planet-insp-line {
     font-family: "JetBrains Mono";
 }

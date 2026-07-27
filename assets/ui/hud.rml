@@ -175,12 +175,12 @@
         <div class="planet-insp-line">{{ planet_insp_stats }}</div>
         <div class="rule"></div>
         <div class="planet-insp-line">{{ planet_insp_comp }}</div>
-        <div data-if="planet_insp_moons != ''">
+        <div class="planet-insp-section" data-if="planet_insp_moons != ''">
             <div class="rule"></div>
             <div class="planet-insp-head">Moons</div>
             <div class="planet-insp-line">{{ planet_insp_moons }}</div>
         </div>
-        <div data-if="planet_insp_events != ''">
+        <div class="planet-insp-section" data-if="planet_insp_events != ''">
             <div class="rule"></div>
             <div class="planet-insp-head">Chronicle</div>
             <div class="planet-insp-line dim">{{ planet_insp_events }}</div>

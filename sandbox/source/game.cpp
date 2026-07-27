@@ -1303,15 +1303,18 @@ static void game_push_hud(game_state* s, f32 dt) {
             snprintf(hud.planet_insp_title, sizeof(hud.planet_insp_title), "%s %s",
                      ss.name ? ss.name : "Unknown", ROMAN[pi]);
 
-            // Classification + trait tags.
+            // Classification + trait tags (skip a tag that just repeats the subtype name).
             {
+                const char* subtype = planet_subtype_name(pp.type, pp.genome.subtype);
                 i32 off = snprintf(hud.planet_insp_subtitle, sizeof(hud.planet_insp_subtitle), "%s %s",
-                                   planet_subtype_name(pp.type, pp.genome.subtype), planet_type_name(pp.type));
+                                   subtype, planet_type_name(pp.type));
                 const char* tags[3];
                 i32 nt = planet_trait_names(pp.genome.trait_bits, tags, 3);
-                for (i32 t = 0; t < nt && off > 0 && off < (i32)sizeof(hud.planet_insp_subtitle) - 1; ++t)
+                for (i32 t = 0; t < nt && off > 0 && off < (i32)sizeof(hud.planet_insp_subtitle) - 1; ++t) {
+                    if (strcmp(tags[t], subtype) == 0) continue;
                     off += snprintf(hud.planet_insp_subtitle + off, sizeof(hud.planet_insp_subtitle) - (size_t)off,
                                     "  [%s]", tags[t]);
+                }
             }
 
             // Gameplay gauges: habitability + hazard.
@@ -1321,7 +1324,7 @@ static void game_push_hud(game_state* s, f32 dt) {
             snprintf(hud.planet_insp_haz_w, sizeof(hud.planet_insp_haz_w), "%d%%", hazp);
             snprintf(hud.planet_insp_hab_label, sizeof(hud.planet_insp_hab_label), "Habitability  %d%%", habp);
             const char* hazl = hazp < 25 ? "Low" : hazp < 50 ? "Moderate" : hazp < 75 ? "High" : "Extreme";
-            snprintf(hud.planet_insp_haz_label, sizeof(hud.planet_insp_haz_label), "Hazard  %s", hazl);
+            snprintf(hud.planet_insp_haz_label, sizeof(hud.planet_insp_haz_label), "Hazard  %s (%d%%)", hazl, hazp);
 
             // Orbit / physical / environment stats (each with its qualitative label).
             {

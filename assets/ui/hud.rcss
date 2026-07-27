@@ -747,6 +747,7 @@ body {
 }
 
 .planet-insp-subtitle {
+    display: block;
     color: #9fd7c8;
     font-size: 13px;
     font-weight: 600;
@@ -754,7 +755,12 @@ body {
     margin-bottom: 6px;
 }
 
+.planet-insp-section {
+    display: block;
+}
+
 .planet-insp-head {
+    display: block;
     color: #cfe8f5;
     font-size: 12px;
     font-weight: 700;
@@ -764,6 +770,7 @@ body {
 }
 
 .planet-insp-line {
+    display: block;
     white-space: pre;
     color: #bfe8fb;
     font-size: 13px;
@@ -776,6 +783,7 @@ body {
 }
 
 .planet-gauge-label {
+    display: block;
     color: #dbe6f5;
     font-size: 12px;
     font-weight: 600;
@@ -783,6 +791,7 @@ body {
 }
 
 .planet-gauge {
+    display: block;
     width: 100%;
     height: 8px;
     background-color: #12203269;
@@ -792,6 +801,8 @@ body {
 }
 
 .planet-gauge-fill {
+    display: block;      /* RmlUi defaults to inline: without this the fill has zero size */
+    width: 0%;           /* actual width driven per-frame by data-style-width */
     height: 100%;
     border-radius: 2px;
 }
