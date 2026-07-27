@@ -288,6 +288,9 @@ void build_editor_panel(game_state* s) {
         // Opens the free-floating per-type Planet Editor window (movable/resizable).
         if (bs_ui_button("Planet Properties...", TRUE))
             s->render.star_fx.show_planet_editor = s->render.star_fx.show_planet_editor ? FALSE : TRUE;
+        // Opens the System Inspector (evolved bodies + chronicle of the current system).
+        if (bs_ui_button("System Inspector...", TRUE))
+            s->galaxy.show_system_inspector = !s->galaxy.show_system_inspector;
         // ---- TRAVEL ----------------------------------------------------------------------------
         bs_ui_separator();
         const f32 TR[4] = { 0.55f, 0.95f, 0.75f, 1.0f };

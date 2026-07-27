@@ -183,6 +183,23 @@ void MappedSystemLayer::draw(const Camera2D& cam, u16 fb_w, u16 fb_h,
         star_fx->draw_planet_3d(planet, ss.planet_props[p], ss.star.color, pscreen,
                                 body_px, pvis * gs->view_arena_w, elapsed_time, id, fb_w, fb_h);
     }
+    // ---- Moons: ride their parent planet (same gate as planets) ----
+    for (i32 m = 0; gs->render.celestial_draw_planets && m < ss.moon_count; ++m) {
+        CelestialBody& moon = ss.moons[m];
+        if (moon.radius <= 0.0f) continue;
+        Vec2 moon_true  = vec2_add(sys_world, moon.position);
+        Vec2 moon_world = vec2_add(sys_rel_planet, moon.position);
+        const PlanetTypeParams& pe = star_fx->planet_params[(i32)ss.moon_props[m].type];
+        if (!is_on_screen(&dcam, fb_w, fb_h, moon_world, moon.radius * pe.size_mul * 2.0f))
+            continue;
+        f32 mvis = get_sensor_visibility_global(gs, moon_true);
+        if (mvis <= 0.0f) continue;
+        f32 moon_max_px = 0.20f * (f32)fb_h; // moons cap smaller than planets
+        f32 body_px = clampf(moon.radius * pe.size_mul * dcam.zoom * zoom_scale, pe.min_px * 0.6f, moon_max_px);
+        Vec2 mscreen = camera2d_world_to_screen(&dcam, fb_w, fb_h, moon_world);
+        star_fx->draw_planet_3d(moon, ss.moon_props[m], ss.star.color, mscreen,
+                                body_px, mvis * gs->view_arena_w, elapsed_time, id, fb_w, fb_h);
+    }
     // Restore full opacity for subsequent passes (this is the last background layer).
     renderer_set_draw_alpha(1.0f);
 }

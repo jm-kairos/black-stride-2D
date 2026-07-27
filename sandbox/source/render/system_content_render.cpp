@@ -61,7 +61,7 @@ static constexpr f32 SYSTEM_DETAIL_MIN_SCREEN_PX = 48.0f;
 // Callers skip a system's detail entirely when this is below SYSTEM_DETAIL_MIN_SCREEN_PX.
 static f32 system_belt_screen_px(const StarSystem& ss, f32 zoom) {
     f32 outer = 0.0f;
-    i32 pc = ss.planet_count < 5 ? ss.planet_count : 5;
+    i32 pc = ss.planet_count < MAX_SYSTEM_PLANETS ? ss.planet_count : MAX_SYSTEM_PLANETS;
     for (i32 i = 0; i < pc; ++i)
         if (ss.planets[i].semi_major_axis > outer) outer = ss.planets[i].semi_major_axis;
     return outer * 1.4f * zoom; // 1.4 = fringe zone extends just beyond the outermost orbit

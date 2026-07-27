@@ -173,16 +173,38 @@ static const bs_color SYS_ASTEROID_COLS[4] = {
     { 0.42f, 0.44f, 0.48f, 1.0f },
 };
 
+// Map each evolved BELT body to its orbital zone (outside-in, same scheme as the zone
+// generators below: z=0 beyond the outermost orbit .. z=oc inside the innermost) and
+// accumulate a per-zone density multiplier so belts concentrate the natural scatter.
+// Monotonic AU->world orbit mapping means AU ordering decides the zone directly.
+static void belt_zone_multipliers(const StarSystem& ss, f32* zmul, i32 zmul_count, f32 gain) {
+    for (i32 z = 0; z < zmul_count; ++z) zmul[z] = 1.0f;
+    i32 oc = ss.planet_count;
+    if (oc <= 0) return;
+    i32 belt_base = 1 + ss.evo.planet_count + ss.evo.moon_count;
+    for (i32 b = 0; b < ss.evo.belt_count; ++b) {
+        const EvolvedBody& belt = ss.evo.bodies[belt_base + b];
+        i32 below = 0; // planets orbiting beneath the belt
+        for (i32 p = 0; p < oc; ++p)
+            if (ss.evo.bodies[1 + p].orbit_au < belt.orbit_au) ++below;
+        i32 z = oc - below;
+        if (z < 0 || z >= zmul_count) continue;
+        f32 richness = belt.mass_earth < 0.2f ? 0.2f : (belt.mass_earth > 2.0f ? 2.0f : belt.mass_earth);
+        zmul[z] += gain * richness;
+    }
+}
+
 // Populate ss.asteroids for EVERY system. Asteroids are natural, so unlike stations they are not
 // civ-gated. Placed in the same concentric orbital zones as stations (outside-in) with counts
 // decreasing inward: Zone 0 = 300, Zone 1 = 240, Zone 2 = 120, Zone 3 = 60 (capped at
 // SYSTEM_ASTEROID_MAX). Deterministic from `seed`, independent of the star-system RNG.
+// Evolved BELT bodies multiply their zone's density (the belt IS this scatter, densified).
 static void generate_system_asteroids(game_state* s, StarSystem& ss, u64 seed) {
     (void)s;
     ss.asteroid_count = 0;
 
     // Sorted (ascending) orbit radii = the ring boundaries of the system's zones.
-    f32 orbits[5]; i32 oc = ss.planet_count < 5 ? ss.planet_count : 5;
+    f32 orbits[MAX_SYSTEM_PLANETS]; i32 oc = ss.planet_count < MAX_SYSTEM_PLANETS ? ss.planet_count : MAX_SYSTEM_PLANETS;
     for (i32 i = 0; i < oc; ++i) orbits[i] = ss.planets[i].semi_major_axis;
     for (i32 i = 1; i < oc; ++i) { // insertion sort (tiny)
         f32 v = orbits[i]; i32 j = i - 1;
@@ -192,6 +214,8 @@ static void generate_system_asteroids(game_state* s, StarSystem& ss, u64 seed) {
     if (oc <= 0) return;
 
     const i32 ZONE_COUNTS[4] = { 1200, 960, 600, 300 };
+    f32 zmul[MAX_SYSTEM_PLANETS + 1];
+    belt_zone_multipliers(ss, zmul, MAX_SYSTEM_PLANETS + 1, 1.5f); // belts densify their zone
     const f32 star_clear = ss.star.radius * 2.0f; // keep asteroids off the star surface
     u64 rng = station_mix(seed ^ 0xA57E401DCAFEull);
     auto frand = [&]() -> f32 { rng = station_mix(rng); return (f32)(rng & 0xFFFFFF) / (f32)0xFFFFFF; };
@@ -213,7 +237,7 @@ static void generate_system_asteroids(game_state* s, StarSystem& ss, u64 seed) {
         }
         if (outer <= inner) continue;
 
-        i32 count = ZONE_COUNTS[z];
+        i32 count = (i32)((f32)ZONE_COUNTS[z] * zmul[z]);
         for (i32 k = 0; k < count && ss.asteroid_count < SYSTEM_ASTEROID_MAX; ++k) {
             f32 ang = frand() * 2.0f * BS_PI;
             f32 rad = inner + frand() * (outer - inner);
@@ -234,13 +258,13 @@ static void generate_system_asteroids(game_state* s, StarSystem& ss, u64 seed) {
 // Populate ss.resources for EVERY system. Resources are CONCENTRATED in the belt (zone 1) and mid
 // (zone 2) orbital rings, with only a sparse scatter in the outer/inner zones. Placed in the same
 // concentric zones as asteroids (outside-in), capped at SYSTEM_RESOURCE_MAX. Deterministic from
-// `seed`, independent of the star-system RNG.
+// `seed`, independent of the star-system RNG. Evolved BELT bodies multiply their zone's density.
 static void generate_system_resources(game_state* s, StarSystem& ss, u64 seed) {
     (void)s;
     ss.resource_count = 0;
 
     // Sorted (ascending) orbit radii = the ring boundaries of the system's zones.
-    f32 orbits[5]; i32 oc = ss.planet_count < 5 ? ss.planet_count : 5;
+    f32 orbits[MAX_SYSTEM_PLANETS]; i32 oc = ss.planet_count < MAX_SYSTEM_PLANETS ? ss.planet_count : MAX_SYSTEM_PLANETS;
     for (i32 i = 0; i < oc; ++i) orbits[i] = ss.planets[i].semi_major_axis;
     for (i32 i = 1; i < oc; ++i) { // insertion sort (tiny)
         f32 v = orbits[i]; i32 j = i - 1;
@@ -252,6 +276,8 @@ static void generate_system_resources(game_state* s, StarSystem& ss, u64 seed) {
     // Zone 0 = beyond outermost (fringe), Zone 1 = belt, Zone 2 = mid, Zone 3 = inner-ish.
     // Concentrated in the belt/mid rings; sparse elsewhere.
     const i32 ZONE_COUNTS[4] = { 8, 48, 32, 6 };
+    f32 zmul[MAX_SYSTEM_PLANETS + 1];
+    belt_zone_multipliers(ss, zmul, MAX_SYSTEM_PLANETS + 1, 2.5f); // belts are rich mining zones
     const bs_color RESOURCE_COL = bs_color{ 0.35f, 0.95f, 0.90f, 1.0f };
     const f32 star_clear = ss.star.radius * 2.0f; // keep resources off the star surface
     u64 rng = station_mix(seed ^ 0x4E5011C2DEADull);
@@ -274,7 +300,7 @@ static void generate_system_resources(game_state* s, StarSystem& ss, u64 seed) {
         }
         if (outer <= inner) continue;
 
-        i32 count = ZONE_COUNTS[z];
+        i32 count = (i32)((f32)ZONE_COUNTS[z] * zmul[z]);
         for (i32 k = 0; k < count && ss.resource_count < SYSTEM_RESOURCE_MAX; ++k) {
             f32 ang = frand() * 2.0f * BS_PI;
             f32 rad = inner + frand() * (outer - inner);
@@ -295,7 +321,7 @@ static void generate_system_decorations(game_state* s, StarSystem& ss, u64 seed)
     ss.decoration_count = 0;
 
     // Sorted (ascending) orbit radii = the ring boundaries of the system's zones.
-    f32 orbits[5]; i32 oc = ss.planet_count < 5 ? ss.planet_count : 5;
+    f32 orbits[MAX_SYSTEM_PLANETS]; i32 oc = ss.planet_count < MAX_SYSTEM_PLANETS ? ss.planet_count : MAX_SYSTEM_PLANETS;
     for (i32 i = 0; i < oc; ++i) orbits[i] = ss.planets[i].semi_major_axis;
     for (i32 i = 1; i < oc; ++i) { // insertion sort (tiny)
         f32 v = orbits[i]; i32 j = i - 1;

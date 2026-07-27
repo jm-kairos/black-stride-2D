@@ -21,6 +21,12 @@
 // galaxy_map_sync_entities / galaxy_map_update_orbits).
 #include "sim/galaxy_map.h"
 
+// Epoch-based planetary evolution pipeline (evolve_star_system + debug self-test).
+#include "sim/system_evolution.h"
+
+// System Inspector window (evolved bodies + chronicle of the current system).
+#include "ui/system_inspector.h"
+
 // Galaxy history subsystem: civilizations, territory, chronicle + Legends browser.
 #include "sim/galaxy_history.h"
 

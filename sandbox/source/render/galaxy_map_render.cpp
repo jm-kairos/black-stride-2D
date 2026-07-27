@@ -232,15 +232,29 @@ b8 galaxy_map_hover_tooltip(game_state* s, i32 mx, i32 my, char* out, i32 cap, i
 
             if (ddx * ddx + ddy * ddy <= 22.0f * 22.0f) {
 
-                StarSystem info;
+                // Materialising a system now runs the full evolution pipeline, so cache the
 
-                SSGenEnv env = galaxy_env_at(&s->galaxy.gen_params, &nd.galaxy_center);
+                // last hovered node instead of regenerating every frame.
 
-                generate_star_system(&info, nd.seed, Vec2{ 0.0f, 0.0f }, env);
+                static StarSystem s_hover_sys;
+
+                static i32 s_hover_node = -1;
+
+                if (node != s_hover_node) {
+
+                    SSGenEnv env = galaxy_env_at(&s->galaxy.gen_params, &nd.galaxy_center);
+
+                    generate_star_system(&s_hover_sys, nd.seed, Vec2{ 0.0f, 0.0f }, env);
+
+                    s_hover_node = node;
+
+                }
+
+                const StarSystem& info = s_hover_sys;
 
                 i32 off = snprintf(out, (size_t)cap,
 
-                    "%s\n%s-class star  %.0f K\nL %.2f Lsun   %.1f Gyr\n%d planets:",
+                    "%s\n%s-class star  %.0f K\nL %.2f Lsun   %.1f Gyr\n%d planets, %d moons, %d belts:",
 
                     nd.name[0] ? nd.name : "?",
 
@@ -248,7 +262,9 @@ b8 galaxy_map_hover_tooltip(game_state* s, i32 mx, i32 my, char* out, i32 cap, i
 
                     info.star_props.temperature_k, info.star_props.luminosity_solar,
 
-                    info.star_props.age_gyr, info.planet_count);
+                    info.star_props.age_gyr, info.planet_count, info.moon_count,
+
+                    info.evo.belt_count);
 
                 for (i32 pi = 0; pi < info.planet_count; ++pi) {
 
@@ -1249,6 +1265,40 @@ void draw_galaxy_map_look(game_state* s, f32 dt) {
                 s->render.star_fx.draw_planet_3d(p, ss.planet_props[i], ss.star.color, pscreen,
 
                                                  planet_body_px, vis * map_w, s->elapsed_time,
+
+                                                 LAYER_CELESTIAL, s->fb_width, s->fb_height);
+
+            }
+
+
+
+            // Moons — small lit spheres riding their parent planet (same gates as planets).
+
+            for (i32 m = 0; m < ss.moon_count; ++m) {
+
+                if (!s->render.celestial_draw_planets) break;
+
+                const CelestialBody& mn = ss.moons[m];
+
+                if (mn.radius <= 0.0f) continue;
+
+                // Skip when the moon's parent-relative orbit is sub-pixel (reads as noise).
+
+                if (mn.semi_major_axis * s->camera_state.camera.zoom < 4.0f) continue;
+
+                Vec2 moon_vis = vec2_add(center_planet, mn.position);
+
+                const PlanetTypeParams& me = s->render.star_fx.planet_params[(i32)ss.moon_props[m].type];
+
+                f32 moon_max_px = 0.20f * (f32)s->fb_height;
+
+                f32 moon_body_px = clampf(mn.radius * me.size_mul * s->camera_state.camera.zoom, me.min_px * 0.6f, moon_max_px);
+
+                Vec2 mscreen = camera2d_world_to_screen(&s->camera_state.camera, s->fb_width, s->fb_height, moon_vis);
+
+                s->render.star_fx.draw_planet_3d(mn, ss.moon_props[m], ss.star.color, mscreen,
+
+                                                 moon_body_px, vis * map_w, s->elapsed_time,
 
                                                  LAYER_CELESTIAL, s->fb_width, s->fb_height);
 

@@ -606,6 +606,10 @@ b8 game_init(Game* game_inst) {
 
     }
 
+    // Planetary-evolution pipeline health check: per-phase stats + invariants via BS_LOG_INFO.
+
+    system_evolution_selftest();
+
 #endif
 
     renderer_set_clear_color(bs_color{ 0.03f, 0.03f, 0.06f, 1.0f });
@@ -2452,6 +2456,12 @@ b8 game_render(Game* game_inst, f32 dt) {
     if (s->galaxy.show_inspector)
 
         galaxy_history_build_inspector(s);
+
+    // System Inspector (evolved bodies + chronicle of the current system; editor panel toggle)
+
+    if (s->galaxy.show_system_inspector)
+
+        build_system_inspector(s);
 
     // Discoveries browser (single-ship discovery log; toggled with O) is now an RmlUi document
 

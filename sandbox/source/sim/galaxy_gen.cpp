@@ -39,10 +39,10 @@ static void fill_node_summary(GalaxyNode* node, u64 seed, Vec2 world, SSGenEnv e
     node->seed          = seed;
     node->star_color    = tmp.star.color;
     node->star_radius   = tmp.star.radius;
-    node->orbit_count   = tmp.planet_count < 5 ? tmp.planet_count : 5;
+    node->orbit_count   = tmp.planet_count < MAX_SYSTEM_PLANETS ? tmp.planet_count : MAX_SYSTEM_PLANETS;
     for (i32 p = 0; p < node->orbit_count; ++p)
         node->orbit_radii[p] = tmp.planets[p].semi_major_axis;
-    // Insertion-sort ascending (<= 5 entries).
+    // Insertion-sort ascending (<= MAX_SYSTEM_PLANETS entries).
     for (i32 a = 1; a < node->orbit_count; ++a) {
         f32 v = node->orbit_radii[a];
         i32 b = a - 1;

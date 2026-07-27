@@ -48,7 +48,7 @@ i32 get_system_zone(const game_state* s, i32 system_idx) {
     Vec2 diff = hierpos_diff(&s->galaxy.map_entities[0].galaxy_pos, &sys.galaxy_center, BS_HIERPOS_CELL_SIZE);
     f32 dist = vec2_length(diff);
     // Collect valid orbit radii
-    f32 orbits[5];
+    f32 orbits[MAX_SYSTEM_PLANETS];
     i32 orbit_count = 0;
     for (i32 i = 0; i < sys.planet_count; ++i) {
         if (sys.planets[i].semi_major_axis > 0.0f) {

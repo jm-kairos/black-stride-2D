@@ -562,6 +562,81 @@ struct PlanetProperties {
 
 
 
+// =====================================================================================
+// Evolved body model (epoch-based planetary evolution; sim/system_evolution.cpp).
+// The AUTHORITATIVE physical model of a star system: every celestial body (star, planets,
+// moons, asteroid belts) with its bulk composition and evolved geophysical state, produced
+// by the four-phase evolution pipeline (disk condensation -> accretion & migration ->
+// geophysical/atmospheric epochs -> present-day synthesis). PlanetProperties/CelestialBody
+// above are DERIVED render/UI views of this model. Deterministic from the node seed; never
+// serialized (regenerated lazily with the system, same philosophy as the genome).
+// =====================================================================================
+
+#define MAX_SYSTEM_PLANETS 6   // planets per system (was 5 pre-evolution)
+#define MAX_SYSTEM_MOONS   8   // moons per system (across all planets)
+#define MAX_SYSTEM_BELTS   2   // asteroid belts per system
+// bodies[] capacity: [0]=star, then planets, then moons, then belts (stable planet indices).
+#define MAX_SYSTEM_BODIES  (1 + MAX_SYSTEM_PLANETS + MAX_SYSTEM_MOONS + MAX_SYSTEM_BELTS)
+#define EVO_MAX_EVENTS     24  // evolution chronicle entries kept per system
+
+enum BodyKind : u8 { BODY_STAR, BODY_PLANET, BODY_MOON, BODY_BELT };
+
+// Bulk composition mass fractions (sum ~= 1). Set by disk condensation, mixed by mergers.
+struct BodyComposition { f32 metal; f32 silicate; f32 ice; f32 gas; };
+
+struct EvolvedBody {
+    BodyKind kind;
+    i8  parent;          // bodies[] index of the parent (0 = star; planet index for moons); -1 for the star
+    PlanetType type;     // final classification (render contract; unused for star/belt)
+    f32 orbit_au;        // semi-major axis around the parent (AU); belts: annulus centre
+    f32 width_au;        // belts only: annulus half-width (AU)
+    f32 eccentricity;
+    f32 mass_earth;      // Earth masses (star: solar masses * 333000)
+    f32 radius_earth;    // Earth radii
+    f32 temperature_k;   // greenhouse-adjusted surface/equilibrium temperature
+    BodyComposition comp;
+    // Evolved geophysical state (phase 3 outputs), all 0..1 unless noted:
+    f32 water_frac;      // surface water/volatile coverage
+    f32 atmo_pressure;   // atmospheres (not 0..1); 0 = airless
+    f32 magnetic_field;  // dynamo strength
+    f32 tectonics;       // current tectonic activity
+    f32 volcanism;       // current volcanism (incl. tidal heating on close moons)
+    f32 life;            // biosphere development
+    // Present-day synthesis (phase 4 outputs), all 0..1:
+    f32 habitability;
+    f32 env_hazard;      // environmental hazard (radiation/impacts/volcanism/atmosphere)
+    f32 res_metal;       // extractable ore richness (gameplay data; market untouched)
+    f32 res_volatiles;   // volatiles/fuel richness
+};
+
+// One chronicle entry: something that happened during the system's evolution.
+enum EvoEventKind : u8 {
+    EVO_EV_NONE,
+    EVO_EV_DISK_DISPERSED,  // gas disk photo-evaporated (end of gas accretion)
+    EVO_EV_GIANT_FORMED,    // runaway gas accretion onto a >~8 Mearth core
+    EVO_EV_MIGRATED,        // giant migrated inward (type II)
+    EVO_EV_MERGER,          // two protoplanets collided and merged
+    EVO_EV_EJECTED,         // the lighter body of an unstable pair was ejected
+    EVO_EV_BELT_FORMED,     // accretion-frustrated core ground down into an asteroid belt
+    EVO_EV_MOON_IMPACT,     // giant impact spun off a moon
+    EVO_EV_MOON_CAPTURED,   // gas giant captured a moon
+    EVO_EV_ATMO_STRIPPED,   // XUV/flares stripped an atmosphere
+    EVO_EV_WATER_DELIVERED, // bombardment delivered water to an inner body
+    EVO_EV_LIFE_EMERGED,    // biosphere crossed the emergence threshold
+};
+
+struct EvolutionEvent { u8 epoch; u8 kind; i8 body; i8 other; }; // body/other = bodies[] index (-1 = n/a)
+
+struct EvolvedSystem {
+    EvolvedBody    bodies[MAX_SYSTEM_BODIES]; // [0]=star, [1..planet_count]=planets sorted by a, then moons, then belts
+    i32            body_count;
+    i32            planet_count;              // number of BODY_PLANET entries (bodies[1..planet_count])
+    i32            moon_count;
+    i32            belt_count;
+    EvolutionEvent events[EVO_MAX_EVENTS];
+    i32            event_count;
+};
+
 // A civilian orbital installation belonging to a system's controlling civilization. Placed
 
 // statically around the star at generation (materialize_slot); discovered when the player closes
@@ -794,11 +869,11 @@ struct StarSystem {
 
 
 
-    CelestialBody     planets[5];  // max 5 planets
+    CelestialBody     planets[MAX_SYSTEM_PLANETS];  // derived render view of planet bodies
 
 
 
-    i32               planet_count; // 2–5
+    i32               planet_count; // 2–MAX_SYSTEM_PLANETS
 
 
 
@@ -806,7 +881,23 @@ struct StarSystem {
 
 
 
-    PlanetProperties  planet_props[5];    // physical planet attributes (parallel to planets[])
+    PlanetProperties  planet_props[MAX_SYSTEM_PLANETS]; // physical planet attributes (parallel to planets[])
+
+
+
+    CelestialBody     moons[MAX_SYSTEM_MOONS]; // derived render view of moon bodies (parallel to evo moon order)
+
+
+
+    PlanetProperties  moon_props[MAX_SYSTEM_MOONS]; // physical moon attributes (parallel to moons[])
+
+
+
+    i32               moon_count;         // number of valid entries in moons[]
+
+
+
+    EvolvedSystem     evo;                // authoritative evolved-body model (source of the views above)
 
 
 
@@ -900,7 +991,7 @@ struct GalaxyNode {
 
 
 
-    f32          orbit_radii[5];     // sorted ascending semi-major axes (orbital zone classification)
+    f32          orbit_radii[MAX_SYSTEM_PLANETS]; // sorted ascending semi-major axes (orbital zone classification)
 
 
 
@@ -2756,6 +2847,10 @@ struct game_state {
 
 
     bool          show_inspector;       // I: toggle the Live Civ Inspector window
+
+
+
+    bool          show_system_inspector; // toggle the System Inspector window (evolved bodies)
 
 
 

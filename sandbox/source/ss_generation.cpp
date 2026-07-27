@@ -1,5 +1,6 @@
 #include "ss_generation.h"
-#include "sim/galaxy_rng.h"   // galaxy_splitmix64 / GalaxyRng (deterministic worldgen rolls)
+#include "sim/galaxy_rng.h"        // galaxy_splitmix64 / GalaxyRng (deterministic worldgen rolls)
+#include "sim/system_evolution.h"  // evolve_star_system (four-phase epoch pipeline)
 #include <math.h>
 using namespace bs_math;
 // =====================================================================================
@@ -466,54 +467,56 @@ void generate_star_system(StarSystem* sys, u64 seed, Vec2 galaxy_pos,
     sys->star_pulse_phase   = rng_f32() * 2.0f * BS_PI;
     sys->corona_pulse_phase = rng_f32() * 2.0f * BS_PI;
     sys->halo_pulse_phase   = rng_f32() * 2.0f * BS_PI;
-
-    // ---- System scale + planet count (metal-rich stars host slightly more planets) ----
     sys->system_scale = rng_range(cfg.scale_min, cfg.scale_max);
-    sys->planet_count = rng_int(cfg.min_planets, cfg.max_planets) + (sp.metallicity > 1.6f ? 1 : 0);
-    if (sys->planet_count > 5) sys->planet_count = 5;
 
-    // ---- Phase 1: non-intersecting world-unit orbits (a, e, arg-periapsis, mean-anomaly) ----
-    f32 a_arr[5], e_arr[5], w_arr[5], m0_arr[5];
-    f32 prev_a = rng_range(cfg.inner_a_min, cfg.inner_a_max) * sys->system_scale;
-    f32 prev_e = rng_f32() * cfg.e_inner_max;
-    a_arr[0] = prev_a; e_arr[0] = prev_e;
-    w_arr[0] = rng_f32() * 2.0f * BS_PI; m0_arr[0] = rng_f32() * 2.0f * BS_PI;
-    for (i32 i = 1; i < sys->planet_count; ++i) {
-        b8 accepted = FALSE; f32 a = 0.0f, e = 0.0f;
-        for (i32 attempt = 0; attempt < 20; ++attempt) {
-            f32 k = rng_range(cfg.spacing_min, cfg.spacing_max);
-            a = prev_a * k;
-            e = rng_f32() * ((i < sys->planet_count / 2) ? cfg.e_inner_max : cfg.e_outer_max);
-            // Validate non-intersection: apoapsis(prev) + margin < periapsis(this).
-            if (prev_a * (1.0f + prev_e) + cfg.safety_margin < a * (1.0f - e)) { accepted = TRUE; break; }
-        }
-        if (!accepted) { a = prev_a * 2.0f + cfg.safety_margin; e = 0.0f; }
-        prev_a = a; prev_e = e;
-        a_arr[i] = a; e_arr[i] = e;
-        w_arr[i] = rng_f32() * 2.0f * BS_PI; m0_arr[i] = rng_f32() * 2.0f * BS_PI;
-    }
+    // ---- Evolve the system (four-phase epoch pipeline; the authoritative model) ----
+    evolve_star_system(&sys->evo, sp, seed);
+    sys->planet_count = sys->evo.planet_count;
 
-    // ---- Phase 2: map each orbit into this star's AU range, classify, build render body ----
-    // Orbits stay bounded in world units (so systems fit the galaxy spacing), but are log-mapped
-    // into [0.35*hz_inner, 2.5*frost] AU. The star's luminosity therefore decides WHICH planets are
-    // habitable/giant/frozen, while every system still spans hot -> habitable -> icy.
-    f32 au_min = 0.0f, au_max = 0.0f;
-    worldgen_orbit_range_au(sp, &au_min, &au_max);
-    if (au_min < 1.0e-4f) au_min = 1.0e-4f;
-    if (au_max <= au_min) au_max = au_min * 10.0f;
+    // ---- Derive planet render views: log-map evolved AU orbits into world units ----
+    // Physical orbits live in AU on the evolved bodies; render orbits stay bounded in world
+    // units so systems fit the galaxy spacing. Inverse of the old world->AU log-map.
+    f32 au_lo = sys->evo.bodies[1].orbit_au;
+    f32 au_hi = sys->evo.bodies[sys->planet_count].orbit_au;
+    if (au_hi <= au_lo * 1.0001f) au_hi = au_lo * 1.5f;
+    f32 world_a0   = rng_range(cfg.inner_a_min, cfg.inner_a_max) * sys->system_scale;
+    f32 world_span = powf(rng_range(1.55f, 1.85f), (f32)(sys->planet_count - 1));
+    f32 prev_world_a = 0.0f, prev_e = 0.0f;
     for (i32 i = 0; i < sys->planet_count; ++i) {
-        f32 a = a_arr[i], e = e_arr[i], w = w_arr[i], M0 = m0_arr[i];
-        // Spread planets across the star's AU range using the ACTUAL (randomised) orbit ratios so
-        // systems vary; innermost -> au_min, outermost -> au_max.
-        f32 t;
-        if (sys->planet_count > 1 && a_arr[sys->planet_count - 1] > a_arr[0] * 1.0001f)
-            t = logf(a_arr[i] / a_arr[0]) / logf(a_arr[sys->planet_count - 1] / a_arr[0]);
-        else
-            t = 0.4f;
-        f32 orbit_au = au_min * powf(au_max / au_min, t);
-        PlanetProperties pp = worldgen_planet(sp, orbit_au,
-                                galaxy_splitmix64(seed ^ (0xC2B2AE3D27D4EB4Full * (u64)(i + 1))));
+        const EvolvedBody* b = &sys->evo.bodies[1 + i];
+        f32 t = logf(b->orbit_au / au_lo) / logf(au_hi / au_lo);
+        f32 a = world_a0 * powf(world_span, t);
+        f32 e = clampf(b->eccentricity, 0.0f, (i < sys->planet_count / 2) ? cfg.e_inner_max
+                                                                          : cfg.e_outer_max);
+        // Non-intersection guarantee: apoapsis(prev) + margin < periapsis(this).
+        if (i > 0 && prev_world_a * (1.0f + prev_e) + cfg.safety_margin >= a * (1.0f - e)) {
+            a = (prev_world_a * (1.0f + prev_e) + cfg.safety_margin) / (1.0f - e) * 1.08f;
+        }
+        prev_world_a = a; prev_e = e;
+        f32 w  = rng_f32() * 2.0f * BS_PI;
+        f32 M0 = rng_f32() * 2.0f * BS_PI;
+
+        // Physical properties view from the evolved body; genome rolled per planet.
+        PlanetProperties pp{};
+        pp.type           = b->type;
+        pp.orbit_au       = b->orbit_au;
+        pp.mass_earth     = b->mass_earth;
+        pp.radius_earth   = b->radius_earth;
+        pp.temperature_k  = b->temperature_k;
+        pp.habitability   = b->habitability;
+        pp.has_atmosphere = b->atmo_pressure > 0.05f;
+        pp.has_rings      = b->comp.gas > 0.35f && rng_f32() < 0.45f;
+        pp.genome = worldgen_planet_genome(sp, pp,
+                        galaxy_splitmix64(seed ^ (0xC2B2AE3D27D4EB4Full * (u64)(i + 1))));
+        // Evolved state biases the visual genome (traits earned by history, not just type).
+        if (b->volcanism  > 0.65f) pp.genome.trait_bits |= TRAIT_VOLCANIC;
+        if (b->water_frac > 0.60f) pp.genome.trait_bits |= TRAIT_OCEANIC;
+        if (b->atmo_pressure > 1.5f && b->comp.gas < 0.35f) pp.genome.trait_bits |= TRAIT_CLOUDY;
+        if (b->life       > 0.50f) pp.genome.trait_bits |= TRAIT_VERDANT;
+        if (b->comp.metal > 0.40f) pp.genome.trait_bits |= TRAIT_METALLIC;
+        if (b->env_hazard > 0.60f && b->atmo_pressure < 0.05f) pp.genome.trait_bits |= TRAIT_CRATERED;
         sys->planet_props[i] = pp;
+
         // Render color from planet type (slight per-planet jitter) + radius from physical size.
         bs_color pcol = wg_planet_base_color(pp.type);
         f32 jitter = 0.9f + 0.2f * rng_f32();
@@ -534,10 +537,54 @@ void generate_star_system(StarSystem* sys, u64 seed, Vec2 galaxy_pos,
         sys->planets[i] = CelestialBody{ ppos, planet_r, pcol, a, speed, M0, a, e, w, M0, period };
     }
 
-    // Clear any unused planet slots (if count < 5).
-    for (i32 i = sys->planet_count; i < 5; ++i) {
+    // Clear any unused planet slots.
+    for (i32 i = sys->planet_count; i < MAX_SYSTEM_PLANETS; ++i) {
         sys->planets[i] = CelestialBody{};
         sys->planet_props[i] = PlanetProperties{};
+    }
+
+    // ---- Derive moon render views: small bodies circling their parent planet ----
+    // Moon world orbits are presentational (parent render radius multiples), not scaled AU:
+    // real Hill-sphere distances would be sub-pixel at system zoom.
+    sys->moon_count = sys->evo.moon_count;
+    i32 moon_base = 1 + sys->planet_count;
+    for (i32 m = 0; m < sys->moon_count; ++m) {
+        const EvolvedBody* mb = &sys->evo.bodies[moon_base + m];
+        i32 pi = (i32)mb->parent - 1; // bodies[] parent -> planets[] index
+        if (pi < 0 || pi >= sys->planet_count) { sys->moons[m] = CelestialBody{}; continue; }
+        const CelestialBody& parent = sys->planets[pi];
+        // Stack multiple moons of one parent outward by their order in the moon block.
+        i32 rank = 0;
+        for (i32 k = 0; k < m; ++k)
+            if (sys->evo.bodies[moon_base + k].parent == mb->parent) ++rank;
+        f32 orbit_r = parent.radius * (2.6f + 1.4f * (f32)rank + rng_f32() * 0.8f);
+        f32 moon_r  = clampf(90.0f * powf(mb->radius_earth, 0.33f), 55.0f, 240.0f);
+        f32 ang     = rng_f32() * 2.0f * BS_PI;
+        f32 speed   = (0.03f + rng_f32() * 0.03f) * (rank % 2 == 0 ? 1.0f : -1.0f);
+        bs_color mcol = mb->type == PLANET_FROZEN ? bs_color{ 0.72f, 0.78f, 0.85f, 1.0f }
+                                                  : bs_color{ 0.58f, 0.55f, 0.52f, 1.0f };
+        Vec2 mpos = vec2_add(parent.position, Vec2{ cosf(ang) * orbit_r, sinf(ang) * orbit_r });
+        // semi_major_axis stores the parent-relative orbit radius; orbit_angle the phase.
+        sys->moons[m] = CelestialBody{ mpos, moon_r, mcol, orbit_r, speed, ang,
+                                       orbit_r, 0.0f, 0.0f, ang, 2.0f * BS_PI / fabsf(speed) };
+        // Physical props view (drives draw_planet_3d shading; moons reuse rocky/frozen params).
+        PlanetProperties mp{};
+        mp.type           = mb->type == PLANET_FROZEN ? PLANET_FROZEN : PLANET_ROCKY;
+        mp.orbit_au       = mb->orbit_au;
+        mp.mass_earth     = mb->mass_earth;
+        mp.radius_earth   = mb->radius_earth;
+        mp.temperature_k  = mb->temperature_k;
+        mp.habitability   = mb->habitability;
+        mp.has_atmosphere = mb->atmo_pressure > 0.05f;
+        mp.has_rings      = FALSE;
+        mp.genome = worldgen_planet_genome(sp, mp,
+                        galaxy_splitmix64(seed ^ (0x8AE8F87FDE30A967ull * (u64)(m + 1))));
+        if (mb->volcanism > 0.5f) mp.genome.trait_bits |= TRAIT_VOLCANIC; // tidal-heated moons glow
+        sys->moon_props[m] = mp;
+    }
+    for (i32 m = sys->moon_count; m < MAX_SYSTEM_MOONS; ++m) {
+        sys->moons[m] = CelestialBody{};
+        sys->moon_props[m] = PlanetProperties{};
     }
 }
 // =====================================================================================
@@ -545,14 +592,7 @@ void update_planet_positions(StarSystem* sys, f32 dt)
 {
     for (i32 i = 0; i < sys->planet_count; ++i) {
         CelestialBody& p = sys->planets[i];
-        // Mean anomaly: M = M0 + ω * t
-        f32 M = p.mean_anomaly_0 + p.orbital_period * dt;
-        // Wait, orbit_speed is 2π/period, so:
-        M = p.mean_anomaly_0 + p.orbit_speed * dt; // ... but this grows unbounded
-        // Actually, use elapsed time from the planet's own tracking:
-        // But we don't have elapsed time stored. The simplest approach:
-        // orbit_angle was being used as the accumulated angle in the old code.
-        // Let's use orbit_angle as the accumulated mean anomaly.
+        // orbit_angle accumulates the mean anomaly; Kepler-solve for the true position.
         p.orbit_angle += p.orbit_speed * dt;
         f32 E = solve_eccentric_anomaly(p.orbit_angle, p.eccentricity);
         // Position in orbital plane (periapsis on +x axis)
@@ -563,5 +603,16 @@ void update_planet_positions(StarSystem* sys, f32 dt)
         f32 sw = sinf(p.arg_periapsis);
         p.position.x = sys->star.position.x + cw * x - sw * y;
         p.position.y = sys->star.position.y + sw * x + cw * y;
+    }
+    // Moons ride their parent planet on cheap circular orbits (parents updated above).
+    i32 moon_base = 1 + sys->planet_count;
+    for (i32 m = 0; m < sys->moon_count; ++m) {
+        CelestialBody& mn = sys->moons[m];
+        i32 pi = (i32)sys->evo.bodies[moon_base + m].parent - 1;
+        if (pi < 0 || pi >= sys->planet_count) continue;
+        mn.orbit_angle += mn.orbit_speed * dt;
+        const CelestialBody& parent = sys->planets[pi];
+        mn.position.x = parent.position.x + cosf(mn.orbit_angle) * mn.semi_major_axis;
+        mn.position.y = parent.position.y + sinf(mn.orbit_angle) * mn.semi_major_axis;
     }
 }
