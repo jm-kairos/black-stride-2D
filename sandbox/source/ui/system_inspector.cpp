@@ -1,6 +1,6 @@
 #include "ui/system_inspector.h"
 #include "game.h"
-#include "ss_generation.h"          // spectral_class_name / planet_type_name / subtype names
+#include "sim/ss_generation.h"          // spectral_class_name / planet_type_name / subtype names
 #include "sim/system_evolution.h"   // evo_event_name
 #include <renderer/bs_ui.h>         // bs_ui_* panel/widget API
 #include <stdio.h>                  // snprintf

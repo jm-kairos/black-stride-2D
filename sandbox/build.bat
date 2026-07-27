@@ -11,8 +11,7 @@ FOR /R %%f in (*.cpp) do (
 REM echo "Files:" %cppFilenames%
 
 SET assembly=sandbox
-SET compilerFlags=-g
-REM -Wall -Werror
+SET compilerFlags=-g -Wall -Werror
 SET includeFlags=-Isource -I../engine/source/
 SET linkerFlags=-L../bin/ -lengine.lib
 SET defines=-DBS_DEBUG -DBSIMPORT

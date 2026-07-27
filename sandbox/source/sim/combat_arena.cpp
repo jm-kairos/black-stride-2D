@@ -1,6 +1,6 @@
 #include "sim/combat_arena.h"
 #include "game.h"            // full game_state (ship.h / projectile.h / fleet.h via the cascade)
-#include "weapon.h"          // Weapon::fire / ready / projectile_speed
+#include "sim/weapon.h"          // Weapon::fire / ready / projectile_speed
 #include "sim/galaxy_history.h" // galaxy_history_faction_is_hostile (Feature B per-entity stance)
 #include "sim/ai_ship.h"      // ai_ship_damage (General Ship AI: NPC combat entities)
 #include "sim/action_log.h"  // action_log_push

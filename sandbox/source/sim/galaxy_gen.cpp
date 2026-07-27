@@ -1,6 +1,6 @@
 #include "sim/galaxy_gen.h"
 #include "game.h"                 // GalaxyState, StarSystem, GalaxyNode
-#include "ss_generation.h"        // generate_star_system, SSGEN_DEFAULT
+#include "sim/ss_generation.h"        // generate_star_system, SSGEN_DEFAULT
 #include "sim/galaxy_spatial.h"
 #include "sim/galaxy_rng.h"
 #include <core/memory/bs_memory.h>

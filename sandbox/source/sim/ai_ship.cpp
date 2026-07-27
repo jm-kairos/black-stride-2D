@@ -8,7 +8,7 @@
 
 #include "sim/ship_mission.h"     // ship_mission_notify_destroyed (macro <-> local handoff)
 
-#include "ship_visual.h"          // ship_visual_resolve_textures
+#include "render/ship_visual.h"          // ship_visual_resolve_textures
 
 #include "sim/steering.h"         // shared steering (arrive/seek/standoff + apply)
 

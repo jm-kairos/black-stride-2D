@@ -16,13 +16,13 @@
 
 #include "sim/galaxy_gen.h"         // galaxy_env_at (structural population environment)
 
-#include "ss_generation.h"          // generate_star_system, spectral_class_name, planet_type_name
+#include "sim/ss_generation.h"          // generate_star_system, spectral_class_name, planet_type_name
 
 #include "sim/galaxy_history.h"     // galaxy_history_civ_at_node, civ_* labels (Phase 1)
 
-#include "voronoi_galaxy.h"
+#include "sim/voronoi_galaxy.h"
 
-#include "voronoi_cell_hover_effect.h"
+#include "render/voronoi_cell_hover_effect.h"
 
 #include "core/render_layers.h"
 

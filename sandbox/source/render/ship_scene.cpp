@@ -1,6 +1,6 @@
 #include "render/ship_scene.h"
 #include "game.h"
-#include "ship.h"                 // ship_local_dir
+#include "sim/ship.h"                 // ship_local_dir
 #include "core/view_transform.h"    // render_from_hierpos
 #include "sim/celestial_parallax.h" // celestial_center_render
 #include "render/debug_overlay.h"   // g_debug_cell_grid, draw_hierpos_cell_grid

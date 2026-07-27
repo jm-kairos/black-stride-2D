@@ -3,7 +3,7 @@
 #include <defines.h>
 #include <math/math_utils.h>
 #include <math/bs_hierpos.h>
-#include "ship.h" // SensorSuite, VesselFaction
+#include "sim/ship.h" // SensorSuite, VesselFaction
 
 struct game_state;
 

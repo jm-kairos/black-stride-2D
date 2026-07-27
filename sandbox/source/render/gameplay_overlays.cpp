@@ -12,7 +12,7 @@
 #include "core/render_layers.h" // LAYER_UI / LAYER_GIZMO / LAYER_DEBUG
 #include "sim/galaxy_history.h"  // galaxy_history_faction_label / faction_is_hostile
 #include "sim/ai_ship.h"         // ShipArchetype (role marker shapes)
-#include "text.h"                // text_draw (patrol label)
+#include "render/text.h"                // text_draw (patrol label)
 #include <renderer/renderer.h>
 #include <renderer/camera2d.h>   // camera2d_world_to_screen (patrol label placement)
 #include <math.h>

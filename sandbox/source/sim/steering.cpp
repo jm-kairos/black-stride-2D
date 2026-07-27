@@ -1,6 +1,6 @@
 #include "sim/steering.h"
-#include "ship.h"          // Ship (origin / angle)
-#include "fleet.h"         // ShipFlight (velocity)
+#include "sim/ship.h"          // Ship (origin / angle)
+#include "sim/fleet.h"         // ShipFlight (velocity)
 #include <math/bs_hierpos.h>
 #include <math.h>
 

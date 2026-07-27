@@ -1,7 +1,7 @@
 #include "render/debug_overlay.h"
 #include "game.h"
 #include "core/view_transform.h" // render_from_hierpos
-#include "text.h"
+#include "render/text.h"
 #include "core/render_layers.h" // LAYER_UI / LAYER_HUD_TEXT
 #include <renderer/renderer.h>
 #include <renderer/camera2d.h>

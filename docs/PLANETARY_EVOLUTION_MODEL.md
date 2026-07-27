@@ -34,7 +34,7 @@ Hard constraints the implementation honors:
 |---|---|
 | `sandbox/source/sim/system_evolution.h/.cpp` | The four-phase pipeline + selftest |
 | `sandbox/source/state/game_state.h` | Data model: `EvolvedSystem`, `EvolvedBody`, `BodyComposition`, `EvolutionEvent` |
-| `sandbox/source/ss_generation.cpp` (`generate_star_system`) | Drives evolution, derives render views + visual genome |
+| `sandbox/source/sim/ss_generation.cpp` (`generate_star_system`) | Drives evolution, derives render views + visual genome |
 | `sandbox/source/ui/system_inspector.cpp` | ImGui debug inspector over the evolved state |
 | `sandbox/source/game.cpp` (planet-inspector fill block) | RML in-game window presenting evolved data to the player |
 

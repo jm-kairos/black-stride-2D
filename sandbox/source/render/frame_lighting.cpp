@@ -2,7 +2,7 @@
 
 #include "game.h"
 #include "sim/celestial_parallax.h" // celestial_center_render
-#include "star_fx.h"
+#include "render/star_fx.h"
 #include "core/render_layers.h"
 #include <renderer/renderer.h>
 #include <math.h>

@@ -1,6 +1,6 @@
 #include "sim/system_evolution.h"
 #include "sim/galaxy_rng.h"   // galaxy_splitmix64 / GalaxyRng (per-body/per-epoch streams)
-#include "ss_generation.h"    // worldgen_orbit_range_au / worldgen_star / planet_type_name
+#include "sim/ss_generation.h"    // worldgen_orbit_range_au / worldgen_star / planet_type_name
 #include <core/logger.h>
 #include <math.h>
 #include <string.h>           // memcmp (self-test determinism check)

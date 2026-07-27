@@ -3,7 +3,7 @@
 #include "sim/ai_ship.h"          // ShipArchetype
 #include "sim/galaxy_map.h"       // galaxy_nearest_node
 #include "sim/action_log.h"       // action_log_push
-#include "ship.h"                 // ship_bounding_radius
+#include "sim/ship.h"                 // ship_bounding_radius
 #include <math/bs_hierpos.h>
 #include <string.h>               // strncpy
 #include <stdio.h>                // snprintf

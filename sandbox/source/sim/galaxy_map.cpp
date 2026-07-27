@@ -1,6 +1,6 @@
 #include "sim/galaxy_map.h"
 #include "game.h"              // full game_state
-#include "ss_generation.h"     // generate_star_system / update_planet_positions
+#include "sim/ss_generation.h"     // generate_star_system / update_planet_positions
 #include "sim/galaxy_gen.h"    // galaxy_generate
 #include "sim/galaxy_spatial.h"// galaxy_grid_nearest / galaxy_grid_query_radius
 #include "sim/galaxy_history.h" // galaxy_history_init (Phase 1 civilization seeding)

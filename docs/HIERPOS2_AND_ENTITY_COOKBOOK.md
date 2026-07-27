@@ -10,8 +10,8 @@ This document has two parts:
 Everything here is grounded in the actual code:
 [`bs_hierpos.h`](../engine/source/math/bs_hierpos.h),
 [`bs_hierpos.cpp`](../engine/source/math/bs_hierpos.cpp),
-[`ship.h`](../sandbox/source/ship.h),
-[`fleet.h`](../sandbox/source/fleet.h) / [`fleet.cpp`](../sandbox/source/fleet.cpp),
+[`ship.h`](../sandbox/source/sim/ship.h),
+[`fleet.h`](../sandbox/source/sim/fleet.h) / [`fleet.cpp`](../sandbox/source/sim/fleet.cpp),
 [`game.h`](../sandbox/source/game.h),
 and the spawn code in `game_init` ([`game.cpp`](../sandbox/source/game.cpp)).
 
@@ -122,8 +122,8 @@ come straight from `game_init` in [`game.cpp`](../sandbox/source/game.cpp).
 
 | Type | File | Meaning |
 |---|---|---|
-| `Ship` | [`ship.h`](../sandbox/source/ship.h) | A rigid-body vessel: pose (`origin` + `angle`), visual sprite layers, collider, weapons. Loaded from a `.ship` file. |
-| `FleetShip` | [`fleet.h`](../sandbox/source/fleet.h) | A **player-controlled** ship: a `Ship` + flight dynamics + selection/order state. Held by `s->fleet`. |
+| `Ship` | [`ship.h`](../sandbox/source/sim/ship.h) | A rigid-body vessel: pose (`origin` + `angle`), visual sprite layers, collider, weapons. Loaded from a `.ship` file. |
+| `FleetShip` | [`fleet.h`](../sandbox/source/sim/fleet.h) | A **player-controlled** ship: a `Ship` + flight dynamics + selection/order state. Held by `s->fleet`. |
 | `CombatEntity` | [`game.h`](../sandbox/source/game.h) | A lightweight hittable target in the flat `s->combat_entities[]` array. Any ship that can be shot must be registered here. |
 | `MapEntity` | [`game.h`](../sandbox/source/game.h) | A blip on the galaxy map, in `s->map_entities[]`. |
 

@@ -25,7 +25,7 @@ Matching VS Code tasks exist ("Build Everything" is the default build task).
 
 - Run the game as `bin\sandbox.exe` with working directory `bin\` — data files are loaded relative to cwd.
 - Vendored ImGui/RmlUi objects are cached under `engine\obj\imgui` and `engine\obj\rmlui` with relaxed warnings; delete those folders to force a clean vendor rebuild. Vendored code must never pass through the engine's `-Wall -Werror` glob.
-- Sandbox currently builds with warnings relaxed (`-Wall -Werror` commented out in `sandbox\build.bat`).
+- Both engine and sandbox build with `-Wall -Werror`.
 
 ### Shaders
 

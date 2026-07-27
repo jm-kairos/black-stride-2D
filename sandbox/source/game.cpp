@@ -4,25 +4,25 @@
 // calls into all modules, so it (and only it) pulls the whole cascade.
 #include "game_modules.h"
 
-#include "text.h"
+#include "render/text.h"
 
-#include "travel.h"
+#include "sim/travel.h"
 
-#include "coord_diag.h"
+#include "core/coord_diag.h"
 
-#include "weapon.h"
+#include "sim/weapon.h"
 
-#include "projectile.h"
+#include "sim/projectile.h"
 
 #include "sim/point_defense.h"
 
-#include "ss_generation.h"
+#include "sim/ss_generation.h"
 
-#include "voronoi_cell_hover_effect.h"
+#include "render/voronoi_cell_hover_effect.h"
 
-#include "global_background.h"
+#include "render/global_background.h"
 
-#include "mapped_system_layer.h"
+#include "render/mapped_system_layer.h"
 
 #include <core/logger.h>
 
@@ -85,10 +85,6 @@ static const f32 ZOOM_SYSTEM       = 0.06f;  // system-view zoom (wide enough fo
 // ---- Star zoom-distance scaling (MODE_SYSTEM) ----
 // STAR_MIN_SCREEN_RADIUS / STAR_DIST_SCALE_FACTOR / STAR_MAX_DIST_SCALE / STAR_HERO_MAP_MIN_RADIUS
 // now live in render/galaxy_map_render.cpp (used only by the galaxy-map look pass).
-
-static const f32 STAR_MAX_STREAK_LENGTH = 20.0f;
-
-static const f32 GALAXY_PLANET_SCALE      = 0.00006f; // visually shrink planet orbits for galaxy view (~5-30 px orbits at default zoom)
 
 // ---- Edit mode camera pan (WASD + middle-mouse drag) ----
 
@@ -768,49 +764,9 @@ b8 game_init(Game* game_inst) {
 
 // ---- Floating-origin re-centering (big_space-style) -----------------------------------------
 
-// Fold the galaxy-map camera's accumulated pan (camera.position, a small f32 Vec2) back into the
-
-// hierarchical reference cell (camera_hierpos) each frame, then reset the residual to zero. This
-
-// keeps every on-screen star/orbit rendered near the origin in f32 (hierpos_diff stays small), so
-
-// circle tessellation never quantizes into dashed outlines for systems far from Sol.
-
-//
-
-// Seamlessness: the rendered position is hierpos_diff(entity, camera_hierpos) and the view
-
-// subtracts camera.position. Folding `delta` shifts both by -delta, which cancels exactly -> no
-
-// visible pop.
-
-static void galaxy_camera_rebase(game_state* s) {
-
-    Vec2 delta = s->camera_state.camera.position;
-
-    if (delta.x == 0.0f && delta.y == 0.0f) return; // nothing accumulated this frame
-
-    // Absorb the pan into the hierarchical reference (re-canonicalizes cell + local internally).
-
-    s->camera_state.camera_hierpos  = hierpos_add_f64(&s->camera_state.camera_hierpos, (f64)delta.x, (f64)delta.y,
-
-                                         BS_HIERPOS_CELL_SIZE);
-
-    s->camera_state.camera.position = Vec2{ 0.0f, 0.0f };
-
-    // Persistent camera-space anchors must shift by the same -delta to stay valid across the
-
-    // rebase. (system_drag_world is screen-space pixels and is intentionally left untouched.)
-
-    s->camera_state.system_drag_cam         = vec2_sub(s->camera_state.system_drag_cam,         delta);
-
-    // camera_state.recenter_from_pos is a HierPos2 (absolute), so it is invariant under the
-
-    // floating-origin rebase and needs no adjustment here.
-
-}
-
 // update_enemy_orbit now lives in sim/combat_arena.cpp (combat_arena_update_enemy_orbit).
+// The per-frame floating-origin camera rebase happens inline in game_update (the block that
+// folds the chosen true-world center into camera_hierpos).
 
 // Phase A: the staged New Game generation pipeline. One heavy step per frame (so the progress bar
 // advances between them); when the last stage completes we enter APP_PLAYING. Deterministic.

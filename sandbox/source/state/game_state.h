@@ -14,23 +14,23 @@
 
 
 
-#include "ship.h"
+#include "sim/ship.h"
 
 
 
-#include "projectile.h"
+#include "sim/projectile.h"
 
 
 
-#include "star_fx.h"
+#include "render/star_fx.h"
 
 
 
-#include "global_background.h"
+#include "render/global_background.h"
 
 
 
-#include "voronoi_galaxy.h"
+#include "sim/voronoi_galaxy.h"
 
 
 
@@ -42,23 +42,23 @@
 
 
 
-#include "travel.h"
+#include "sim/travel.h"
 
 
 
-#include "fleet.h"
+#include "sim/fleet.h"
 
 
 
-#include "rts_controls.h"
+#include "sim/rts_controls.h"
 
 
 
-#include "out_sensor_detection_fx.h"
+#include "render/out_sensor_detection_fx.h"
 
 
 
-#include "profiler.h"
+#include "core/profiler.h"
 
 
 

@@ -3,7 +3,7 @@
 #include "render/debug_overlay.h" // g_debug_cell_grid
 #include "sim/action_log.h"       // action_log_push
 #include "sim/combat_arena.h"     // combat_arena_rebuild_player_entities (multi-ship toggle)
-#include "coord_diag.h"        // coord_diag_is_enabled / set_enabled / last_violations
+#include "core/coord_diag.h"        // coord_diag_is_enabled / set_enabled / last_violations
 #include <renderer/bs_ui.h>    // bs_ui_* panel/widget API
 #include "core/view_transform.h" // g_zoom_out_speed_gain
 #include "render/sensor_overlay.h" // g_sensor_fade_distance
