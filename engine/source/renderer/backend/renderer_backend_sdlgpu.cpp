@@ -72,6 +72,12 @@ static void bs_rml_render_internal(void);
 // gating the per-frame scene-blur fill. Defined alongside the bs_rml facade at the bottom.
 static b8 g_rml_frost_active(void);
 
+// Submit the shared RmlUi buffer-upload command buffer (if any) for this frame. MUST be called
+// before the frame's main command buffer is submitted — SDL GPU executes command buffers in
+// submission order, so the geometry uploads land before the draws that reference them. Defined
+// alongside the RmlUi render interface below.
+static void rml_upload_flush(void);
+
 // Workaround: on D3D12, SDL_GetGPUSwapchainTextureFormat() may report R8G8B8A8_UNORM
 // at init time while the actual swapchain is created as B8G8R8A8_UNORM.  If we build
 // pipelines with the reported value we get a format-mismatch validation error on every
@@ -3062,6 +3068,9 @@ b8 sdlgpu_backend_end_frame(struct renderer_backend* backend, f32 dt)
 
     u64 sub_t0 = SDL_GetPerformanceCounter();
     tm_record = (f32)((f64)(sub_t0 - rec_t0) * perf_to_ms) - tm_rml;
+    // Flush RmlUi's batched buffer uploads FIRST: submission order makes the GPU run the geometry
+    // uploads before the main command buffer's draws that reference those buffers.
+    rml_upload_flush();
     SDL_SubmitGPUCommandBuffer(g_sdl.cmd);
     g_sdl.last_submit_ms =
         (f32)((f64)(SDL_GetPerformanceCounter() - sub_t0) * 1000.0 / (f64)SDL_GetPerformanceFrequency());
@@ -3201,8 +3210,51 @@ bs_rml_state g_rml;
 // both correct and cheap (four half-res passes).
 static b8 g_rml_frost_active(void) { return g_rml.active; }
 
-// Create + upload a persistent GPU buffer from CPU data using an OWN command buffer/copy pass, so
-// it is safe to call even while the frame's render pass is open. Returns NULL on failure.
+// -------------------------------------------------------------------------------------
+// RmlUi batched buffer uploads.
+//
+// RmlUi recompiles the geometry of every CHANGED element each frame (live HUD text = dozens of
+// CompileGeometry calls per frame). Giving each buffer its own command buffer + submit round-trip
+// costs ~0.25 ms of driver overhead PER SUBMIT on some machines (measured ~25 ms/frame stalls),
+// so all buffer uploads for a frame are recorded into ONE shared command buffer / copy pass and
+// submitted once, right before the frame's main command buffer (submission order guarantees the
+// uploads execute first). Transfer buffers are released after the shared submit.
+// -------------------------------------------------------------------------------------
+#define RML_UPLOAD_MAX_TRANSFERS 1024
+static SDL_GPUCommandBuffer*  g_rml_upload_cmd  = NULL;
+static SDL_GPUCopyPass*       g_rml_upload_pass = NULL;
+static SDL_GPUTransferBuffer* g_rml_upload_transfers[RML_UPLOAD_MAX_TRANSFERS];
+static u32                    g_rml_upload_transfer_count = 0;
+
+static void rml_upload_flush(void)
+{
+    if (!g_rml_upload_cmd) return;
+    SDL_EndGPUCopyPass(g_rml_upload_pass);
+    g_rml_upload_pass = NULL;
+    SDL_SubmitGPUCommandBuffer(g_rml_upload_cmd);
+    g_rml_upload_cmd = NULL;
+    // Safe to release now: SDL defers actual destruction until the GPU is done with them.
+    for (u32 i = 0; i < g_rml_upload_transfer_count; ++i)
+        SDL_ReleaseGPUTransferBuffer(g_sdl.device, g_rml_upload_transfers[i]);
+    g_rml_upload_transfer_count = 0;
+}
+
+// Lazily open (or return) the shared upload copy pass. Returns NULL on failure.
+static SDL_GPUCopyPass* rml_upload_pass_begin(void)
+{
+    if (g_rml_upload_transfer_count >= RML_UPLOAD_MAX_TRANSFERS) rml_upload_flush(); // cap safety
+    if (!g_rml_upload_cmd)
+    {
+        g_rml_upload_cmd = SDL_AcquireGPUCommandBuffer(g_sdl.device);
+        if (!g_rml_upload_cmd) return NULL;
+        g_rml_upload_pass = SDL_BeginGPUCopyPass(g_rml_upload_cmd);
+    }
+    return g_rml_upload_pass;
+}
+
+// Create a persistent GPU buffer from CPU data. The upload is recorded into the shared per-frame
+// RmlUi upload batch (NOT submitted here) — safe while the frame's render pass is open, and the
+// batch is flushed in end_frame before the main command buffer is submitted. Returns NULL on failure.
 static SDL_GPUBuffer* sdlgpu_create_buffer_with_data(SDL_GPUBufferUsageFlags usage,
                                                      const void* data, u32 size, const char* ctx)
 {
@@ -3226,18 +3278,15 @@ static SDL_GPUBuffer* sdlgpu_create_buffer_with_data(SDL_GPUBufferUsageFlags usa
     SDL_memcpy(map, data, size);
     SDL_UnmapGPUTransferBuffer(g_sdl.device, tb);
 
-    SDL_GPUCommandBuffer* up = SDL_AcquireGPUCommandBuffer(g_sdl.device);
-    if (!up) { BS_LOG_ERROR("%s: command buffer failed: %s", ctx, SDL_GetError()); SDL_ReleaseGPUTransferBuffer(g_sdl.device, tb); SDL_ReleaseGPUBuffer(g_sdl.device, buf); return NULL; }
+    SDL_GPUCopyPass* cp = rml_upload_pass_begin();
+    if (!cp) { BS_LOG_ERROR("%s: upload command buffer failed: %s", ctx, SDL_GetError()); SDL_ReleaseGPUTransferBuffer(g_sdl.device, tb); SDL_ReleaseGPUBuffer(g_sdl.device, buf); return NULL; }
 
-    SDL_GPUCopyPass* cp = SDL_BeginGPUCopyPass(up);
     SDL_GPUTransferBufferLocation src; SDL_zero(src);
     src.transfer_buffer = tb; src.offset = 0;
     SDL_GPUBufferRegion dst; SDL_zero(dst);
     dst.buffer = buf; dst.offset = 0; dst.size = size;
     SDL_UploadToGPUBuffer(cp, &src, &dst, false);
-    SDL_EndGPUCopyPass(cp);
-    SDL_SubmitGPUCommandBuffer(up);
-    SDL_ReleaseGPUTransferBuffer(g_sdl.device, tb);
+    g_rml_upload_transfers[g_rml_upload_transfer_count++] = tb; // released after the batch submit
 
     return buf;
 }
@@ -3880,9 +3929,11 @@ void bs_rml_shutdown(void)
 {
     if (!g_rml.active) return;
 
-    // Drain the GPU before releasing RmlUi's device-bound resources, and do it BEFORE the backend
-    // destroys the device (renderer.cpp ordering). Rml::Shutdown unloads all documents and calls
+    // Flush any pending batched geometry uploads, then drain the GPU before releasing RmlUi's
+    // device-bound resources, and do it BEFORE the backend destroys the device (renderer.cpp
+    // ordering). Rml::Shutdown unloads all documents and calls
     // ReleaseGeometry/ReleaseTexture on our render interface, freeing the GPU buffers/textures.
+    rml_upload_flush();
     if (g_sdl.device) SDL_WaitForGPUIdle(g_sdl.device);
 
     // Tear down the HUD data model + document BEFORE Rml::Shutdown so the RemoveDataModel /
