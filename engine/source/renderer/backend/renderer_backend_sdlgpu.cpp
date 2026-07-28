@@ -78,6 +78,11 @@ static b8 g_rml_frost_active(void);
 // alongside the RmlUi render interface below.
 static void rml_upload_flush(void);
 
+// Per-frame RmlUi churn counters (reset after the breakdown log in end_frame).
+static u32 g_rml_stat_compiles   = 0; // CompileGeometry calls this frame
+static u32 g_rml_stat_creates    = 0; // actual SDL_CreateGPUBuffer/TransferBuffer calls (pool misses)
+static u32 g_rml_stat_pool_hits  = 0; // buffers served from the pools
+
 // Workaround: on D3D12, SDL_GetGPUSwapchainTextureFormat() may report R8G8B8A8_UNORM
 // at init time while the actual swapchain is created as B8G8R8A8_UNORM.  If we build
 // pipelines with the reported value we get a format-mismatch validation error on every
@@ -3087,12 +3092,15 @@ b8 sdlgpu_backend_end_frame(struct renderer_backend* backend, f32 dt)
             {
                 s_last_report = now;
                 BS_LOG_WARN("end_frame breakdown (%.1fms total): imgui_render=%.2f build_upload=%.2f "
-                            "acquire=%.2f imgui_prepare=%.2f record=%.2f rml=%.2f submit=%.2f",
+                            "acquire=%.2f imgui_prepare=%.2f record=%.2f rml=%.2f submit=%.2f "
+                            "rml_compiles=%u creates=%u pool_hits=%u",
                             total_ms, tm_imgui_render, tm_build_upload, g_sdl.last_acquire_ms,
-                            tm_imgui_prepare, tm_record, tm_rml, g_sdl.last_submit_ms);
+                            tm_imgui_prepare, tm_record, tm_rml, g_sdl.last_submit_ms,
+                            g_rml_stat_compiles, g_rml_stat_creates, g_rml_stat_pool_hits);
             }
         }
     }
+    g_rml_stat_compiles = g_rml_stat_creates = g_rml_stat_pool_hits = 0;
     g_sdl.cmd               = NULL;
     g_sdl.swapchain_texture = NULL;
     g_sdl.aux_bloom_mode  = FALSE;
@@ -3124,6 +3132,8 @@ struct bs_rml_geometry
     SDL_GPUBuffer* vbuf;
     SDL_GPUBuffer* ibuf;
     u32            index_count;
+    u32            vbuf_alloc; // pooled allocation size (pow2 bucket), for pool return
+    u32            ibuf_alloc;
 };
 
 // A compiled RmlUi shader effect. Currently only the "backdrop" frosted-glass shader; the tint is
@@ -3211,20 +3221,79 @@ bs_rml_state g_rml;
 static b8 g_rml_frost_active(void) { return g_rml.active; }
 
 // -------------------------------------------------------------------------------------
-// RmlUi batched buffer uploads.
+// RmlUi batched buffer uploads + buffer pooling.
 //
 // RmlUi recompiles the geometry of every CHANGED element each frame (live HUD text = dozens of
-// CompileGeometry calls per frame). Giving each buffer its own command buffer + submit round-trip
-// costs ~0.25 ms of driver overhead PER SUBMIT on some machines (measured ~25 ms/frame stalls),
-// so all buffer uploads for a frame are recorded into ONE shared command buffer / copy pass and
-// submitted once, right before the frame's main command buffer (submission order guarantees the
-// uploads execute first). Transfer buffers are released after the shared submit.
+// CompileGeometry calls per frame). Two costs must be avoided on driver-overhead-heavy machines:
+//   1. One command-buffer submit per upload (~0.25 ms each) -> all uploads for a frame are
+//      recorded into ONE shared command buffer / copy pass, submitted right before the frame's
+//      main command buffer (submission order guarantees the uploads execute first).
+//   2. Creating + destroying ~100 GPU buffers and transfer buffers per frame (driver allocation
+//      and residency cost, paid at submit) -> released buffers go into pow2-bucketed pools and
+//      are reused. In-flight hazards are handled by SDL_GPU's `cycle` flag on map/upload.
 // -------------------------------------------------------------------------------------
 #define RML_UPLOAD_MAX_TRANSFERS 1024
 static SDL_GPUCommandBuffer*  g_rml_upload_cmd  = NULL;
 static SDL_GPUCopyPass*       g_rml_upload_pass = NULL;
-static SDL_GPUTransferBuffer* g_rml_upload_transfers[RML_UPLOAD_MAX_TRANSFERS];
-static u32                    g_rml_upload_transfer_count = 0;
+struct rml_pending_transfer { SDL_GPUTransferBuffer* tb; u32 size; };
+static rml_pending_transfer  g_rml_upload_transfers[RML_UPLOAD_MAX_TRANSFERS];
+static u32                   g_rml_upload_transfer_count = 0;
+
+struct rml_pooled_buffer   { SDL_GPUBuffer* buf; u32 size; SDL_GPUBufferUsageFlags usage; };
+struct rml_pooled_transfer { SDL_GPUTransferBuffer* tb; u32 size; };
+#define RML_BUFFER_POOL_CAP   1024
+#define RML_TRANSFER_POOL_CAP 512
+static rml_pooled_buffer   g_rml_buffer_pool[RML_BUFFER_POOL_CAP];
+static u32                 g_rml_buffer_pool_count = 0;
+static rml_pooled_transfer g_rml_transfer_pool[RML_TRANSFER_POOL_CAP];
+static u32                 g_rml_transfer_pool_count = 0;
+
+// Round a byte size up to the pool bucket (pow2, min 256) so text quads of slightly varying
+// sizes still hit the same pool slots.
+static u32 rml_pool_bucket(u32 size)
+{
+    u32 bucket = 256;
+    while (bucket < size) bucket <<= 1;
+    return bucket;
+}
+
+static void rml_buffer_pool_release(SDL_GPUBuffer* buf, u32 alloc_size, SDL_GPUBufferUsageFlags usage)
+{
+    if (buf == NULL) return;
+    if (alloc_size == 0 || g_rml_buffer_pool_count >= RML_BUFFER_POOL_CAP)
+    {
+        SDL_ReleaseGPUBuffer(g_sdl.device, buf);
+        return;
+    }
+    g_rml_buffer_pool[g_rml_buffer_pool_count].buf   = buf;
+    g_rml_buffer_pool[g_rml_buffer_pool_count].size  = alloc_size;
+    g_rml_buffer_pool[g_rml_buffer_pool_count].usage = usage;
+    g_rml_buffer_pool_count++;
+}
+
+static void rml_transfer_pool_release(SDL_GPUTransferBuffer* tb, u32 alloc_size)
+{
+    if (tb == NULL) return;
+    if (alloc_size == 0 || g_rml_transfer_pool_count >= RML_TRANSFER_POOL_CAP)
+    {
+        SDL_ReleaseGPUTransferBuffer(g_sdl.device, tb);
+        return;
+    }
+    g_rml_transfer_pool[g_rml_transfer_pool_count].tb   = tb;
+    g_rml_transfer_pool[g_rml_transfer_pool_count].size = alloc_size;
+    g_rml_transfer_pool_count++;
+}
+
+// Free everything held by the pools (shutdown only; the GPU must be idle).
+static void rml_pools_destroy(void)
+{
+    for (u32 i = 0; i < g_rml_buffer_pool_count; ++i)
+        SDL_ReleaseGPUBuffer(g_sdl.device, g_rml_buffer_pool[i].buf);
+    g_rml_buffer_pool_count = 0;
+    for (u32 i = 0; i < g_rml_transfer_pool_count; ++i)
+        SDL_ReleaseGPUTransferBuffer(g_sdl.device, g_rml_transfer_pool[i].tb);
+    g_rml_transfer_pool_count = 0;
+}
 
 static void rml_upload_flush(void)
 {
@@ -3233,9 +3302,10 @@ static void rml_upload_flush(void)
     g_rml_upload_pass = NULL;
     SDL_SubmitGPUCommandBuffer(g_rml_upload_cmd);
     g_rml_upload_cmd = NULL;
-    // Safe to release now: SDL defers actual destruction until the GPU is done with them.
+    // Return transfer buffers to the pool for reuse next frame (mapping with cycle=true makes
+    // reuse safe even while this frame's copies are still in flight).
     for (u32 i = 0; i < g_rml_upload_transfer_count; ++i)
-        SDL_ReleaseGPUTransferBuffer(g_sdl.device, g_rml_upload_transfers[i]);
+        rml_transfer_pool_release(g_rml_upload_transfers[i].tb, g_rml_upload_transfers[i].size);
     g_rml_upload_transfer_count = 0;
 }
 
@@ -3252,42 +3322,83 @@ static SDL_GPUCopyPass* rml_upload_pass_begin(void)
     return g_rml_upload_pass;
 }
 
-// Create a persistent GPU buffer from CPU data. The upload is recorded into the shared per-frame
-// RmlUi upload batch (NOT submitted here) — safe while the frame's render pass is open, and the
-// batch is flushed in end_frame before the main command buffer is submitted. Returns NULL on failure.
+// Create (or reuse from the pool) a GPU buffer and record its upload into the shared per-frame
+// RmlUi upload batch (NOT submitted here) — safe while the frame's render pass is open. The batch
+// is flushed in end_frame before the main command buffer is submitted. On success *out_alloc gets
+// the pooled allocation size (pass it back to rml_buffer_pool_release). Returns NULL on failure.
 static SDL_GPUBuffer* sdlgpu_create_buffer_with_data(SDL_GPUBufferUsageFlags usage,
-                                                     const void* data, u32 size, const char* ctx)
+                                                     const void* data, u32 size, u32* out_alloc,
+                                                     const char* ctx)
 {
+    if (out_alloc) *out_alloc = 0;
     if (size == 0) { BS_LOG_ERROR("%s: zero-size buffer.", ctx); return NULL; }
+    const u32 bucket = rml_pool_bucket(size);
 
-    SDL_GPUBufferCreateInfo binfo;
-    SDL_zero(binfo);
-    binfo.usage = usage;
-    binfo.size  = size;
-    SDL_GPUBuffer* buf = SDL_CreateGPUBuffer(g_sdl.device, &binfo);
-    if (!buf) { BS_LOG_ERROR("%s: SDL_CreateGPUBuffer failed: %s", ctx, SDL_GetError()); return NULL; }
+    // GPU buffer: pool first, create on miss.
+    SDL_GPUBuffer* buf = NULL;
+    for (u32 i = 0; i < g_rml_buffer_pool_count; ++i)
+    {
+        if (g_rml_buffer_pool[i].usage == usage && g_rml_buffer_pool[i].size == bucket)
+        {
+            buf = g_rml_buffer_pool[i].buf;
+            g_rml_buffer_pool[i] = g_rml_buffer_pool[--g_rml_buffer_pool_count];
+            g_rml_stat_pool_hits++;
+            break;
+        }
+    }
+    if (!buf)
+    {
+        SDL_GPUBufferCreateInfo binfo;
+        SDL_zero(binfo);
+        binfo.usage = usage;
+        binfo.size  = bucket;
+        buf = SDL_CreateGPUBuffer(g_sdl.device, &binfo);
+        if (!buf) { BS_LOG_ERROR("%s: SDL_CreateGPUBuffer failed: %s", ctx, SDL_GetError()); return NULL; }
+        g_rml_stat_creates++;
+    }
 
-    SDL_GPUTransferBufferCreateInfo tinfo;
-    SDL_zero(tinfo);
-    tinfo.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
-    tinfo.size  = size;
-    SDL_GPUTransferBuffer* tb = SDL_CreateGPUTransferBuffer(g_sdl.device, &tinfo);
-    if (!tb) { BS_LOG_ERROR("%s: transfer buffer failed: %s", ctx, SDL_GetError()); SDL_ReleaseGPUBuffer(g_sdl.device, buf); return NULL; }
+    // Transfer buffer: pool first, create on miss.
+    SDL_GPUTransferBuffer* tb = NULL;
+    for (u32 i = 0; i < g_rml_transfer_pool_count; ++i)
+    {
+        if (g_rml_transfer_pool[i].size == bucket)
+        {
+            tb = g_rml_transfer_pool[i].tb;
+            g_rml_transfer_pool[i] = g_rml_transfer_pool[--g_rml_transfer_pool_count];
+            g_rml_stat_pool_hits++;
+            break;
+        }
+    }
+    if (!tb)
+    {
+        SDL_GPUTransferBufferCreateInfo tinfo;
+        SDL_zero(tinfo);
+        tinfo.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
+        tinfo.size  = bucket;
+        tb = SDL_CreateGPUTransferBuffer(g_sdl.device, &tinfo);
+        if (!tb) { BS_LOG_ERROR("%s: transfer buffer failed: %s", ctx, SDL_GetError()); rml_buffer_pool_release(buf, bucket, usage); return NULL; }
+        g_rml_stat_creates++;
+    }
 
-    void* map = SDL_MapGPUTransferBuffer(g_sdl.device, tb, false);
+    // cycle=true: if the buffer is still referenced by in-flight commands, SDL swaps in a fresh
+    // backing allocation instead of stalling — required for safe pool reuse across frames.
+    void* map = SDL_MapGPUTransferBuffer(g_sdl.device, tb, true);
     SDL_memcpy(map, data, size);
     SDL_UnmapGPUTransferBuffer(g_sdl.device, tb);
 
     SDL_GPUCopyPass* cp = rml_upload_pass_begin();
-    if (!cp) { BS_LOG_ERROR("%s: upload command buffer failed: %s", ctx, SDL_GetError()); SDL_ReleaseGPUTransferBuffer(g_sdl.device, tb); SDL_ReleaseGPUBuffer(g_sdl.device, buf); return NULL; }
+    if (!cp) { BS_LOG_ERROR("%s: upload command buffer failed: %s", ctx, SDL_GetError()); rml_transfer_pool_release(tb, bucket); rml_buffer_pool_release(buf, bucket, usage); return NULL; }
 
     SDL_GPUTransferBufferLocation src; SDL_zero(src);
     src.transfer_buffer = tb; src.offset = 0;
     SDL_GPUBufferRegion dst; SDL_zero(dst);
     dst.buffer = buf; dst.offset = 0; dst.size = size;
-    SDL_UploadToGPUBuffer(cp, &src, &dst, false);
-    g_rml_upload_transfers[g_rml_upload_transfer_count++] = tb; // released after the batch submit
+    SDL_UploadToGPUBuffer(cp, &src, &dst, true);
+    g_rml_upload_transfers[g_rml_upload_transfer_count].tb   = tb; // pooled after the batch submit
+    g_rml_upload_transfers[g_rml_upload_transfer_count].size = bucket;
+    g_rml_upload_transfer_count++;
 
+    if (out_alloc) *out_alloc = bucket;
     return buf;
 }
 
@@ -3327,13 +3438,15 @@ Rml::CompiledGeometryHandle BsRmlRenderInterface::CompileGeometry(Rml::Span<cons
     const u32 vsize = (u32)(vertices.size() * sizeof(Rml::Vertex));
     const u32 isize = (u32)(indices.size()  * sizeof(int));
     if (vsize == 0 || isize == 0) return 0;
+    g_rml_stat_compiles++;
 
-    SDL_GPUBuffer* vbuf = sdlgpu_create_buffer_with_data(SDL_GPU_BUFFERUSAGE_VERTEX, vertices.data(), vsize, "rml CompileGeometry(vbuf)");
+    u32 valloc = 0, ialloc = 0;
+    SDL_GPUBuffer* vbuf = sdlgpu_create_buffer_with_data(SDL_GPU_BUFFERUSAGE_VERTEX, vertices.data(), vsize, &valloc, "rml CompileGeometry(vbuf)");
     if (!vbuf) return 0;
-    SDL_GPUBuffer* ibuf = sdlgpu_create_buffer_with_data(SDL_GPU_BUFFERUSAGE_INDEX, indices.data(), isize, "rml CompileGeometry(ibuf)");
-    if (!ibuf) { SDL_ReleaseGPUBuffer(g_sdl.device, vbuf); return 0; }
+    SDL_GPUBuffer* ibuf = sdlgpu_create_buffer_with_data(SDL_GPU_BUFFERUSAGE_INDEX, indices.data(), isize, &ialloc, "rml CompileGeometry(ibuf)");
+    if (!ibuf) { rml_buffer_pool_release(vbuf, valloc, SDL_GPU_BUFFERUSAGE_VERTEX); return 0; }
 
-    bs_rml_geometry* geom = new bs_rml_geometry{ vbuf, ibuf, (u32)indices.size() };
+    bs_rml_geometry* geom = new bs_rml_geometry{ vbuf, ibuf, (u32)indices.size(), valloc, ialloc };
     return (Rml::CompiledGeometryHandle)geom;
 }
 
@@ -3388,8 +3501,9 @@ void BsRmlRenderInterface::ReleaseGeometry(Rml::CompiledGeometryHandle geometry)
 {
     bs_rml_geometry* geom = (bs_rml_geometry*)geometry;
     if (!geom) return;
-    if (geom->vbuf) SDL_ReleaseGPUBuffer(g_sdl.device, geom->vbuf);
-    if (geom->ibuf) SDL_ReleaseGPUBuffer(g_sdl.device, geom->ibuf);
+    // Returned to the pool for reuse, not destroyed (avoids per-frame create/release churn).
+    rml_buffer_pool_release(geom->vbuf, geom->vbuf_alloc, SDL_GPU_BUFFERUSAGE_VERTEX);
+    rml_buffer_pool_release(geom->ibuf, geom->ibuf_alloc, SDL_GPU_BUFFERUSAGE_INDEX);
     delete geom;
 }
 
@@ -3942,6 +4056,9 @@ void bs_rml_shutdown(void)
 
     Rml::Shutdown();
     g_rml.context = NULL;
+
+    // Rml::Shutdown released all geometry into the pools; now actually destroy the pooled buffers.
+    rml_pools_destroy();
 
     if (g_rml.pipeline)
     {
