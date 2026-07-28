@@ -15,14 +15,15 @@ struct game_state;
 // camera (see galaxy_map.cpp). Allocates node/grid/lane arrays from MEMORY_TAG_GAME.
 
 // Tunables (world units). The disc extent (see the spiral-structure block below) MUST keep typical
-// neighbour spacing well above a star system's outer-orbit DIAMETER (~1.8e8 for the biggest
+// neighbour spacing well above a star system's outer-orbit DIAMETER (~4.0e8 for the biggest
 // systems) or neighbouring systems' orbits intersect. A hard minimum separation (blue-noise
 // rejection during placement) additionally prevents the rare close pairs the density would produce.
-// R_max clamps the disc radius.
+// R_max clamps the disc radius. The min separation is deliberately ~4x the biggest system's
+// diameter (not merely >= it) so interstellar space reads as EMPTY relative to system size.
 static const i32 GALAXY_TARGET_SYSTEMS = 10000;
-static const f64 GALAXY_DISC_RMAX      = 4.0e10;
-static const f64 GALAXY_MIN_SEPARATION = 2.0e8;   // >= biggest system's outer-orbit diameter
-static const f64 GALAXY_GRID_CELL      = 2.5e8;   // ~= typical neighbour spacing (1-2 nodes/cell)
+static const f64 GALAXY_DISC_RMAX      = 3.2e11;
+static const f64 GALAXY_MIN_SEPARATION = 1.6e9;   // ~4x biggest system's outer-orbit diameter
+static const f64 GALAXY_GRID_CELL      = 2.0e9;   // ~= typical neighbour spacing (1-2 nodes/cell)
 static const i32 GALAXY_KNN_K          = 8;
 static const f32 GALAXY_LANE_ADDBACK   = 0.20f;   // fraction of leftover kNN edges kept as loops
 
@@ -31,15 +32,15 @@ static const f32 GALAXY_LANE_ADDBACK   = 0.20f;   // fraction of leftover kNN ed
 // field). The disc radius is drawn from an exponential surface-density profile (r ~ Gamma(2,r_d));
 // arm scatter widens toward the core so the arms dissolve into the bulge. Star COLOUR then follows
 // this structure via the per-position SSGenEnv (young/blue in arms, old/gold in the metal-rich core).
-static const f64 GALAXY_DISC_SCALE_LEN = 1.0e10;  // exponential disc radial scale length (r_d)
+static const f64 GALAXY_DISC_SCALE_LEN = 8.0e10;  // exponential disc radial scale length (r_d)
 static const i32 GALAXY_ARM_COUNT      = 2;       // grand-design spiral arm count
 static const f64 GALAXY_ARM_PITCH_RAD  = 0.45;    // log-spiral pitch angle (~26 deg); smaller = tighter
-static const f64 GALAXY_ARM_R0         = 1.0e10;  // reference radius anchoring the arm phase
+static const f64 GALAXY_ARM_R0         = 8.0e10;  // reference radius anchoring the arm phase
 static const f64 GALAXY_ARM_WIDTH_RAD  = 0.16;    // angular sigma of an arm (crisp grand-design lanes)
 static const f64 GALAXY_ARM_CORE_FLARE = 0.8;     // extra arm scatter toward the core (arms dissolve)
 static const f32 GALAXY_ARM_FRACTION   = 0.85f;   // fraction of disc systems bound to an arm
 static const f32 GALAXY_BULGE_FRACTION = 0.18f;   // fraction of all systems in the central bulge
-static const f64 GALAXY_BULGE_SCALE    = 6.0e9;   // bulge Rayleigh sigma (compact spheroidal core)
+static const f64 GALAXY_BULGE_SCALE    = 4.8e10;  // bulge Rayleigh sigma (compact spheroidal core)
 
 // Structural "environment" at a galaxy position: galactocentric radius fraction (0 core .. 1 rim),
 // spiral-arm/young-region proximity (0 inter-arm .. 1 arm spine), and old-population strength

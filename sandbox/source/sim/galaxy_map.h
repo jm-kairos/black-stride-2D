@@ -6,9 +6,9 @@ struct game_state;
 
 // Radius (world units) around the camera within which galaxy nodes are fully materialised
 // into the hot cache (star + planets). Nodes beyond this render only as map dots. Kept small
-// relative to the ~2.5e8 inter-system spacing so only a few non-overlapping neighbours ever
+// relative to the ~2e9 inter-system spacing so only a few non-overlapping neighbours ever
 // draw their orbit rings in full detail at once.
-static const f64 GALAXY_MATERIALIZE_RADIUS = 3.0e8;
+static const f64 GALAXY_MATERIALIZE_RADIUS = 2.4e9;
 
 // Galaxy-map subsystem: procedural galaxy generation plus the per-frame upkeep that keeps the
 // galaxy map in sync with the world. Rendering lives in render/galaxy_map_render.cpp; the

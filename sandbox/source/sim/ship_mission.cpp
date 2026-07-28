@@ -34,9 +34,9 @@ using GalaxyState = game_state::GalaxyState;
 
 // Jump-circle radius fallback for a node with no recorded planet orbits (comparable to 2x a
 
-// typical outer orbit, which spans ~1.5M..8M world units).
+// typical outer orbit, which spans ~3M..16M world units).
 
-static const f32 JUMP_RADIUS_FALLBACK = 1.6e7f;
+static const f32 JUMP_RADIUS_FALLBACK = 3.2e7f;
 
 
 

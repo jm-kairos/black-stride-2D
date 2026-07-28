@@ -1168,6 +1168,8 @@ void draw_galaxy_map_look(game_state* s, f32 dt) {
 
             Vec2 center_star   = celestial_center_render(s, &ss.galaxy_center, &s->celestial_anchor, s->render.depth_star);
 
+            Vec2 center_orbit  = celestial_center_render(s, &ss.galaxy_center, &s->celestial_anchor, s->render.depth_orbit);
+
             Vec2 center_planet = celestial_center_render(s, &ss.galaxy_center, &s->celestial_anchor, s->render.depth_planet);
 
             Vec2 star_pos = vec2_add(center_star, ss.star.position);
@@ -1226,7 +1228,7 @@ void draw_galaxy_map_look(game_state* s, f32 dt) {
 
 
 
-            // Planets — draw the lit spheres (orbit rings removed).
+            // Planets + orbit rings — true elliptical orbit paths under the lit spheres.
 
             f32 inv_zoom = 1.0f / s->camera_state.camera.zoom;
 
@@ -1241,6 +1243,29 @@ void draw_galaxy_map_look(game_state* s, f32 dt) {
                 if (!s->render.celestial_draw_planets) continue; // editor toggle (max_orbit still needed)
 
                 if (p.semi_major_axis * s->camera_state.camera.zoom < 6.0f) continue; // orbit sub-6px: skip planet
+
+                // Orbit ring — the true ellipse (focus at the star, centre offset by a*e along the
+                // rotated major axis), as 64 chords at screen-constant ~1px thickness. Alpha fades
+                // in just past the sub-6px LOD gate so rings don't pop when zooming.
+                {
+                    f32 orbit_px = p.semi_major_axis * s->camera_state.camera.zoom;
+                    f32 fade = clampf((orbit_px - 6.0f) / 18.0f, 0.0f, 1.0f);
+                    bs_color ring_col = p.color; ring_col.a = 0.25f * vis * map_w * fade;
+                    if (ring_col.a > 0.01f) {
+                        f32 rcw = cosf(p.arg_periapsis), rsw = sinf(p.arg_periapsis);
+                        f32 semi_minor = p.semi_major_axis * sqrtf(1.0f - p.eccentricity * p.eccentricity);
+                        const i32 SEGMENTS = 64;
+                        Vec2 prev{};
+                        for (i32 k = 0; k <= SEGMENTS; ++k) {
+                            f32 E = (f32)k / (f32)SEGMENTS * 2.0f * BS_PI;
+                            f32 ex = p.semi_major_axis * (cosf(E) - p.eccentricity);
+                            f32 ey = semi_minor * sinf(E);
+                            Vec2 pt = vec2_add(center_orbit, Vec2{ rcw * ex - rsw * ey, rsw * ex + rcw * ey });
+                            if (k > 0) renderer_draw_line(prev, pt, inv_zoom, ring_col, LAYER_CELESTIAL);
+                            prev = pt;
+                        }
+                    }
+                }
 
                 Vec2 planet_off = p.position;
 

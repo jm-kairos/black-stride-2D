@@ -355,7 +355,7 @@ void build_editor_panel(game_state* s) {
         bs_ui_checkbox("Animate thickness", &s->galaxy.map_anim_thickness);
         bs_ui_checkbox("Draw hyperjump range", &s->galaxy.map_draw_jump_range);
         if (s->galaxy.map_draw_jump_range) {
-            bs_ui_slider_float("Range (units)", &s->galaxy.map_jump_range, 0.0f, 10000000.0f);
+            bs_ui_slider_float("Range (units)", &s->galaxy.map_jump_range, 0.0f, 40000000.0f);
         }
         bs_ui_checkbox("Draw sensor range", &s->galaxy.map_draw_sensor_range);
         if (s->galaxy.map_draw_sensor_range) {
@@ -462,7 +462,7 @@ void build_editor_panel(game_state* s) {
         Fleet& fleet = s->fleet_state.fleet;
         f32 jr = (fleet.count() > 0) ? fleet.at(0).jump_radius : JUMP_RADIUS_DEFAULT;
         f32 jr_prev = jr;
-        bs_ui_slider_float("Jump radius (units)", &jr, 10000.0f, 500000000.0f);
+        bs_ui_slider_float("Jump radius (units)", &jr, 10000.0f, 4000000000.0f);
         if (jr != jr_prev) fleet.set_all_jump_radius(jr);
         i32 center_idx = -1;
         f32 min_r = 0.0f;

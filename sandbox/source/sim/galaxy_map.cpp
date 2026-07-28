@@ -546,11 +546,11 @@ void galaxy_map_worldgen(game_state* s) {
     s->galaxy.map_anim_thickness = true;
 
     s->galaxy.map_draw_jump_range   = FALSE;
-    s->galaxy.map_jump_range        = 5000000.0f;
+    s->galaxy.map_jump_range        = 10000000.0f;
     s->galaxy.map_draw_sensor_range = FALSE;
     s->galaxy.map_sensor_range      = 250000.0f;
-    s->galaxy.ai_speed_in_system    = 50000.0f;    // u/s: in-system legs (stations / jump-points)
-    s->galaxy.ai_speed_jump         = 1.0e6f;      // u/s: between systems (jump-point to jump-point)
+    s->galaxy.ai_speed_in_system    = 100000.0f;   // u/s: in-system legs (stations / jump-points; x2 with orbit scale)
+    s->galaxy.ai_speed_jump         = 8.0e6f;      // u/s: between systems (jump-point to jump-point; x8 with disc scale)
 
     // Market-delta pool starts empty. Station id 0 is a VALID id ((node 0 << 8) | 0), so "free"
     // must be an explicit -1, not the zero-init default.

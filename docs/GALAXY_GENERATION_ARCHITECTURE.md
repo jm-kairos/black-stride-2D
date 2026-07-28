@@ -114,7 +114,7 @@ Runs once at `galaxy_map_init`. Three phases:
      neighbouring systems' orbits can never intersect.
    - Node 0 is pinned to the origin ("Sol", the home/start system).
    - Precise position stored via `hierpos_add_f64` from f64 coords (avoids the lossy f32 round-trip
-     `generate_star_system` would otherwise do at 4e10 units).
+     `generate_star_system` would otherwise do at 3.2e11 units).
    - Each node's **summary** (`star_color`, `star_radius`, sorted `orbit_radii`) is snapshotted by
      running `generate_star_system` once and discarding the full system.
 
@@ -150,7 +150,7 @@ seed -> StarProperties -> (habitable zone + frost line) -> per-orbit PlanetType 
   flag. Render color from type (with per-planet jitter).
 
 ### Orbit → AU mapping (the key trick)
-Orbits are generated in **bounded world units** (so every system physically fits the 2e8 galaxy
+Orbits are generated in **bounded world units** (so every system physically fits the 1.6e9 galaxy
 spacing), then **log-mapped per system into `[0.35·hz_inner, 2.5·frost]` AU** using the actual
 (randomised) orbit ratios. Consequently:
 - The **star's luminosity** decides *which* planets are habitable / giant / frozen.
@@ -235,15 +235,15 @@ or drawn at 10k scale (files remain but are unused by this path).
 ## 11. Coordinate model & zoom
 
 - **HierPos2** (integer `GridCell` + f32 `local`, cell size 16,384) gives exact precision anywhere in
-  the ~4e10-unit galaxy; render offsets use `hierpos_diff` to avoid f32 cancellation.
+  the ~3.2e11-unit galaxy; render offsets use `hierpos_diff` to avoid f32 cancellation.
 - **Linear render space**: positions render linearly at every zoom (`render = world - camera_hierpos`,
   then camera2d applies zoom). There is no cosmetic distance compression; the same transforms are used
   in the map and arena renderers so there is no seam across the cross-fade.
 - **Depth parallax** for the celestial backdrop uses one shared per-frame anchor (the camera's
   system centre) so systems keep their relative layout at any depth (see
   `CELESTIAL_PARALLAX_SYSTEM` notes / `sim/celestial_parallax.cpp`).
-- **Zoom-out limit** `ZOOM_GLOBAL_MIN = 6e-9` (sim/camera_controller.cpp) is sized so the wheel can
-  pull back far enough to frame the whole 4e10 disc; the extra decades are traversed quickly via the
+- **Zoom-out limit** `ZOOM_GLOBAL_MIN = 7.5e-10` (sim/camera_controller.cpp) is sized so the wheel can
+  pull back far enough to frame the whole 3.2e11 disc; the extra decades are traversed quickly via the
   progressive `g_zoom_out_speed_gain` zoom-out speed ramp.
 
 ---
@@ -288,14 +288,14 @@ produce distinct names. Node 0 keeps the human-readable home name "Sol".
 | Constant | Value | Meaning |
 |---|---|---|
 | `GALAXY_TARGET_SYSTEMS` | 10000 | System count (clamp on `galaxy_generate`). |
-| `GALAXY_DISC_SIGMA` | 1.0e10 | Gaussian disc scale (central spacing ≈ σ·√(2π/N) ≈ 2.5e8). |
-| `GALAXY_DISC_RMAX` | 4.0e10 | Disc radius clamp (~4σ). |
-| `GALAXY_MIN_SEPARATION` | 2.0e8 | Blue-noise minimum spacing (≥ biggest system's orbit diameter). |
-| `GALAXY_GRID_CELL` | 2.5e8 | Spatial grid cell edge. |
+| `GALAXY_DISC_SCALE_LEN` | 8.0e10 | Exponential disc radial scale length (central spacing ≈ 2e9). |
+| `GALAXY_DISC_RMAX` | 3.2e11 | Disc radius clamp (~4 scale lengths). |
+| `GALAXY_MIN_SEPARATION` | 1.6e9 | Blue-noise minimum spacing (~4× biggest system's orbit diameter). |
+| `GALAXY_GRID_CELL` | 2.0e9 | Spatial grid cell edge. |
 | `GALAXY_KNN_K` | 8 | Neighbours per node for the lane graph. |
 | `GALAXY_LANE_ADDBACK` | 0.20 | Fraction of non-tree kNN edges kept as loops. |
 | `GALAXY_MAX_SYSTEMS` | 64 | Hot-cache size (max detailed systems at once). |
-| `GALAXY_MATERIALIZE_RADIUS` | 3.0e8 | World radius around camera that materialises in full. |
+| `GALAXY_MATERIALIZE_RADIUS` | 2.4e9 | World radius around camera that materialises in full. |
 
 ---
 
@@ -304,7 +304,7 @@ produce distinct names. Node 0 keeps the human-readable home name "Sol".
 - **As configured:** exactly **10,000** (`GALAXY_TARGET_SYSTEMS` clamp).
 - **Unique names:** **676,000** designations before the `L###L` bijection wraps (widen the format to
   lift it).
-- **Spatial packing (current disc):** ≈ **145,000** max at 2e8 spacing within a 4e10 disc; fewer in
+- **Spatial packing (current disc):** ≈ **145,000** max at 1.6e9 spacing within a 3.2e11 disc; fewer in
   practice as the gaussian core saturates (rejection is capped at 32 tries). Grow `σ`/`R_max` for
   more.
 - **Index type:** node index/count are `i32` → **~2.15 billion**; seeds are 64-bit (no collision).

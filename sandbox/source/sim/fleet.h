@@ -17,9 +17,9 @@
 // =====================================================================================
 #define FLEET_MAX_SHIPS 8
 // Default FTL jump range (world units) for a jump-capable ship. Live-tunable via the editor's
-// FLEET JUMP slider (Fleet::set_all_jump_radius). ~= GALAXY_GRID_CELL (2.5e8) inter-system spacing so
+// FLEET JUMP slider (Fleet::set_all_jump_radius). ~= GALAXY_GRID_CELL (2e9) inter-system spacing so
 // one jump reaches a neighbouring star system (real inter-system travel).
-#define JUMP_RADIUS_DEFAULT 250000000.0f
+#define JUMP_RADIUS_DEFAULT 2000000000.0f
 // Forward declaration: game_state is defined in game.h (autopilot needs projectiles +
 // combat entities for attack orders).
 struct game_state;

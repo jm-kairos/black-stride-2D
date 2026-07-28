@@ -136,10 +136,10 @@ GalaxyGenParams galaxy_params_for_shape(GalaxyShape shape, u64 master_seed) {
     gp.bulge_fraction = GALAXY_BULGE_FRACTION;
     gp.bulge_scale    = GALAXY_BULGE_SCALE;
     gp.bar_fraction   = 0.0f;
-    gp.bar_length     = 1.2e10;
+    gp.bar_length     = 9.6e10;
     gp.bar_axis_ratio = 0.28f;
-    gp.ring_radius    = 2.2e10;
-    gp.ring_width     = 4.0e9;
+    gp.ring_radius    = 1.76e11;
+    gp.ring_width     = 3.2e10;
     gp.clump_count    = 6;
     gp.ellipticity    = 1.0f;
     gp.orient_angle   = 0.0;
@@ -163,23 +163,23 @@ GalaxyGenParams galaxy_params_for_shape(GalaxyShape shape, u64 master_seed) {
             gp.orient_angle   = orient;
             gp.arm_fraction   = 0.0f;
             gp.bulge_fraction = 0.0f;
-            gp.disc_scale_len = 1.6e10;     // large, centrally concentrated spheroid
-            gp.disc_rmax      = 5.0e10;
+            gp.disc_scale_len = 1.28e11;    // large, centrally concentrated spheroid
+            gp.disc_rmax      = 4.0e11;
             gp.ellipticity    = 0.62f;      // moderately flattened
             gp.old_bias       = 0.85f;      // old, red, metal-rich throughout
             break;
         case GX_RING:
             gp.arm_fraction   = 0.0f;
             gp.bulge_fraction = 0.12f;      // small central hub
-            gp.ring_radius    = 2.4e10;
-            gp.ring_width     = 3.5e9;
+            gp.ring_radius    = 1.92e11;
+            gp.ring_width     = 2.8e10;
             gp.young_bias     = 0.12f;
             break;
         case GX_IRREGULAR:
             gp.arm_fraction   = 0.0f;
             gp.bulge_fraction = 0.0f;
             gp.clump_count    = 6;
-            gp.disc_rmax      = 4.5e10;
+            gp.disc_rmax      = 3.6e11;
             gp.young_bias     = 0.40f;      // pervasive star formation -> bluer
             break;
         case GX_FLOCCULENT:

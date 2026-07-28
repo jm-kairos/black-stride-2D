@@ -12,10 +12,10 @@ static const f32 ZOOM_MIN        = 0.08f;  // most zoomed-out (global)
 static const f32 ZOOM_MAX        = 12.00f; // most zoomed-in
 static const f32 ZOOM_STEP       = 1.12f;  // multiplicative per wheel notch
 // Most zoomed-out allowed. Positions render linearly (no cosmetic compression), so the disc renders
-// at radius ~= GALAXY_DISC_RMAX(~4e10) * zoom with no floor. To still frame the whole disc
-// (~a few hundred px) the wheel must pull back far, so this is set low (6e-9). The extra decades are
-// traversed quickly via g_zoom_out_speed_gain below.
-static const f32 ZOOM_GLOBAL_MIN = 6.0e-9f;
+// at radius ~= GALAXY_DISC_RMAX(~3.2e11) * zoom with no floor. To still frame the whole disc
+// (~a few hundred px) the wheel must pull back far, so this is set low (7.5e-10). The extra decades
+// are traversed quickly via g_zoom_out_speed_gain below.
+static const f32 ZOOM_GLOBAL_MIN = 7.5e-10f;
 // Below this zoom the per-notch step grows (progressive zoom-out speed) so pulling all the way back
 // to the galaxy overview stays quick despite the extended range; at/above it, speed is unchanged.
 static const f32 ZOOM_SPEED_RAMP = 0.02f;

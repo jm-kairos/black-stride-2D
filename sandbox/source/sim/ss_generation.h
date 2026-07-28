@@ -15,8 +15,8 @@ struct SSGenConfig {
     f32   safety_margin   = 0.05f;    // gap between apoapsis(inner) and periapsis(outer)
     f32   scale_min       = 0.6f;     // compact systems
     f32   scale_max       = 1.5f;     // sparse systems
-    f32   inner_a_min     = 1.5e6f;   // innermost semi-major axis (world units)
-    f32   inner_a_max     = 3.0e6f;
+    f32   inner_a_min     = 3.0e6f;   // innermost semi-major axis (world units)
+    f32   inner_a_max     = 6.0e6f;
     f32   e_inner_max     = 0.05f;    // inner planets: nearly circular
     f32   e_outer_max     = 0.25f;    // outer planets: mildly eccentric
     f32   star_mass       = 1.0f;     // for period computation (GM = 1 in arbitrary units)

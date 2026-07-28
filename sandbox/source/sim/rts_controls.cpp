@@ -203,8 +203,9 @@ void RtsControls::update(f32 dt) {
         // Scale movement so panning covers a roughly constant fraction of the screen per second at
         // any zoom: the on-screen scale is zoom, so world-space speed uses its inverse. This
         // makes the camera faster the more you zoom out (unbounded above is fine: zoom is clamped to
-        // ZOOM_GLOBAL_MIN, so zoom has a floor). Floor at 1 keeps the zoomed-in feel unchanged.
-        f32 zoom_mul = clampf(1.0f / m_state->camera_state.camera.zoom, 1.0f, 1.0e7f);
+        // ZOOM_GLOBAL_MIN, so zoom has a floor). Floor at 1 keeps the zoomed-in feel unchanged; the
+        // cap covers 1/ZOOM_GLOBAL_MIN so panning stays screen-proportional at full galaxy zoom-out.
+        f32 zoom_mul = clampf(1.0f / m_state->camera_state.camera.zoom, 1.0f, 2.0e9f);
         Vec2 input_dir = read_wasd_dir();
         b8 fast = input_is_key_down(KEY_LSHIFT) || input_is_key_down(KEY_RSHIFT);
         if (!bs_imgui_wants_mouse() && !bs_rml_wants_mouse()) {

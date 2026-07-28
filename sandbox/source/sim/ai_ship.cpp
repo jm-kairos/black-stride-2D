@@ -266,13 +266,13 @@ static HierPos2 system_anchor(game_state* s, i32 node, u8 role, i32 index, u64 s
 
     if (role == ARCHETYPE_MINER) {
 
-        f32 belt = (oc > 0) ? gn.orbit_radii[oc - 1] : 40000.0f;   // outer belt
+        f32 belt = (oc > 0) ? gn.orbit_radii[oc - 1] : 80000.0f;   // outer belt
 
         radius = belt * rrange(st, 0.90f, 1.15f);
 
     } else if (role == ARCHETYPE_TRADER) {
 
-        f32 r = (oc > 0) ? gn.orbit_radii[index % oc] : 25000.0f;  // a planet lane
+        f32 r = (oc > 0) ? gn.orbit_radii[index % oc] : 50000.0f;  // a planet lane
 
         radius = r * rrange(st, 0.95f, 1.05f);
 
@@ -280,7 +280,7 @@ static HierPos2 system_anchor(game_state* s, i32 node, u8 role, i32 index, u64 s
 
         if (oc > 0 && (index % 2 == 0)) radius = gn.orbit_radii[index % oc] * rrange(st, 0.90f, 1.10f);
 
-        else                            radius = ((oc > 0) ? gn.orbit_radii[0] * 0.5f : 20000.0f) * rrange(st, 0.7f, 1.3f);
+        else                            radius = ((oc > 0) ? gn.orbit_radii[0] * 0.5f : 40000.0f) * rrange(st, 0.7f, 1.3f);
 
     }
 
