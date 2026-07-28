@@ -185,6 +185,7 @@ void combat_arena_update_enemy_ai(game_state* s, f32 dt) {
         }
     }
     // Enemy is static, so its own muzzle velocity contribution is zero.
+    w->owner_faction_id = sh->faction_id;   // stamp attacker faction (the patrol hull's live civ)
     w->fire(fire_origin, aim_dir, Vec2{ 0.0f, 0.0f }, &s->projectiles);
 }
 
@@ -233,7 +234,7 @@ void combat_arena_update_projectiles(game_state* s, f32 sim_dt) {
         for (i32 ci = 0; ci < s->combat_entity_count; ++ci) {
             CombatEntity* ce = &s->combat_entities[ci];
             if (!ce->active) continue;
-            if (ce->faction == p->owner) continue; // don't hit own faction
+            if (ce->faction_id == p->faction_id) continue; // no friendly fire within a faction
             Vec2 to_ce = hierpos_diff(&ce->position, &p->position, BS_HIERPOS_CELL_SIZE);
             f32 dist2 = to_ce.x * to_ce.x + to_ce.y * to_ce.y;
             f32 rr = ce->radius + p->radius;
@@ -248,8 +249,9 @@ void combat_arena_update_projectiles(game_state* s, f32 sim_dt) {
                     }
                 }
                 if (hit) {
-                    // General Ship AI: NPC agents take damage (and die + raid their civ) when shot.
-                    if (ce->is_npc) ai_ship_damage(s, ce->npc_index, 15.0f);
+                    // General Ship AI: NPC agents take damage; the projectile's faction id
+                    // attributes the kill (player kills raid the civ, NPC kills don't).
+                    if (ce->is_npc) ai_ship_damage(s, ce->npc_index, 15.0f, p->faction_id);
                     p->active = FALSE;
                     --s->projectiles.count;
                     break; // projectile can only hit one entity

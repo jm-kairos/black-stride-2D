@@ -195,6 +195,33 @@ static b8 mission_move_leg(ShipMission& m, f32 speed, f32& hours) {
 
 
 
+// Phase 2: leg advance that respects a live agent. While a materialized NpcShip owns this mission
+// (ship_slot >= 0) the macro does NOT integrate — the agent flies the leg, mirrors its position
+// into m.pos each frame, and raises local_ready on arrival (same handshake as docking). Consumes
+// the tick's hours so a chained stage machine can't teleport past a live ship.
+
+static b8 mission_leg_complete(ShipMission& m, f32 speed, f32& hours) {
+
+    if (m.ship_slot >= 0) {
+
+        hours = 0.0f;
+
+        if (!m.local_ready) return FALSE;
+
+        m.local_ready = FALSE;
+
+        m.pos = m.leg_target;
+
+        return TRUE;
+
+    }
+
+    return mission_move_leg(m, speed, hours);
+
+}
+
+
+
 // Compute a route from `start` to `dest` and cache its first chunk into the mission. The full path
 
 // is found in a large scratch buffer, then only the first MISSION_ROUTE_MAX hops are kept (long
@@ -783,7 +810,7 @@ static void mission_travel_step(game_state* s, ShipMission& m, f32 hours, i32 no
 
             m.leg_target = m.station_pos;
 
-            if (!mission_move_leg(m, spd_sys, hours)) return;
+            if (!mission_leg_complete(m, spd_sys, hours)) return;
 
             m.stage       = MISSION_STAGE_ORIGIN_DOCK;
 
@@ -894,9 +921,7 @@ static void mission_travel_step(game_state* s, ShipMission& m, f32 hours, i32 no
 
                     m.dwell_hours = TRADE_DWELL_HOURS;
 
-                    m.local_ready = FALSE;
-
-                    m.ship_slot   = -1;
+                    m.local_ready = FALSE;   // ship_slot kept: a live trader flies the return leg itself
 
                     return;
 
@@ -964,9 +989,7 @@ static void mission_travel_step(game_state* s, ShipMission& m, f32 hours, i32 no
 
             station_market_apply(s, m.station_id, m.cargo_good, -m.cargo_units);
 
-            m.ship_slot   = -1;
-
-            m.local_ready = FALSE;
+            m.local_ready = FALSE;   // ship_slot kept: a bound trader departs as the live traveler
 
             // Tier 0 (intra-system): already at the destination node, skip jump stages.
             if (m.at_node == m.dest_node) {
@@ -1000,13 +1023,15 @@ static void mission_travel_step(game_state* s, ShipMission& m, f32 hours, i32 no
 
         case MISSION_STAGE_CROSS: {
 
-            if (!mission_move_leg(m, spd_sys, hours)) return;
+            if (!mission_leg_complete(m, spd_sys, hours)) return;
 
             // On the jump circle: engage the jump drive toward the next hop's entry point.
 
             i32 next = mission_next_hop(s, m);
 
             if (next < 0) return;                    // route vanished: hold at the circle, retry
+
+            m.ship_slot  = -1;   // interstellar: any live agent is despawned by the sync pass
 
             m.from_node  = m.at_node;
 
@@ -1066,7 +1091,7 @@ static void mission_travel_step(game_state* s, ShipMission& m, f32 hours, i32 no
 
         case MISSION_STAGE_FINAL_APPROACH: {
 
-            if (!mission_move_leg(m, spd_sys, hours)) return;
+            if (!mission_leg_complete(m, spd_sys, hours)) return;
 
             m.stage       = m.return_leg ? MISSION_STAGE_ORIGIN_DOCK : MISSION_STAGE_MARKET_DOCK;
 

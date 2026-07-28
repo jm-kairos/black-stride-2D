@@ -14,13 +14,12 @@ i32 sensor_gather_hostile_contacts(const game_state* s, SensorContact* out, i32 
     if (!s || !out || max_out <= 0) return 0;
 
     const Fleet& fleet = s->fleet_state.fleet;
-    const VesselFaction player_faction = s->player_ship().faction;
 
     i32 n = 0;
     for (i32 i = 0; i < MAX_PROJECTILES && n < max_out; ++i) {
         const Projectile& p = s->projectiles.pool[i];
         if (!p.active) continue;
-        if (p.owner == player_faction) continue; // only hostile projectiles are contacts
+        if (p.faction_id == FACTION_PLAYER) continue; // only non-player projectiles are contacts
 
         // Fleet-wide detection: keep the strongest single reading over all friendly ships.
         f32 best = 0.0f;

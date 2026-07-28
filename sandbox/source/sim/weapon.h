@@ -8,8 +8,9 @@
 // ---------------------------------------------------------------------------
 struct Weapon {
     const char*   name;           // display label
-    VesselFaction owner_faction;  // set at equip time
-    Weapon(const char* n) : name(n), owner_faction((VesselFaction)0) {}
+    VesselFaction owner_faction;  // set at equip time (legacy binary faction; projectile visuals)
+    i16           owner_faction_id; // unified faction stamped from the firing ship at each fire site
+    Weapon(const char* n) : name(n), owner_faction((VesselFaction)0), owner_faction_id(FACTION_PIRATE) {}
     virtual ~Weapon() {}
     // fire at the given origin in the given direction (unit or non-unit).
     // `ship_velocity` is the owning ship's current world velocity (added to projectile).

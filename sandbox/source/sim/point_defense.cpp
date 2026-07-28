@@ -30,7 +30,7 @@ void point_defense_update(game_state* s, f32 dt) {
         b8 have_target = FALSE;
         if (L.target_index >= 0 && L.target_index < MAX_PROJECTILES) {
             Projectile& p = s->projectiles.pool[L.target_index];
-            if (p.active && p.owner != sh.faction) {
+            if (p.active && p.faction_id != sh.faction_id) {
                 f32 d = vec2_length(hierpos_diff(&p.position, &sh.origin, BS_HIERPOS_CELL_SIZE));
                 if (d <= range) have_target = TRUE;
             }
@@ -49,7 +49,7 @@ void point_defense_update(game_state* s, f32 dt) {
             for (i32 pi = 0; pi < MAX_PROJECTILES; ++pi) {
                 const Projectile& p = s->projectiles.pool[pi];
                 if (!p.active) continue;
-                if (p.owner == sh.faction) continue; // never target friendly fire
+                if (p.faction_id == sh.faction_id) continue; // never target friendly fire
                 f32 d = vec2_length(hierpos_diff(&p.position, &sh.origin, BS_HIERPOS_CELL_SIZE));
                 if (d <= best_d) { best_d = d; best = pi; }
             }

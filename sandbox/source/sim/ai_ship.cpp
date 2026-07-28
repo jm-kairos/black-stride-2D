@@ -332,6 +332,27 @@ static void materialize_system(game_state* s, i32 node, i16 owner) {
 
 
 
+// Wild / unclaimed space is not empty: a deterministic handful of pirate raiders (FACTION_PIRATE)
+// camp the star ring of a lawless system and engage anyone on sight (pairwise stance: pirates are
+// hostile to all factions). Roughly 1 in 6 wild systems rolls empty so lawless space stays uneven.
+static void materialize_wild_system(game_state* s, i32 node) {
+
+    u64 st = (u64)(node + 1) * 0x9E3779B97F4A7C15ull ^ 0xBADC0FFEEull;
+
+    i32 pirates = (i32)(sm64(st) % 6ull);   // 0..5 raiders
+
+    for (i32 k = 0; k < pirates; ++k)
+
+        spawn_npc(s, FACTION_PIRATE, system_anchor(s, node, ARCHETYPE_PIRATE, k, st), node, ARCHETYPE_PIRATE, st + (u64)(k + 1));
+
+    if (pirates > 0)
+
+        BS_LOG_INFO("ShipAI wild: node %d materialized %d pirate raider(s)", node, pirates);
+
+}
+
+
+
 // ---- Population manager: materialize the CURRENT owned system's full population at its anchors ----------
 
 // Per-system (not player-relative): ships are placed at the system's real locations and only re-materialized
@@ -360,7 +381,13 @@ static void ai_ships_populate(game_state* s) {
 
     i32 owner = galaxy_history_owner_at_node(s, node);
 
-    if (owner < 0 || owner >= s->galaxy.civ_count || s->galaxy.civs[owner].status != 0) return; // wild: no civ pop
+    if (owner < 0 || owner >= s->galaxy.civ_count || s->galaxy.civs[owner].status != 0) {
+
+        materialize_wild_system(s, node);   // lawless space: pirates instead of a civ population
+
+        return;
+
+    }
 
     materialize_system(s, node, (i16)owner);
 
@@ -368,17 +395,16 @@ static void ai_ships_populate(game_state* s) {
 
 
 
-// ---- Macro <-> local handoff (Step 4, station-contract form) --------------------------------------
+// ---- Macro <-> local handoff (Phase 2: full traveler materialisation) -----------------------------
 
-// Contracts issued by mission-hub stations bind to the CLOSEST unassigned ambient trader in the
-
-// player's current system while they dock at their origin/destination station. Nothing is ever
-
-// spawned here: the ambient population is the only pool contracts draw from -- if no trader is
-
-// free the contract simply waits. Bound traders run the docking loop (ai_trader_tick) and are
-
-// released back to ambient duty when the contract departs, completes, or the link goes stale.
+// Contracts issued by mission-hub stations get a live NpcShip form whenever their in-system portion
+// happens in the player's current system. ORIGIN_DOCK binds the CLOSEST unassigned ambient trader
+// (the contract is "picked up" locally; if none is free the contract waits). Every other in-system
+// stage (acquire / depart / cross / final approach / market dock) SPAWNS the traveler itself at the
+// macro position. While bound (ship_slot >= 0) the live agent owns motion: it flies the macro's
+// current leg (AI_TRAVEL_LEG) or runs the docking loop, mirrors its position into ShipMission::pos,
+// and hands stage completion back through local_ready. Native traders released at contract end
+// return to ambient duty; travelers that jump out or belong elsewhere despawn with the ship.
 
 
 
@@ -396,15 +422,30 @@ static void mission_dock_anchor(const ShipMission& m, HierPos2* out_pos, f32* ou
 
 
 
-// TRUE while the mission is in a dock stage whose station lies in galaxy node `node`.
+// Phase 2: TRUE while mission `m` should have a live agent in galaxy node `node`: docking at a
+// station here, or flying an in-system leg here (acquire / depart / cross / final approach).
+// JUMP (interstellar) and COOLDOWN never materialize.
+static b8 mission_live_here(const ShipMission& m, i32 node) {
 
-static b8 mission_docking_at(const ShipMission& m, i32 node) {
+    if (!m.active || node < 0 || m.at_node != node) return FALSE;
 
-    if (!m.active || m.at_node != node) return FALSE;
+    switch (m.stage) {
 
-    return (m.stage == MISSION_STAGE_ORIGIN_DOCK && m.home_node == node) ||
+        case MISSION_STAGE_ORIGIN_DOCK:    return m.home_node == node;
 
-           (m.stage == MISSION_STAGE_MARKET_DOCK && m.dest_node == node);
+        case MISSION_STAGE_MARKET_DOCK:    return m.dest_node == node;
+
+        case MISSION_STAGE_ACQUIRE:
+
+        case MISSION_STAGE_TO_JUMP:
+
+        case MISSION_STAGE_CROSS:
+
+        case MISSION_STAGE_FINAL_APPROACH: return TRUE;
+
+        default:                           return FALSE;
+
+    }
 
 }
 
@@ -422,11 +463,9 @@ static void ai_ships_sync_missions(game_state* s) {
 
 
 
-    // Stale-link hygiene: release any trader whose contract is gone, departed, or disagrees on the
-
-    // binding (system change cleared the pool, contract retired, etc.). The ship stays alive and
-
-    // simply returns to ambient duty.
+    // Stale-link hygiene (Phase 2): a linked agent whose contract is gone, jumped out, or disagrees
+    // on the binding is resolved here. NATIVE traders (home in this system) return to ambient duty;
+    // travelers that jumped out or belong to another system despawn — they left with the ship.
 
     for (i32 i = 0; i < NPC_SHIP_MAX; ++i) {
 
@@ -434,19 +473,27 @@ static void ai_ships_sync_missions(game_state* s) {
 
         if (!n.active || n.mission_id < 0) continue;
 
-        b8 stale = (node_here < 0) || !g.missions ||
+        const ShipMission* m = (g.missions && n.mission_id < g.mission_count) ? &g.missions[n.mission_id] : nullptr;
 
-                   n.mission_id >= g.mission_count ||
+        b8 stale = !m || !mission_live_here(*m, node_here) || m->ship_slot != i;
 
-                   !mission_docking_at(g.missions[n.mission_id], node_here) ||
+        if (!stale) continue;
 
-                   g.missions[n.mission_id].ship_slot != i;
+        b8 jumped_out = m && m->active && m->stage == MISSION_STAGE_JUMP;
 
-        if (stale) {
+        b8 native     = (node_here >= 0) && (n.home_node == node_here);
 
-            n.mission_id = -1;
+        n.mission_id = -1;
 
-            if (n.state == AI_TRADE_DOCK || n.state == AI_TRADE_DOCKED) { n.state = AI_PATROL; n.state_timer = 0.0f; }
+        if (jumped_out || !native) {
+
+            n.active = FALSE;   // the traveler departed (or is foreign): the hull leaves with it
+
+            if (jumped_out) BS_LOG_INFO("ShipAI travel: mission %d jumped out (live agent %d released)", (i32)(m - g.missions), i);
+
+        } else if (n.state == AI_TRADE_DOCK || n.state == AI_TRADE_DOCKED || n.state == AI_TRAVEL_LEG) {
+
+            n.state = AI_PATROL; n.state_timer = 0.0f;   // native trader returns to ambient duty
 
         }
 
@@ -476,7 +523,10 @@ static void ai_ships_sync_missions(game_state* s) {
 
 
 
-    // Bind every unbound docking contract in this system to the CLOSEST free ambient trader.
+    // Bind or spawn the live form of every unbound contract present in this system (Phase 2):
+    // ORIGIN_DOCK binds the CLOSEST free ambient trader (the contract is "picked up" locally);
+    // every other live stage (in-system legs, market dock) spawns the traveler itself at the
+    // macro position — a visiting ship the player can meet, follow, or destroy.
 
     for (i32 mi = 0; mi < g.mission_count; ++mi) {
 
@@ -484,7 +534,36 @@ static void ai_ships_sync_missions(game_state* s) {
 
         if (m.archetype != ARCHETYPE_TRADER || m.ship_slot >= 0) continue;
 
-        if (!mission_docking_at(m, node_here)) continue;
+        if (!mission_live_here(m, node_here)) continue;
+
+        if (m.stage != MISSION_STAGE_ORIGIN_DOCK) {
+
+            // In-transit / visiting trader: materialize it exactly where the macro says it is.
+
+            HierPos2 pos = ship_mission_position(s, m);
+
+            i16 owner = (m.owner >= 0) ? m.owner : FACTION_PIRATE;
+
+            i32 slot = spawn_npc(s, owner, pos, m.home_node, ARCHETYPE_TRADER, m.seed);
+
+            if (slot < 0) continue;   // pool full: the macro keeps integrating this leg itself
+
+            NpcShip& t = s->npc_ships[slot];
+
+            t.mission_id  = mi;
+
+            t.state       = (m.stage == MISSION_STAGE_MARKET_DOCK) ? AI_TRADE_DOCK : AI_TRAVEL_LEG;
+
+            t.state_timer = 0.0f;
+
+            m.ship_slot   = slot;
+
+            BS_LOG_INFO("ShipAI travel: mission %d materialized in-system (stage %u, node %d, agent %d)",
+                        mi, (u32)m.stage, node_here, slot);
+
+            continue;
+
+        }
 
         HierPos2 st_pos; f32 st_r;
 
@@ -528,44 +607,28 @@ static void ai_ships_sync_missions(game_state* s) {
 
 
 
-// ---- Perception: acquire the nearest hostile player-fleet ship within sensor range --------------
-
-// An agent only treats the player as a threat when its civilization reads the player as hostile
-
-// (reputation / transitive stance). Inter-civ NPC-vs-NPC targeting is Phase C (needs projectile
-
-// faction ids). Sets target_ce (-1 if none) and remembers last_seen.
-
-static void ai_sense(game_state* s, NpcShip& n) {
-
+// ---- Perception: acquire the nearest hostile combat entity within sensor range ------------------
+// Phase 1 (autonomous universe): agents sense EVERY combat entity (player fleet, patrol hull, other
+// NPCs) and resolve hostility pairwise via galaxy_history_factions_hostile — so civ patrols fight
+// warring civs and pirates, not just the player. `self` is this agent's npc_ships[] index, used to
+// skip its own (one-frame-stale) registration in combat_entities[]. Sets target_ce (-1 if none)
+// and remembers last_seen.
+static void ai_sense(game_state* s, NpcShip& n, i32 self) {
     const AiProfile& p = ai_profile(n.archetype);
-
     n.target_ce = -1;
-
-    if (!galaxy_history_faction_is_hostile(s, n.faction)) return;
-
     f32 best_d2 = p.sensor_range * p.sensor_range;
-
     i32 best = -1;
-
-    for (i32 i = 0; i < s->npc_combat_base; ++i) {
-
+    for (i32 i = 0; i < s->combat_entity_count; ++i) {
         CombatEntity& ce = s->combat_entities[i];
-
-        if (!ce.active || ce.faction_id != FACTION_PLAYER) continue;
-
+        if (!ce.active) continue;
+        if (ce.is_npc && ce.npc_index == self) continue;               // never target yourself
+        if (!galaxy_history_factions_hostile(s, n.faction, ce.faction_id)) continue;
         Vec2 to = hierpos_diff(&ce.position, &n.ship.origin, BS_HIERPOS_CELL_SIZE);
-
         f32 d2 = to.x * to.x + to.y * to.y;
-
         if (d2 < best_d2) { best_d2 = d2; best = i; }
-
     }
-
     n.target_ce = best;
-
     if (best >= 0) n.last_seen = s->combat_entities[best].position;
-
 }
 
 
@@ -673,6 +736,32 @@ static void ai_trader_tick(game_state* s, NpcShip& n, f32 dt) {
     Ship* sh = &n.ship; ShipFlight* fl = &n.flight;
 
     n.state_timer += dt;
+
+
+
+    // Phase 2 movement stages: the live agent OWNS the macro's current in-system leg. It flies at
+    // macro speed (schedule coherence with unobserved missions), mirrors its position into m.pos so
+    // the galaxy-map pip tracks the real hull, and hands arrival back via local_ready.
+
+    if (m.stage == MISSION_STAGE_ACQUIRE || m.stage == MISSION_STAGE_TO_JUMP ||
+
+        m.stage == MISSION_STAGE_CROSS   || m.stage == MISSION_STAGE_FINAL_APPROACH) {
+
+        if (n.state != AI_TRAVEL_LEG) { n.state = AI_TRAVEL_LEG; n.state_timer = 0.0f; }
+
+        f32 spd = (g.ai_speed_in_system > 0.0f) ? g.ai_speed_in_system : 50000.0f;
+
+        Vec2 leg = hierpos_diff(&m.leg_target, &sh->origin, BS_HIERPOS_CELL_SIZE);
+
+        steering::apply(sh, fl, steering::arrive(leg, spd, spd * 2.0f), spd, spd, p.turn_rate * 2.0f, dt);
+
+        m.pos = sh->origin;   // macro mirrors the live hull
+
+        if (vec2_length(leg) <= 1500.0f && !m.local_ready) m.local_ready = TRUE;
+
+        return;
+
+    }
 
 
 
@@ -809,8 +898,8 @@ static void ai_miner_tick(game_state* s, NpcShip& n, f32 dt) {
 
 
 // ---- Per-agent behavior: FSM (PATROL -> PURSUE -> ATTACK -> RETURN) driven by perception ---------
-
-static void ai_ship_tick(game_state* s, NpcShip& n, f32 dt) {
+// `self` = this agent's npc_ships[] index (perception self-skip + damage attribution).
+static void ai_ship_tick(game_state* s, NpcShip& n, i32 self, f32 dt) {
 
     const AiProfile& p = ai_profile(n.archetype);
 
@@ -838,7 +927,7 @@ static void ai_ship_tick(game_state* s, NpcShip& n, f32 dt) {
 
 
 
-    ai_sense(s, n);
+    ai_sense(s, n, self);
 
 
 
@@ -848,13 +937,13 @@ static void ai_ship_tick(game_state* s, NpcShip& n, f32 dt) {
 
 
 
-    // Resolve the current target (a live player-fleet combat entity).
+    // Resolve the current target (any live, still-hostile combat entity).
 
-    b8 have_target = (n.target_ce >= 0 && n.target_ce < s->npc_combat_base &&
+    b8 have_target = (n.target_ce >= 0 && n.target_ce < s->combat_entity_count &&
 
                       s->combat_entities[n.target_ce].active &&
 
-                      s->combat_entities[n.target_ce].faction_id == FACTION_PLAYER);
+                      galaxy_history_factions_hostile(s, n.faction, s->combat_entities[n.target_ce].faction_id));
 
     Vec2 to_target{ 0.0f, 0.0f };
 
@@ -960,7 +1049,7 @@ static void ai_ship_tick(game_state* s, NpcShip& n, f32 dt) {
 
                     s->projectiles.spawn(sh->origin, v, 8.0f, 4.0f,
 
-                                         bs_color{ 1.0f, 0.5f, 0.3f, 1.0f }, VESSEL_PIRATE, 0.4f, 1.0f);
+                                         bs_color{ 1.0f, 0.5f, 0.3f, 1.0f }, VESSEL_PIRATE, n.faction, 0.4f, 1.0f);
 
                     n.fire_cd = p.fire_period;
 
@@ -1012,7 +1101,7 @@ void ai_ships_update(game_state* s, f32 dt) {
 
     for (i32 i = 0; i < NPC_SHIP_MAX; ++i) {
 
-        if (s->npc_ships[i].active) ai_ship_tick(s, s->npc_ships[i], dt);
+        if (s->npc_ships[i].active) ai_ship_tick(s, s->npc_ships[i], i, dt);
 
     }
 
@@ -1074,7 +1163,7 @@ void ai_ships_register_combat(game_state* s) {
 
 
 
-void ai_ship_damage(game_state* s, i32 npc_index, f32 dmg) {
+void ai_ship_damage(game_state* s, i32 npc_index, f32 dmg, i16 attacker_faction) {
 
     if (!s || npc_index < 0 || npc_index >= NPC_SHIP_MAX) return;
 
@@ -1088,9 +1177,14 @@ void ai_ship_damage(game_state* s, i32 npc_index, f32 dmg) {
 
         n.active = FALSE;
 
-        // Destroying a patrol is an act of aggression against its civilization.
+        BS_LOG_INFO("ShipAI combat: npc %d (archetype %u, faction %d) destroyed by faction %d",
+                    npc_index, (u32)n.archetype, (i32)n.faction, (i32)attacker_faction);
 
-        if (n.faction >= 0) galaxy_history_player_raid(s, n.faction, 3.0f);
+        // Reputation only reacts to PLAYER kills: destroying a civ ship is an act of aggression
+        // against its civilization. NPC-vs-NPC kills (wars, pirates) carry no player rep change.
+
+        if (n.faction >= 0 && attacker_faction == FACTION_PLAYER)
+            galaxy_history_player_raid(s, n.faction, 3.0f);
 
         if (n.mission_id >= 0) {
 

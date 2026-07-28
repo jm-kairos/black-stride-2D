@@ -14,7 +14,8 @@ struct Projectile {
     f32           radius;     // visual radius (world units)
     f32           radiation_emission; // 0..1 heat-source strength; 0 means invisible to detector
     bs_color      color;      // tint
-    VesselFaction owner;      // who fired it
+    VesselFaction owner;      // who fired it (legacy binary faction; kept for visuals/back-compat)
+    i16           faction_id; // unified attacker faction (civ index / FACTION_PLAYER / FACTION_PIRATE)
     f32           hp;         // health; point-defense lasers deplete this, <=0 => destroyed
     f32           max_hp;     // HP at spawn (for beam intensity / future UI)
 };
@@ -25,9 +26,11 @@ struct ProjectileSystem {
     bs_texture flash_texture;  // radial gradient for head orb / muzzle flash
     // zero-init
     void init();
-    // spawn a new projectile; returns TRUE if a free slot was found
+    // spawn a new projectile; returns TRUE if a free slot was found. `faction_id` is the unified
+    // attacker faction (civ index / FACTION_PLAYER / FACTION_PIRATE) used for hit filtering and
+    // kill attribution; `owner` remains the legacy binary faction for visuals/back-compat.
     b8 spawn(bs_math::HierPos2 origin, bs_math::Vec2 velocity,
-             f32 lifetime, f32 radius, bs_color color, VesselFaction owner,
+             f32 lifetime, f32 radius, bs_color color, VesselFaction owner, i16 faction_id,
              f32 radiation_emission = 0.0f, f32 hp = 1.0f);
     // advance all active projectiles; retire those whose lifetime expired
     void update(f32 dt);

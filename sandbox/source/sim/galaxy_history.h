@@ -73,6 +73,12 @@ b8 galaxy_history_civ_allied(const game_state* s, i32 a, i32 b);
 // an ally's active enemies read hostile to the player.
 b8 galaxy_history_faction_is_hostile(const game_state* s, i16 faction_id);
 
+// Phase 1 (autonomous universe): pairwise stance between ANY two unified faction ids. Same faction
+// is never hostile to itself; FACTION_PLAYER folds through galaxy_history_faction_is_hostile;
+// pirates / wild raiders are hostile to everyone; two civs are hostile only while at war.
+// Drives NPC-vs-NPC target acquisition and projectile hit attribution.
+b8 galaxy_history_factions_hostile(const game_state* s, i16 a, i16 b);
+
 // Feature B: human-readable label for a faction ("<Civ> Patrol", "Pirate Raider", "Your Fleet").
 void galaxy_history_faction_label(const game_state* s, i16 faction_id, char* out, i32 out_size);
 

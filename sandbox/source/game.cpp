@@ -2086,6 +2086,8 @@ b8 game_update(Game* game_inst, f32 dt) {
 
                         Vec2 dir = hierpos_diff(&mw_hp, &psh->origin, BS_HIERPOS_CELL_SIZE);
 
+                        w->owner_faction_id = psh->faction_id;   // stamp attacker faction for hit attribution
+
                         w->fire(psh->origin, dir, pf->flight.velocity, &s->projectiles);
 
                     }

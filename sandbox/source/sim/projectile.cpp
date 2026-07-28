@@ -65,7 +65,7 @@ void ProjectileSystem::init() {
     }
 }
 b8 ProjectileSystem::spawn(HierPos2 origin, Vec2 velocity,
-                           f32 lifetime, f32 radius, bs_color color, VesselFaction owner,
+                           f32 lifetime, f32 radius, bs_color color, VesselFaction owner, i16 faction_id,
                            f32 radiation_emission, f32 hp)
 {
     // find first free slot
@@ -79,6 +79,7 @@ b8 ProjectileSystem::spawn(HierPos2 origin, Vec2 velocity,
             pool[i].radius             = radius;
             pool[i].color              = color;
             pool[i].owner              = owner;
+            pool[i].faction_id         = faction_id;
             pool[i].radiation_emission = radiation_emission;
             pool[i].hp                 = hp;
             pool[i].max_hp             = hp;

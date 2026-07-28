@@ -143,6 +143,7 @@ void FleetShip::update_attack(game_state* s, f32 dt) {
                         aim_dir = hierpos_diff(&lead_pos, &fire_origin);
                     }
                 }
+                w->owner_faction_id = sh->faction_id;   // stamp attacker faction for hit attribution
                 w->fire(fire_origin, aim_dir, fl->velocity, &s->projectiles);
             }
         }

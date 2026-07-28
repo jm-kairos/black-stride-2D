@@ -40,7 +40,7 @@ void BallisticWeapon::fire(HierPos2 origin, Vec2 direction, Vec2 ship_velocity,
         default: break;
     }
     projectiles->spawn(origin, vel, projectile_lifetime,
-                       projectile_radius, col, owner_faction,
+                       projectile_radius, col, owner_faction, owner_faction_id,
                        projectile_emission);
     cooldown_remaining = cooldown_duration;
 }

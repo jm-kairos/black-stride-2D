@@ -1088,6 +1088,15 @@ b8 galaxy_history_faction_is_hostile(const game_state* s, i16 faction_id) {
     return FALSE;
 }
 
+// Phase 1 (autonomous universe): pairwise stance between any two unified faction ids.
+b8 galaxy_history_factions_hostile(const game_state* s, i16 a, i16 b) {
+    if (a == b) return FALSE;                                        // never hostile to own faction
+    if (a == FACTION_PLAYER) return galaxy_history_faction_is_hostile(s, b);
+    if (b == FACTION_PLAYER) return galaxy_history_faction_is_hostile(s, a);
+    if (a < 0 || b < 0) return TRUE;                                 // pirates / wild: hostile to all
+    return galaxy_history_civ_at_war(s, (i32)a, (i32)b);             // civs: only while at war
+}
+
 // Feature B: a human-readable banner label for any faction id.
 void galaxy_history_faction_label(const game_state* s, i16 faction_id, char* out, i32 out_size) {
     if (!out || out_size <= 0) return;

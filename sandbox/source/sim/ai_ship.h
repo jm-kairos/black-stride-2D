@@ -23,7 +23,7 @@ enum ShipArchetype : u8 {
     ARCHETYPE_INTERCEPTOR,  // (Phase C) fast pursuer
     ARCHETYPE_TRADER,       // civilian hauler: loiters / routes, does not attack
     ARCHETYPE_SCOUT,        // (Phase C) shadows + flees
-    ARCHETYPE_PIRATE,       // (Phase C) aggressive in wild space
+    ARCHETYPE_PIRATE,       // lawless raider: camps wild space, hostile to everyone
     ARCHETYPE_MINER,        // civilian miner: works asteroid belts (mines per-system asteroids)
     ARCHETYPE_COUNT
 };
@@ -37,7 +37,8 @@ enum AiState : u8 {
     AI_EVADE,        // flee when badly hurt
     AI_RETURN,       // return to home when leashed too far
     AI_TRADE_DOCK,   // trader bound to a contract: fly to the contract's station
-    AI_TRADE_DOCKED  // trader bound to a contract: halted at the station, loading/unloading
+    AI_TRADE_DOCKED, // trader bound to a contract: halted at the station, loading/unloading
+    AI_TRAVEL_LEG    // mission traveler: fly the macro contract's current in-system leg
 };
 
 // Per-archetype tunables: the single knob that makes different ship types behave differently with
@@ -66,5 +67,7 @@ void ai_ships_init(game_state* s);                 // load the hull template, cl
 void ai_ships_update(game_state* s, f32 dt);        // population manager + perceive/think/steer/fire
 void ai_ships_register_combat(game_state* s);       // rebuild the NPC window in combat_entities[]
 
-// Apply damage to the NPC backing combat_entities[].npc_index; destroys + raids the civ at <=0 hp.
-void ai_ship_damage(game_state* s, i32 npc_index, f32 dmg);
+// Apply damage to the NPC backing combat_entities[].npc_index; destroys it at <=0 hp.
+// `attacker_faction` is the projectile's unified faction id: only FACTION_PLAYER kills raid the
+// victim's civilization (rep hit); NPC-vs-NPC kills only shrink the garrison / retire the mission.
+void ai_ship_damage(game_state* s, i32 npc_index, f32 dmg, i16 attacker_faction);
