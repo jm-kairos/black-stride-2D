@@ -701,7 +701,7 @@ struct SystemStation {
 
 
 
-// ---- Minimal interstellar economy: trade goods + room-based station architecture ------------
+// ---- Resource catalog: tradeable resources + room-based station architecture ----------------
 
 // Stations are stateless: their room list and baseline market derive deterministically from the
 
@@ -709,7 +709,33 @@ struct SystemStation {
 
 // on GalaxyState below, which records how trader docks perturbed stock away from baseline.
 
-enum TradeGood : u8 { GOOD_FOOD = 0, GOOD_ORE, GOOD_TECH, GOOD_COUNT };
+// Every market stocks the full catalog; per-station supply bias derives from the node's
+
+// abundance signals (habitability, biosphere, ore/volatile richness, civ industry) plus a
+
+// deterministic per-station category specialization (see station_specialization).
+
+enum TradeCategory : u8 {
+    CAT_AGRICULTURE = 0,  // farmed/grown goods (habitability + biosphere driven)
+    CAT_MINERALS,         // raw extraction (evolved-body ore richness driven)
+    CAT_VOLATILES,        // ices/fuels (evolved-body volatile richness driven)
+    CAT_INDUSTRIAL,       // manufactured goods (needs a living civilization's industry)
+    CAT_COUNT
+};
+
+enum TradeGood : u8 {
+    GOOD_GRAIN = 0,       // AGRICULTURE: staple crops
+    GOOD_ORGANICS,        // AGRICULTURE: biomass/livestock products
+    GOOD_IRON_ORE,        // MINERALS: bulk structural ore
+    GOOD_RARE_METALS,     // MINERALS: rare/precious extraction
+    GOOD_WATER_ICE,       // VOLATILES: water/ice
+    GOOD_HYDROGEN_FUEL,   // VOLATILES: refined drive fuel
+    GOOD_ALLOYS,          // INDUSTRIAL: refined structural alloys
+    GOOD_ELECTRONICS,     // INDUSTRIAL: high-tech components
+    GOOD_MEDICINE,        // INDUSTRIAL: pharma/medical supplies
+    GOOD_LUXURIES,        // INDUSTRIAL: luxury consumer goods
+    GOOD_COUNT
+};
 
 
 
@@ -1012,6 +1038,14 @@ struct GalaxyNode {
 
 
     u8           habitable_count;    // planets with habitability > 0.4
+
+
+
+    u8           res_metal;          // max extractable ore richness across evolved bodies (0..255)
+
+    u8           res_volatiles;      // max volatiles/fuel richness across evolved bodies (0..255)
+
+    u8           biosphere;          // max biosphere development across evolved bodies (0..255)
 
 
 

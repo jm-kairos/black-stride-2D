@@ -214,12 +214,17 @@ typedef struct bs_rml_hud_state
     char               station_menu_top[16];
     b8                 station_inspector_visible;
     char               station_insp_title[96];
+    char               station_insp_subtitle[128];  // owner civ + market specialization tag line
     b8                 station_insp_show_dock;      // true when tab 0 active
     b8                 station_insp_show_market;    // true when tab 1 active
     b8                 station_insp_show_contracts; // true when tab 2 active
     b8                 station_insp_tab2_visible;   // true when station has a Contracts room
     char               station_insp_dock[512];      // docked ships list (\n-separated, pre-formatted)
-    char               station_insp_market[160];    // market goods list (\n-separated, pre-formatted)
+    char               station_insp_market_agri[224]; // Market tab: Agriculture lines (pre-formatted)
+    char               station_insp_market_mine[224]; // Market tab: Minerals lines
+    char               station_insp_market_vola[224]; // Market tab: Volatiles lines
+    char               station_insp_market_indu[224]; // Market tab: Industrial lines
+    char               station_insp_market_note[96];  // Market tab: dim footer (station revenue)
     char               station_insp_contracts[1024]; // mission contracts list (\n-separated, pre-formatted)
 
     // Planet inspector: a floating window opened by left-clicking a planet on the galaxy map.

@@ -1109,6 +1109,22 @@ static void game_push_hud(game_state* s, f32 dt) {
         }
         snprintf(hud.station_insp_title, sizeof(hud.station_insp_title), "SPACE STATION \xE2\x80\x94 %s", sysname);
 
+        // Subtitle: market specialization + controlling civilization (planet-inspector style).
+        hud.station_insp_subtitle[0] = '\0';
+        if (sid >= 0) {
+            i32 node = sid >> 8;
+            const char* owner_name = "Independent";
+            if (node >= 0 && node < s->galaxy.node_count && s->galaxy.node_owner) {
+                i16 owner = s->galaxy.node_owner[node];
+                if (owner >= 0 && owner < s->galaxy.civ_count && s->galaxy.civs[owner].status == 0)
+                    owner_name = s->galaxy.civs[owner].name;
+            }
+            i32 spec = station_specialization(s, sid);
+            const char* spec_name = (spec >= 0 && spec < CAT_COUNT) ? TRADE_CATEGORY_NAMES[spec] : "General";
+            snprintf(hud.station_insp_subtitle, sizeof(hud.station_insp_subtitle),
+                     "%s Hub  \xE2\x80\x94  %s", spec_name, owner_name);
+        }
+
         // Tab visibility: which tabs exist for this station.
         b8 has_contracts = FALSE;
         if (sid >= 0) {
@@ -1128,9 +1144,13 @@ static void game_push_hud(game_state* s, f32 dt) {
         hud.station_insp_show_contracts = (tab == 2) ? TRUE : FALSE;
 
         // ---- Tab content strings (\n-separated, pre-formatted; white-space:pre in RCSS) ----
-        hud.station_insp_dock[0]      = '\0';
-        hud.station_insp_market[0]    = '\0';
-        hud.station_insp_contracts[0] = '\0';
+        hud.station_insp_dock[0]        = '\0';
+        hud.station_insp_market_agri[0] = '\0';
+        hud.station_insp_market_mine[0] = '\0';
+        hud.station_insp_market_vola[0] = '\0';
+        hud.station_insp_market_indu[0] = '\0';
+        hud.station_insp_market_note[0] = '\0';
+        hud.station_insp_contracts[0]   = '\0';
 
         if (sid >= 0) {
             // DOCK tab: list missions whose current dock stage is at this station.
@@ -1165,17 +1185,33 @@ static void game_push_hud(game_state* s, f32 dt) {
                 #undef DOCK_SNPRINTF
             }
 
-            // MARKET tab: one line per trade good with stock and price.
+            // MARKET tab: one aligned line per resource, grouped into per-category strings
+            // (the RML supplies the category section heads). Each line carries a qualitative
+            // supply label derived from the stock/baseline ratio.
             if (tab == 1) {
                 MarketGood gm[GOOD_COUNT];
                 station_market_get(s, sid, gm);
-                f32 rev = station_revenue_get(s, sid);
-                snprintf(hud.station_insp_market, sizeof(hud.station_insp_market),
-                         "%-6s  %5.0fu @ %5.0fcr\n%-6s  %5.0fu @ %5.0fcr\n%-6s  %5.0fu @ %5.0fcr\nRevenue: %.0f cr",
-                         TRADE_GOOD_NAMES[0], gm[0].stock, gm[0].price,
-                         TRADE_GOOD_NAMES[1], gm[1].stock, gm[1].price,
-                         TRADE_GOOD_NAMES[2], gm[2].stock, gm[2].price,
-                         rev);
+                char* bufs[CAT_COUNT]  = { hud.station_insp_market_agri, hud.station_insp_market_mine,
+                                           hud.station_insp_market_vola, hud.station_insp_market_indu };
+                i32 sizes[CAT_COUNT]   = { (i32)sizeof(hud.station_insp_market_agri), (i32)sizeof(hud.station_insp_market_mine),
+                                           (i32)sizeof(hud.station_insp_market_vola), (i32)sizeof(hud.station_insp_market_indu) };
+                i32 offs[CAT_COUNT]    = { 0, 0, 0, 0 };
+                for (i32 gd = 0; gd < GOOD_COUNT; ++gd) {
+                    i32 c = trade_good_category(gd);
+                    if (c < 0 || c >= CAT_COUNT) continue;
+                    f32 ratio = (gm[gd].base_stock > 1.0f) ? gm[gd].stock / gm[gd].base_stock : 1.0f;
+                    const char* supply = ratio < 0.5f ? "Scarce"
+                                       : ratio < 0.9f ? "Low"
+                                       : ratio <= 1.1f ? "Stable"
+                                       : ratio <= 1.5f ? "Surplus" : "Glut";
+                    if (offs[c] < 0 || offs[c] >= sizes[c] - 1) continue;
+                    offs[c] += snprintf(bufs[c] + offs[c], (size_t)(sizes[c] - offs[c]),
+                                        "%s%-12s %5.0f u   %4.0f cr   %s",
+                                        offs[c] > 0 ? "\n" : "",
+                                        TRADE_GOOD_NAMES[gd], gm[gd].stock, gm[gd].price, supply);
+                }
+                snprintf(hud.station_insp_market_note, sizeof(hud.station_insp_market_note),
+                         "Station revenue: %.0f cr", station_revenue_get(s, sid));
             }
 
             // CONTRACTS tab: list missions issued by this station (station_id == sid).

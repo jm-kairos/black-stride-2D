@@ -148,18 +148,33 @@
         <div class="station-menu-item" data-event-click="hud_action('station_inspect')">Inspect</div>
     </div>
 
-    <!-- Space-station inspector window (fullscreen; Collapse to dismiss) -->
+    <!-- Space-station inspector window (floating, right side; planet-inspector styling) -->
     <div id="station-inspector" class="panel" data-if="station_inspector_visible">
         <div class="win-title">{{ station_insp_title }}<span class="win-close" data-event-click="hud_action('close_station_inspector')">Collapse</span></div>
+        <div class="planet-insp-subtitle">{{ station_insp_subtitle }}</div>
         <div class="insp-tabs">
             <div class="insp-tab" data-class-active="station_insp_show_dock" data-event-click="hud_action('station_tab:0')">Dock</div>
             <div class="insp-tab" data-class-active="station_insp_show_market" data-event-click="hud_action('station_tab:1')">Market</div>
             <div class="insp-tab" data-if="station_insp_tab2_visible" data-class-active="station_insp_show_contracts" data-event-click="hud_action('station_tab:2')">Contracts</div>
         </div>
         <div class="rule"></div>
-        <div class="station-insp-line" data-if="station_insp_show_dock">{{ station_insp_dock }}</div>
-        <div class="station-insp-line" data-if="station_insp_show_market">{{ station_insp_market }}</div>
-        <div class="station-insp-line" data-if="station_insp_show_contracts">{{ station_insp_contracts }}</div>
+        <div class="planet-insp-line" data-if="station_insp_show_dock">{{ station_insp_dock }}</div>
+        <div class="planet-insp-section" data-if="station_insp_show_market">
+            <div class="planet-insp-head">Agriculture</div>
+            <div class="planet-insp-line">{{ station_insp_market_agri }}</div>
+            <div class="rule"></div>
+            <div class="planet-insp-head">Minerals</div>
+            <div class="planet-insp-line">{{ station_insp_market_mine }}</div>
+            <div class="rule"></div>
+            <div class="planet-insp-head">Volatiles</div>
+            <div class="planet-insp-line">{{ station_insp_market_vola }}</div>
+            <div class="rule"></div>
+            <div class="planet-insp-head">Industrial</div>
+            <div class="planet-insp-line">{{ station_insp_market_indu }}</div>
+            <div class="rule"></div>
+            <div class="planet-insp-line dim">{{ station_insp_market_note }}</div>
+        </div>
+        <div class="planet-insp-line" data-if="station_insp_show_contracts">{{ station_insp_contracts }}</div>
     </div>
 
     <!-- Planet inspector window (floating; opened by left-clicking a planet on the map) -->

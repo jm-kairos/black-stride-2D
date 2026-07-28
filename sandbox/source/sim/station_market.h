@@ -24,8 +24,18 @@ struct MarketGood {
     f32 price;
 };
 
-// Display names indexable by TradeGood (GOOD_COUNT entries).
-extern const char* const TRADE_GOOD_NAMES[3];
+// Display names indexable by TradeGood (GOOD_COUNT entries) / TradeCategory (CAT_COUNT entries).
+extern const char* const TRADE_GOOD_NAMES[];
+extern const char* const TRADE_CATEGORY_NAMES[];
+
+// Category (TradeCategory value) of a trade good; CAT_COUNT for an out-of-range good.
+i32 trade_good_category(i32 good);
+
+// The category (TradeCategory value) this station specializes in: a deterministic per-station
+// seed roll weighted by the node's abundance signals, so fertile systems tend to host agri hubs,
+// metal-rich ones refineries, etc. The specialized category gets a baseline stock boost (cheap
+// there, expensive where it's scarce). Pure function of the station id.
+i32 station_specialization(const game_state* s, i32 station_id);
 
 // Room list of a station (StationRoomKind values into out[]). Every station has DOCK + MARKET;
 // mission-hub stations (first MISSION_HUBS_PER_SYSTEM of the layout) also have CONTRACTS.
@@ -33,9 +43,9 @@ extern const char* const TRADE_GOOD_NAMES[3];
 i32 station_rooms(const game_state* s, i32 station_id, u8* out, i32 max_out);
 
 // Deterministic baseline market of a station (out must hold GOOD_COUNT entries): base stock
-// (50..250 before bias, 10..400 after bias/clamp) per good from the node seed, biased by
-// habitability (food vs ore) and whether an alive civilization holds the system (tech).
-// Pure function — identical every call.
+// (50..250 before bias, 10..400 after bias/clamp) per good from the node seed, biased by the
+// node's abundance signals (habitability, biosphere, ore/volatile richness, civ industry) and
+// boosted for the station's specialized category. Pure function — identical every call.
 void station_market_baseline(const game_state* s, i32 station_id, MarketGood* out);
 
 // Live market: baseline plus this station's delta-pool entry (if any), stock clamped >= 0 and

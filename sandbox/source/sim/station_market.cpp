@@ -7,19 +7,75 @@
 
 using GalaxyState = game_state::GalaxyState;
 
-const char* const TRADE_GOOD_NAMES[3] = { "FOOD", "ORE", "TECH" };
+const char* const TRADE_GOOD_NAMES[GOOD_COUNT] = {
+    "Grain", "Organics", "Iron Ore", "Rare Metals", "Water Ice",
+    "Hydrogen", "Alloys", "Electronics", "Medicine", "Luxuries"
+};
+
+const char* const TRADE_CATEGORY_NAMES[CAT_COUNT] = {
+    "Agriculture", "Minerals", "Volatiles", "Industrial"
+};
 
 // ---- Tuning ---------------------------------------------------------------------------------
-// Base unit price of each good at exactly-baseline stock. The whole supply/demand model is one
-// rule: price = BASE_PRICE * clamp(2 - stock/base_stock, 0.5, 2.0).
-static const f32 BASE_PRICE[GOOD_COUNT] = { 10.0f, 15.0f, 40.0f };
+// Static per-good metadata: category, base unit price at exactly-baseline stock, and price
+// volatility (variance between stations; refined/luxury goods swing more than raw staples).
+// The whole supply/demand model is still one rule:
+// price = base_price * demand_mul * clamp(2 - stock/base_stock, 0.5, 2.0).
+struct TradeGoodInfo {
+    u8  category;     // TradeCategory
+    f32 base_price;   // credits per unit at baseline
+    f32 volatility;   // 0..1 baseline price variance between stations
+};
+
+static const TradeGoodInfo GOOD_INFO[GOOD_COUNT] = {
+    { CAT_AGRICULTURE,  8.0f, 0.10f },  // GOOD_GRAIN
+    { CAT_AGRICULTURE, 14.0f, 0.20f },  // GOOD_ORGANICS
+    { CAT_MINERALS,    12.0f, 0.15f },  // GOOD_IRON_ORE
+    { CAT_MINERALS,    45.0f, 0.40f },  // GOOD_RARE_METALS
+    { CAT_VOLATILES,    6.0f, 0.10f },  // GOOD_WATER_ICE
+    { CAT_VOLATILES,   18.0f, 0.25f },  // GOOD_HYDROGEN_FUEL
+    { CAT_INDUSTRIAL,  30.0f, 0.30f },  // GOOD_ALLOYS
+    { CAT_INDUSTRIAL,  60.0f, 0.50f },  // GOOD_ELECTRONICS
+    { CAT_INDUSTRIAL,  75.0f, 0.45f },  // GOOD_MEDICINE
+    { CAT_INDUSTRIAL,  90.0f, 0.60f },  // GOOD_LUXURIES
+};
 
 // Stock deltas decay back toward baseline at this many units per in-game hour.
 static const f32 MARKET_DECAY_PER_HOUR = 2.0f;
 
-// Per-good price volatility: higher-tier goods (TECH) have more price variance between
-// stations than basic goods (FOOD). Creates non-zero price spreads even at baseline.
-static const f32 PRICE_VOLATILITY[GOOD_COUNT] = { 0.1f, 0.3f, 0.6f };  // FOOD, ORE, TECH
+// Baseline stock multiplier for goods in the station's specialized category: specialists
+// overproduce their niche (cheap locally, profitable to export).
+static const f32 SPECIALIZATION_STOCK_MUL = 1.6f;
+
+// ---- Node economic signals -------------------------------------------------------------------
+// The five 0..1 supply signals a node exposes to the market model. All are galaxy-generation
+// summaries (GalaxyNode) or civ state — nothing materialises.
+enum { SIG_HAB = 0, SIG_BIO, SIG_MET, SIG_VOL, SIG_IND, SIG_COUNT };
+
+// Per-good supply weights over the node signals; supply strength = dot(weights, signals).
+static const f32 GOOD_SUPPLY_W[GOOD_COUNT][SIG_COUNT] = {
+    // hab    bio    met    vol    ind
+    { 0.7f,  0.3f,  0.0f,  0.0f,  0.0f },  // GOOD_GRAIN         farms need habitable worlds
+    { 0.3f,  0.7f,  0.0f,  0.0f,  0.0f },  // GOOD_ORGANICS      biomass needs a biosphere
+    { 0.0f,  0.0f,  1.0f,  0.0f,  0.0f },  // GOOD_IRON_ORE      pure extraction
+    { 0.0f,  0.0f,  0.8f,  0.0f,  0.2f },  // GOOD_RARE_METALS   extraction + some refining
+    { 0.2f,  0.0f,  0.0f,  0.8f,  0.0f },  // GOOD_WATER_ICE     ice mining (wet worlds help)
+    { 0.0f,  0.0f,  0.0f,  0.7f,  0.3f },  // GOOD_HYDROGEN_FUEL volatiles + refinery industry
+    { 0.0f,  0.0f,  0.4f,  0.0f,  0.6f },  // GOOD_ALLOYS        ore fed through industry
+    { 0.0f,  0.0f,  0.2f,  0.0f,  0.8f },  // GOOD_ELECTRONICS   high industry
+    { 0.2f,  0.2f,  0.0f,  0.0f,  0.6f },  // GOOD_MEDICINE      industry + organic feedstock
+    { 0.1f,  0.1f,  0.0f,  0.0f,  0.8f },  // GOOD_LUXURIES      wealthy industry
+};
+
+// Per-category supply weights (specialization roll): what makes a node a natural host for
+// each kind of specialist station.
+static const f32 CAT_SUPPLY_W[CAT_COUNT][SIG_COUNT] = {
+    // hab    bio    met    vol    ind
+    { 0.5f,  0.5f,  0.0f,  0.0f,  0.0f },  // CAT_AGRICULTURE
+    { 0.0f,  0.0f,  0.9f,  0.0f,  0.1f },  // CAT_MINERALS
+    { 0.1f,  0.0f,  0.0f,  0.8f,  0.1f },  // CAT_VOLATILES
+    { 0.1f,  0.1f,  0.1f,  0.0f,  0.7f },  // CAT_INDUSTRIAL
+};
 
 // splitmix64 finalizer — independent deterministic stream (same family as the station layout
 // PRNG in galaxy_map.cpp; never perturbs other generation).
@@ -40,7 +96,62 @@ static f32 good_price(i32 good, f32 stock, f32 base_stock, f32 demand_mul) {
     f32 mul   = 2.0f - ratio;
     if (mul < 0.5f) mul = 0.5f;
     if (mul > 2.0f) mul = 2.0f;
-    return BASE_PRICE[good] * demand_mul * mul;
+    return GOOD_INFO[good].base_price * demand_mul * mul;
+}
+
+i32 trade_good_category(i32 good) {
+    return (good >= 0 && good < GOOD_COUNT) ? (i32)GOOD_INFO[good].category : (i32)CAT_COUNT;
+}
+
+// Fill the node's five supply signals (all 0..1). Defensive defaults for out-of-range nodes
+// match the old baseline behaviour (mid habitability, no industry).
+static void node_signals(const game_state* s, i32 node, f32 sig[SIG_COUNT]) {
+    const GalaxyState& g = s->galaxy;
+    sig[SIG_HAB] = 0.5f; sig[SIG_BIO] = 0.0f; sig[SIG_MET] = 0.0f;
+    sig[SIG_VOL] = 0.0f; sig[SIG_IND] = 0.0f;
+    if (node < 0 || node >= g.node_count) return;
+    const GalaxyNode& nd = g.nodes[node];
+    sig[SIG_HAB] = (f32)nd.best_habitability / 255.0f;
+    sig[SIG_BIO] = (f32)nd.biosphere         / 255.0f;
+    sig[SIG_MET] = (f32)nd.res_metal         / 255.0f;
+    sig[SIG_VOL] = (f32)nd.res_volatiles     / 255.0f;
+    i16 owner = g.node_owner ? g.node_owner[node] : (i16)-1;
+    if (owner >= 0 && owner < g.civ_count && g.civs[owner].status == 0) {
+        f32 pn = g.civs[owner].power / 4.0f;   // civ power ~1+ -> 0..1 industry ramp
+        if (pn > 1.0f) pn = 1.0f;
+        sig[SIG_IND] = 0.5f + 0.5f * pn;
+    }
+}
+
+// The deterministic per-station market seed (shared by baseline + specialization so both stay
+// in lockstep for one station).
+static u64 station_market_seed(const game_state* s, i32 station_id, i32 node) {
+    const GalaxyState& g = s->galaxy;
+    if (node >= 0 && node < g.node_count)
+        return g.nodes[node].seed ^ ((u64)(station_id + 1) * 0x100000001B3ull);
+    return (u64)(station_id + 1) * 0x9E3779B97F4A7C15ull;   // defensive: id out of range
+}
+
+i32 station_specialization(const game_state* s, i32 station_id) {
+    i32 node = (station_id >= 0) ? station_id_node(station_id) : -1;
+    f32 sig[SIG_COUNT];
+    node_signals(s, node, sig);
+    // Weighted roll: every category keeps a small floor so barren systems can still host the
+    // odd off-profile specialist, but abundance dominates.
+    f32 w[CAT_COUNT];
+    f32 total = 0.0f;
+    for (i32 c = 0; c < CAT_COUNT; ++c) {
+        f32 t = 0.05f;
+        for (i32 k = 0; k < SIG_COUNT; ++k) t += CAT_SUPPLY_W[c][k] * sig[k];
+        w[c] = t;
+        total += t;
+    }
+    f32 r = mix01(station_market_seed(s, station_id, node) ^ 0x5EC1A17ull) * total;
+    for (i32 c = 0; c < CAT_COUNT; ++c) {
+        r -= w[c];
+        if (r <= 0.0f) return c;
+    }
+    return CAT_COUNT - 1;
 }
 
 i32 station_rooms(const game_state* s, i32 station_id, u8* out, i32 max_out) {
@@ -60,31 +171,27 @@ i32 station_rooms(const game_state* s, i32 station_id, u8* out, i32 max_out) {
 }
 
 void station_market_baseline(const game_state* s, i32 station_id, MarketGood* out) {
-    const GalaxyState& g = s->galaxy;
-    i32 node  = (station_id >= 0) ? station_id_node(station_id) : -1;
-    f32 hab   = 0.5f;
-    b8  alive = FALSE;
-    u64 seed  = (u64)(station_id + 1) * 0x9E3779B97F4A7C15ull;   // defensive: id out of range
-    if (node >= 0 && node < g.node_count) {
-        hab = (f32)g.nodes[node].best_habitability / 255.0f;
-        i16 owner = g.node_owner ? g.node_owner[node] : (i16)-1;
-        alive = (owner >= 0 && owner < g.civ_count && g.civs[owner].status == 0);
-        seed  = g.nodes[node].seed ^ ((u64)(station_id + 1) * 0x100000001B3ull);
-    }
-    // Per-good production bias: fertile systems overflow with food, barren ones dig ore instead,
-    // and tech needs a living civilization's industry.
-    f32 bias[GOOD_COUNT];
-    bias[GOOD_FOOD] = 0.5f + hab;
-    bias[GOOD_ORE]  = 1.5f - hab;
-    bias[GOOD_TECH] = alive ? 1.2f : 0.5f;
+    i32 node = (station_id >= 0) ? station_id_node(station_id) : -1;
+    u64 seed = station_market_seed(s, station_id, node);
+    f32 sig[SIG_COUNT];
+    node_signals(s, node, sig);
+    i32 spec = station_specialization(s, station_id);
     for (i32 gd = 0; gd < GOOD_COUNT; ++gd) {
-        f32 base = (50.0f + 200.0f * mix01(seed ^ ((u64)(gd + 1) * 0xC0FFEEull))) * bias[gd];
+        // Production bias: the node's supply strength for this good, boosted when the station
+        // specializes in its category. Range comparable to the old 0.5..1.5 hand-tuned biases.
+        f32 t = 0.0f;
+        for (i32 k = 0; k < SIG_COUNT; ++k) t += GOOD_SUPPLY_W[gd][k] * sig[k];
+        f32 bias = 0.4f + 1.2f * t;
+        if ((i32)GOOD_INFO[gd].category == spec) bias *= SPECIALIZATION_STOCK_MUL;
+        if (bias < 0.25f) bias = 0.25f;
+        if (bias > 2.5f)  bias = 2.5f;
+        f32 base = (50.0f + 200.0f * mix01(seed ^ ((u64)(gd + 1) * 0xC0FFEEull))) * bias;
         if (base < 10.0f)  base = 10.0f;
         if (base > 400.0f) base = 400.0f;
         out[gd].base_stock = base;
         out[gd].stock      = base;
-        f32 demand_mul     = 1.0f / bias[gd];   // producer pays less, importer pays more
-        f32 vol            = PRICE_VOLATILITY[gd];
+        f32 demand_mul     = 1.0f / bias;   // producer pays less, importer pays more
+        f32 vol            = GOOD_INFO[gd].volatility;
         f32 price_mod      = 1.0f + vol * (2.0f * mix01(seed ^ ((u64)(gd + 7) * 0xBEEFull)) - 1.0f);
         out[gd].price      = good_price(gd, base, base, demand_mul) * price_mod;
     }
@@ -98,7 +205,7 @@ void station_market_get(const game_state* s, i32 station_id, MarketGood* out) {
         if (g.market_deltas[i].station_id != station_id) continue;
         for (i32 gd = 0; gd < GOOD_COUNT; ++gd) {
             f32 baseline_price = out[gd].price;  // captures demand_mul from baseline
-            f32 demand_mul = (BASE_PRICE[gd] > 0.0f) ? baseline_price / BASE_PRICE[gd] : 1.0f;
+            f32 demand_mul = (GOOD_INFO[gd].base_price > 0.0f) ? baseline_price / GOOD_INFO[gd].base_price : 1.0f;
             f32 st = out[gd].stock + g.market_deltas[i].stock_delta[gd];
             out[gd].stock = (st > 0.0f) ? st : 0.0f;
             out[gd].price = good_price(gd, out[gd].stock, out[gd].base_stock, demand_mul);

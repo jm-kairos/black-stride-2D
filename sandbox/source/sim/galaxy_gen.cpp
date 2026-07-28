@@ -59,6 +59,19 @@ static void fill_node_summary(GalaxyNode* node, u64 seed, Vec2 world, SSGenEnv e
     }
     node->best_habitability = (u8)(best >= 1.0f ? 255 : (best <= 0.0f ? 0 : best * 255.0f));
     node->habitable_count   = (u8)(hab > 255 ? 255 : hab);
+    // Resource abundance substrate (FREE: `tmp.evo` already carries evolved per-body resource
+    // richness). Max across all non-star bodies — planets, moons, and belts — so mining-belt
+    // systems register as metal/volatile-rich. Drives station market specialization.
+    f32 met = 0.0f, vol = 0.0f, bio = 0.0f;
+    for (i32 b = 1; b < tmp.evo.body_count; ++b) {
+        const EvolvedBody& eb = tmp.evo.bodies[b];
+        if (eb.res_metal     > met) met = eb.res_metal;
+        if (eb.res_volatiles > vol) vol = eb.res_volatiles;
+        if (eb.life          > bio) bio = eb.life;
+    }
+    node->res_metal     = (u8)(met >= 1.0f ? 255 : (met <= 0.0f ? 0 : met * 255.0f));
+    node->res_volatiles = (u8)(vol >= 1.0f ? 255 : (vol <= 0.0f ? 0 : vol * 255.0f));
+    node->biosphere     = (u8)(bio >= 1.0f ? 255 : (bio <= 0.0f ? 0 : bio * 255.0f));
 }
 
 // Box-Muller standard normal (deterministic; used to scatter systems around spiral arms).

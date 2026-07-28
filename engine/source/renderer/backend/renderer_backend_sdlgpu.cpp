@@ -4318,12 +4318,17 @@ struct BsRmlHudModel
     Rml::String                 station_menu_left = "0px", station_menu_top = "0px";
     bool                        station_inspector_visible = false;
     Rml::String                 station_insp_title;
+    Rml::String                 station_insp_subtitle;
     bool                        station_insp_show_dock = false;
     bool                        station_insp_show_market = false;
     bool                        station_insp_show_contracts = false;
     bool                        station_insp_tab2_visible = false;
     Rml::String                 station_insp_dock;
-    Rml::String                 station_insp_market;
+    Rml::String                 station_insp_market_agri;
+    Rml::String                 station_insp_market_mine;
+    Rml::String                 station_insp_market_vola;
+    Rml::String                 station_insp_market_indu;
+    Rml::String                 station_insp_market_note;
     Rml::String                 station_insp_contracts;
 
     bool                        planet_insp_visible = false;
@@ -4455,12 +4460,17 @@ b8 bs_rml_hud_init(const char* rml_path)
     c.Bind("station_menu_top",          &g_hud_model.station_menu_top);
     c.Bind("station_inspector_visible", &g_hud_model.station_inspector_visible);
     c.Bind("station_insp_title",        &g_hud_model.station_insp_title);
+    c.Bind("station_insp_subtitle",     &g_hud_model.station_insp_subtitle);
     c.Bind("station_insp_show_dock",      &g_hud_model.station_insp_show_dock);
     c.Bind("station_insp_show_market",    &g_hud_model.station_insp_show_market);
     c.Bind("station_insp_show_contracts", &g_hud_model.station_insp_show_contracts);
     c.Bind("station_insp_tab2_visible",   &g_hud_model.station_insp_tab2_visible);
     c.Bind("station_insp_dock",           &g_hud_model.station_insp_dock);
-    c.Bind("station_insp_market",         &g_hud_model.station_insp_market);
+    c.Bind("station_insp_market_agri",    &g_hud_model.station_insp_market_agri);
+    c.Bind("station_insp_market_mine",    &g_hud_model.station_insp_market_mine);
+    c.Bind("station_insp_market_vola",    &g_hud_model.station_insp_market_vola);
+    c.Bind("station_insp_market_indu",    &g_hud_model.station_insp_market_indu);
+    c.Bind("station_insp_market_note",    &g_hud_model.station_insp_market_note);
     c.Bind("station_insp_contracts",      &g_hud_model.station_insp_contracts);
 
     c.Bind("planet_insp_visible",   &g_hud_model.planet_insp_visible);
@@ -4666,12 +4676,17 @@ void bs_rml_hud_update(const bs_rml_hud_state* s)
     bs_rml_assign(g_hud_model.station_menu_top,  s->station_menu_top,  sizeof(s->station_menu_top));
     g_hud_model.station_inspector_visible = s->station_inspector_visible ? true : false;
     bs_rml_assign(g_hud_model.station_insp_title, s->station_insp_title, sizeof(s->station_insp_title));
+    bs_rml_assign(g_hud_model.station_insp_subtitle, s->station_insp_subtitle, sizeof(s->station_insp_subtitle));
     g_hud_model.station_insp_show_dock      = s->station_insp_show_dock ? true : false;
     g_hud_model.station_insp_show_market    = s->station_insp_show_market ? true : false;
     g_hud_model.station_insp_show_contracts = s->station_insp_show_contracts ? true : false;
     g_hud_model.station_insp_tab2_visible   = s->station_insp_tab2_visible ? true : false;
     bs_rml_assign(g_hud_model.station_insp_dock,      s->station_insp_dock,      sizeof(s->station_insp_dock));
-    bs_rml_assign(g_hud_model.station_insp_market,    s->station_insp_market,    sizeof(s->station_insp_market));
+    bs_rml_assign(g_hud_model.station_insp_market_agri, s->station_insp_market_agri, sizeof(s->station_insp_market_agri));
+    bs_rml_assign(g_hud_model.station_insp_market_mine, s->station_insp_market_mine, sizeof(s->station_insp_market_mine));
+    bs_rml_assign(g_hud_model.station_insp_market_vola, s->station_insp_market_vola, sizeof(s->station_insp_market_vola));
+    bs_rml_assign(g_hud_model.station_insp_market_indu, s->station_insp_market_indu, sizeof(s->station_insp_market_indu));
+    bs_rml_assign(g_hud_model.station_insp_market_note, s->station_insp_market_note, sizeof(s->station_insp_market_note));
     bs_rml_assign(g_hud_model.station_insp_contracts, s->station_insp_contracts, sizeof(s->station_insp_contracts));
 
     g_hud_model.planet_insp_visible = s->planet_insp_visible ? true : false;
