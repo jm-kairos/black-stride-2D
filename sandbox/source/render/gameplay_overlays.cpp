@@ -69,6 +69,21 @@ static void draw_enemy_marker(game_state* s) {
 // A civ-coloured, role-shaped marker (screen-constant) over every live NPC ship so they stay locatable
 // at any zoom: patrols/combat = triangle (points along heading), miners = square, traders = circle.
 // Hostile agents get an extra outer ring.
+
+// Unidentified-marker zoom fade band: fully opaque at/above FULL, gone at/below GONE, eased in
+// LOG space (zoom is multiplicative). This is intentionally much wider than the arena<->map blend
+// band so the markers are already visible while overviewing the system and dissolve gradually as
+// the view pulls back toward the galaxy map.
+static const f32 UNID_MARKER_ZOOM_FULL = 0.12f;
+static const f32 UNID_MARKER_ZOOM_GONE = 0.015f;
+static f32 unid_marker_fade(f32 zoom) {
+    if (zoom >= UNID_MARKER_ZOOM_FULL) return 1.0f;
+    if (zoom <= UNID_MARKER_ZOOM_GONE) return 0.0f;
+    f32 t = (logf(zoom) - logf(UNID_MARKER_ZOOM_GONE))
+          / (logf(UNID_MARKER_ZOOM_FULL) - logf(UNID_MARKER_ZOOM_GONE));
+    return t * t * (3.0f - 2.0f * t); // smoothstep
+}
+
 static void draw_npc_ship_markers(game_state* s) {
     f32 zoom = (s->camera_state.camera.zoom > 0.0001f) ? s->camera_state.camera.zoom : 1.0f;
     f32 zoom_inv = 1.0f / zoom;
@@ -77,10 +92,9 @@ static void draw_npc_ship_markers(game_state* s) {
         if (!n.active) continue;
         Vec2 center = render_from_hierpos(s, &n.ship.origin);
         if (!n.discovered) {
-            // Visible across the whole in-system zoom range; fades out with the arena look as
-            // the view crosses into the galaxy map (view_arena_w: 1 = arena, 0 = map).
-            f32 fade = s->view_arena_w;
-            fade = fade * fade * (3.0f - 2.0f * fade);   // smoothstep for a gentle roll-off
+            // Visible across the whole system-view zoom range, fading out gradually as the view
+            // pulls back toward the galaxy map (see unid_marker_fade above).
+            f32 fade = unid_marker_fade(zoom);
             if (fade > 0.003f)
                 draw_unidentified_marker(center, zoom_inv, fade, LAYER_UI);
             continue;
