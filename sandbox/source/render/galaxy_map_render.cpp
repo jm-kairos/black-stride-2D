@@ -1245,8 +1245,9 @@ void draw_galaxy_map_look(game_state* s, f32 dt) {
                 if (p.semi_major_axis * s->camera_state.camera.zoom < 6.0f) continue; // orbit sub-6px: skip planet
 
                 // Orbit ring — the true ellipse (focus at the star, centre offset by a*e along the
-                // rotated major axis), as 64 chords at screen-constant ~1px thickness. Alpha fades
-                // in just past the sub-6px LOD gate so rings don't pop when zooming.
+                // rotated major axis), as 64 chords at 1px thickness (renderer_draw_line thickness
+                // is in SCREEN PIXELS). Alpha fades in just past the sub-6px LOD gate so rings
+                // don't pop when zooming.
                 {
                     f32 orbit_px = p.semi_major_axis * s->camera_state.camera.zoom;
                     f32 fade = clampf((orbit_px - 6.0f) / 18.0f, 0.0f, 1.0f);
@@ -1261,7 +1262,7 @@ void draw_galaxy_map_look(game_state* s, f32 dt) {
                             f32 ex = p.semi_major_axis * (cosf(E) - p.eccentricity);
                             f32 ey = semi_minor * sinf(E);
                             Vec2 pt = vec2_add(center_orbit, Vec2{ rcw * ex - rsw * ey, rsw * ex + rcw * ey });
-                            if (k > 0) renderer_draw_line(prev, pt, inv_zoom, ring_col, LAYER_CELESTIAL);
+                            if (k > 0) renderer_draw_line(prev, pt, 1.0f, ring_col, LAYER_CELESTIAL);
                             prev = pt;
                         }
                     }
