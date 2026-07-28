@@ -12,6 +12,8 @@
 
 #include "sim/steering.h"         // shared steering (arrive/seek/standoff + apply)
 
+#include "sim/station_market.h"   // market writeback (miners deliver, ambient traders micro-haul)
+
 #include "sim/discovery.h"        // discovery_npc_is_known (single-ship discovery system)
 
 #include <core/logger.h>          // BS_LOG_ERROR
@@ -221,6 +223,12 @@ static i32 spawn_npc(game_state* s, i16 faction, HierPos2 pos, i32 home_node, u8
     n.work_asteroid    = -1;
 
     n.work_timer  = 0.0f;
+
+    n.work_station = -1;
+
+    n.cargo_units  = 0.0f;
+
+    n.cargo_good   = 0;
 
     // Discovery system: key each agent by its (home_node, spawn_seed). Already-discovered agents
 
@@ -532,7 +540,7 @@ static void ai_ships_sync_missions(game_state* s) {
 
         ShipMission& m = g.missions[mi];
 
-        if (m.archetype != ARCHETYPE_TRADER || m.ship_slot >= 0) continue;
+        if ((m.archetype != ARCHETYPE_TRADER && m.archetype != ARCHETYPE_WARSHIP) || m.ship_slot >= 0) continue;
 
         if (!mission_live_here(m, node_here)) continue;
 
@@ -544,7 +552,7 @@ static void ai_ships_sync_missions(game_state* s) {
 
             i16 owner = (m.owner >= 0) ? m.owner : FACTION_PIRATE;
 
-            i32 slot = spawn_npc(s, owner, pos, m.home_node, ARCHETYPE_TRADER, m.seed);
+            i32 slot = spawn_npc(s, owner, pos, m.home_node, m.archetype, m.seed);
 
             if (slot < 0) continue;   // pool full: the macro keeps integrating this leg itself
 
@@ -715,6 +723,116 @@ static void miner_acquire(game_state* s, NpcShip& n) {
 
 
 
+// Nearest station (index into StarSystem::stations[]) of materialized slot `slot`; -1 if none.
+
+static i32 nearest_station(game_state* s, i32 slot, const HierPos2* from) {
+
+    if (slot < 0) return -1;
+
+    StarSystem& ss = s->galaxy.systems[slot];
+
+    i32 best = -1; f32 best_d2 = 3.4e38f;
+
+    for (i32 i = 0; i < ss.station_count; ++i) {
+
+        Vec2 d = hierpos_diff(&ss.stations[i].pos, from, BS_HIERPOS_CELL_SIZE);
+
+        f32 d2 = d.x * d.x + d.y * d.y;
+
+        if (d2 < best_d2) { best_d2 = d2; best = i; }
+
+    }
+
+    return best;
+
+}
+
+
+
+// What a dwell at the rock yields: the node's dominant resource, occasionally its rare form.
+
+static u8 miner_pick_good(game_state* s, NpcShip& n) {
+
+    if (n.home_node < 0 || n.home_node >= s->galaxy.node_count) return GOOD_IRON_ORE;
+
+    const GalaxyNode& gn = s->galaxy.nodes[n.home_node];
+
+    b8 rare = (sm64(n.rng) % 4ull) == 0;   // 1-in-4 hauls strike the rare form
+
+    if (gn.res_metal >= gn.res_volatiles) return rare ? GOOD_RARE_METALS   : GOOD_IRON_ORE;
+
+    return                                       rare ? GOOD_HYDROGEN_FUEL : GOOD_WATER_ICE;
+
+}
+
+
+
+// Phase 3: AI_DELIVER — full hold, fly to the chosen station, dock, and SELL the ore into its
+
+// market (station_market_apply: stock up, local price down). Mining now moves the economy.
+
+static void ai_miner_deliver(game_state* s, NpcShip& n, f32 dt) {
+
+    const AiProfile& p = ai_profile(n.archetype);
+
+    Ship* sh = &n.ship; ShipFlight* fl = &n.flight;
+
+    i32 slot = miner_system_slot(s, n.home_node);
+
+    if (slot < 0 || n.work_station < 0 || n.work_station >= s->galaxy.systems[slot].station_count) {
+
+        n.work_station = -1; n.state = AI_PATROL; n.state_timer = 0.0f;   // system swapped out: abort
+
+        return;
+
+    }
+
+    SystemStation& st = s->galaxy.systems[slot].stations[n.work_station];
+
+    Vec2 to = hierpos_diff(&st.pos, &sh->origin, BS_HIERPOS_CELL_SIZE);
+
+    f32 dist = vec2_length(to);
+
+    f32 dock_range = st.radius * 1.5f;
+
+    if (dock_range < 600.0f) dock_range = 600.0f;
+
+    const f32 UNLOAD_TIME = 4.0f;
+
+    if (dist > dock_range) {
+
+        n.work_timer = 0.0f;
+
+        steering::apply(sh, fl, steering::arrive(to, p.max_speed, dock_range * 2.0f),
+
+                        p.accel, p.max_speed, p.turn_rate, dt);
+
+        return;
+
+    }
+
+    steering::apply_face(sh, fl, Vec2{ 0.0f, 0.0f }, to, p.accel, p.max_speed, p.turn_rate, dt);
+
+    n.work_timer += dt;
+
+    if (n.work_timer < UNLOAD_TIME) return;
+
+    station_market_apply(s, st.station_id, n.cargo_good, n.cargo_units);
+
+    BS_LOG_INFO("ShipAI mining: miner %d delivered %.0f %s to station N%d/%d",
+
+                (i32)(&n - s->npc_ships), n.cargo_units, TRADE_GOOD_NAMES[n.cargo_good],
+
+                station_id_node(st.station_id), station_id_index(st.station_id));
+
+    n.cargo_units = 0.0f; n.work_timer = 0.0f; n.work_station = -1;
+
+    n.state = AI_PATROL; n.state_timer = 0.0f;
+
+}
+
+
+
 // ---- TRADER (contract-bound): dock at the contract's station, dwell, hand back to the macro ----
 
 // Only traders bound to a mission run this loop; unbound ambient traders keep the generic FSM.
@@ -825,6 +943,10 @@ static void ai_miner_tick(game_state* s, NpcShip& n, f32 dt) {
 
     if (!miner_target_valid(s, n)) miner_acquire(s, n);
 
+    // Full hold takes priority: run the delivery leg (Phase 3).
+
+    if (n.state == AI_DELIVER) { ai_miner_deliver(s, n, dt); return; }
+
     if (!miner_target_valid(s, n)) {
 
         // No asteroid in reach: loiter around the local home while looking for one.
@@ -889,9 +1011,257 @@ static void ai_miner_tick(game_state* s, NpcShip& n, f32 dt) {
 
             n.work_asteroid = -1; n.work_timer = 0.0f;      // done dwelling -> pick another asteroid next tick
 
+            // Phase 3: the dwell actually yields ore into the hold; a full hold triggers delivery.
+
+            const f32 MINE_YIELD = 8.0f, HOLD_MAX = 24.0f;
+
+            if (n.cargo_units <= 0.0f) n.cargo_good = miner_pick_good(s, n);
+
+            n.cargo_units += MINE_YIELD;
+
+            if (n.cargo_units >= HOLD_MAX) {
+
+                i32 st = nearest_station(s, miner_system_slot(s, n.home_node), &sh->origin);
+
+                if (st >= 0) { n.work_station = st; n.state = AI_DELIVER; n.state_timer = 0.0f; }
+
+                else n.cargo_units = 0.0f;   // no stations in reach (wild/unowned): vent and keep working
+
+            }
+
         }
 
     }
+
+}
+
+
+
+// ---- TRADER (ambient, Phase 3): intra-system micro-hauls -----------------------------------------
+
+// Unbound traders in a materialized system run a real buy->sell loop: load the biggest-stock good
+
+// at one station (stock down -> price up), sell it at another (stock up -> price down). Systems
+
+// with a single station run a planet<->station shuttle delivering planetary exports instead.
+
+// Returns FALSE when no local market work is possible (caller falls back to the generic FSM).
+
+static u8 planet_export_good(game_state* s, i32 node, u64& rng) {
+
+    if (node < 0 || node >= s->galaxy.node_count) return GOOD_GRAIN;
+
+    const GalaxyNode& gn = s->galaxy.nodes[node];
+
+    if (gn.biosphere >= gn.res_metal && gn.biosphere >= gn.res_volatiles)
+
+        return ((sm64(rng) & 1ull) == 0) ? GOOD_GRAIN : GOOD_ORGANICS;
+
+    return (gn.res_metal >= gn.res_volatiles) ? GOOD_IRON_ORE : GOOD_WATER_ICE;
+
+}
+
+
+
+static b8 ai_ambient_trader_tick(game_state* s, NpcShip& n, f32 dt) {
+
+    i32 slot = miner_system_slot(s, n.home_node);
+
+    if (slot < 0) return FALSE;
+
+    StarSystem& ss = s->galaxy.systems[slot];
+
+    if (ss.station_count <= 0) return FALSE;
+
+    const AiProfile& p = ai_profile(n.archetype);
+
+    Ship* sh = &n.ship; ShipFlight* fl = &n.flight;
+
+    n.state_timer += dt;
+
+    const f32 HAUL_UNITS = 10.0f, DOCK_TIME = 5.0f;
+
+    b8 single = ss.station_count < 2;
+
+
+
+    // Single-station system, empty hold: shuttle out to a planet lane and load its exports.
+
+    if (single && n.cargo_units <= 0.0f) {
+
+        HierPos2 anchor = system_anchor(s, n.home_node, ARCHETYPE_TRADER, 1, n.spawn_seed);
+
+        Vec2 to = hierpos_diff(&anchor, &sh->origin, BS_HIERPOS_CELL_SIZE);
+
+        if (vec2_length(to) > 1500.0f) {
+
+            if (n.state != AI_TRADE_DOCK) { n.state = AI_TRADE_DOCK; n.state_timer = 0.0f; }
+
+            n.work_timer = 0.0f;
+
+            steering::apply(sh, fl, steering::arrive(to, p.max_speed, 3000.0f),
+
+                            p.accel, p.max_speed, p.turn_rate, dt);
+
+            return TRUE;
+
+        }
+
+        steering::apply_face(sh, fl, Vec2{ 0.0f, 0.0f }, to, p.accel, p.max_speed, p.turn_rate, dt);
+
+        n.work_timer += dt;
+
+        if (n.work_timer >= DOCK_TIME) {
+
+            n.cargo_good  = planet_export_good(s, n.home_node, n.rng);
+
+            n.cargo_units = HAUL_UNITS * 0.6f;
+
+            n.work_station = 0; n.work_timer = 0.0f;
+
+        }
+
+        return TRUE;
+
+    }
+
+
+
+    // Choose a station target if none: empty hold -> a buy stop, loaded -> a sell stop.
+
+    if (n.work_station < 0 || n.work_station >= ss.station_count) {
+
+        n.work_station = (i32)(sm64(n.rng) % (u64)ss.station_count);
+
+        n.work_timer   = 0.0f;
+
+    }
+
+    SystemStation& st = ss.stations[n.work_station];
+
+    Vec2 to = hierpos_diff(&st.pos, &sh->origin, BS_HIERPOS_CELL_SIZE);
+
+    f32 dist = vec2_length(to);
+
+    f32 dock_range = st.radius * 1.5f;
+
+    if (dock_range < 600.0f) dock_range = 600.0f;
+
+    if (dist > dock_range) {
+
+        if (n.state != AI_TRADE_DOCK) { n.state = AI_TRADE_DOCK; n.state_timer = 0.0f; }
+
+        n.work_timer = 0.0f;
+
+        steering::apply(sh, fl, steering::arrive(to, p.max_speed, dock_range * 2.0f),
+
+                        p.accel, p.max_speed, p.turn_rate, dt);
+
+        return TRUE;
+
+    }
+
+    if (n.state != AI_TRADE_DOCKED) { n.state = AI_TRADE_DOCKED; n.state_timer = 0.0f; }
+
+    steering::apply_face(sh, fl, Vec2{ 0.0f, 0.0f }, to, p.accel, p.max_speed, p.turn_rate, dt);
+
+    n.work_timer += dt;
+
+    if (n.work_timer < DOCK_TIME) return TRUE;
+
+    n.work_timer = 0.0f;
+
+    if (n.cargo_units > 0.0f) {
+
+        station_market_apply(s, st.station_id, n.cargo_good, n.cargo_units);
+
+        BS_LOG_INFO("ShipAI micro-trade: trader %d sold %.0f %s at station N%d/%d",
+
+                    (i32)(&n - s->npc_ships), n.cargo_units, TRADE_GOOD_NAMES[n.cargo_good],
+
+                    station_id_node(st.station_id), station_id_index(st.station_id));
+
+        n.cargo_units = 0.0f;
+
+        n.work_station = -1;   // next: pick a buy stop (or the planet leg in single-station systems)
+
+        return TRUE;
+
+    }
+
+    // Buy the good this station is most glutted with (respecting available stock).
+
+    MarketGood mg[GOOD_COUNT];
+
+    station_market_get(s, st.station_id, mg);
+
+    i32 best = -1; f32 best_stock = 1.0f;
+
+    for (i32 g = 0; g < GOOD_COUNT; ++g)
+
+        if (mg[g].stock > best_stock) { best_stock = mg[g].stock; best = g; }
+
+    if (best < 0) { n.work_station = -1; return TRUE; }   // bare shelves: try another station
+
+    f32 units = (best_stock < HAUL_UNITS) ? best_stock : HAUL_UNITS;
+
+    station_market_apply(s, st.station_id, best, -units);
+
+    n.cargo_good  = (u8)best;
+
+    n.cargo_units = units;
+
+    i32 nxt = (i32)(sm64(n.rng) % (u64)ss.station_count);
+
+    if (nxt == n.work_station) nxt = (nxt + 1) % ss.station_count;
+
+    n.work_station = nxt;   // sell stop: a different station
+
+    return TRUE;
+
+}
+
+
+
+// ---- WARSHIP (mission-bound, Phase 4): fly the column's leg, break off to engage hostiles --------
+
+// Reinforcement columns and patrols in the player's system fly their macro leg exactly like a
+
+// materialized trader, but they are combatants: any hostile contact hands control to the generic
+
+// combat FSM (return FALSE) until the threat is gone, then the column resumes its leg.
+
+static b8 ai_mission_warship_tick(game_state* s, NpcShip& n, i32 self, f32 dt) {
+
+    GalaxyState& g = s->galaxy;
+
+    if (!g.missions || n.mission_id < 0 || n.mission_id >= g.mission_count) { n.mission_id = -1; return FALSE; }
+
+    ShipMission& m = g.missions[n.mission_id];
+
+    ai_sense(s, n, self);
+
+    if (n.target_ce >= 0) return FALSE;   // hostiles in sensor range: fight first
+
+    const AiProfile& p = ai_profile(n.archetype);
+
+    Ship* sh = &n.ship; ShipFlight* fl = &n.flight;
+
+    n.state_timer += dt;
+
+    if (n.state != AI_TRAVEL_LEG) { n.state = AI_TRAVEL_LEG; n.state_timer = 0.0f; }
+
+    f32 spd = (g.ai_speed_in_system > 0.0f) ? g.ai_speed_in_system : 50000.0f;
+
+    Vec2 leg = hierpos_diff(&m.leg_target, &sh->origin, BS_HIERPOS_CELL_SIZE);
+
+    steering::apply(sh, fl, steering::arrive(leg, spd, spd * 2.0f), spd, spd, p.turn_rate * 2.0f, dt);
+
+    m.pos = sh->origin;   // macro mirrors the live hull
+
+    if (vec2_length(leg) <= 1500.0f && !m.local_ready) m.local_ready = TRUE;
+
+    return TRUE;
 
 }
 
@@ -915,9 +1285,17 @@ static void ai_ship_tick(game_state* s, NpcShip& n, i32 self, f32 dt) {
 
 
 
-    // Contract-bound traders run the station docking loop; unbound traders stay generic.
+    // Contract-bound traders run the station docking loop; unbound traders run intra-system
+
+    // micro-hauls when the local market is materialized (Phase 3), else the generic FSM.
 
     if (n.archetype == ARCHETYPE_TRADER && n.mission_id >= 0) { ai_trader_tick(s, n, dt); return; }
+
+    if (n.archetype == ARCHETYPE_TRADER && ai_ambient_trader_tick(s, n, dt)) return;
+
+    // Mission-bound warships (Phase 4) fly their column's leg unless there is something to fight.
+
+    if (n.archetype == ARCHETYPE_WARSHIP && n.mission_id >= 0 && ai_mission_warship_tick(s, n, self, dt)) return;
 
 
 

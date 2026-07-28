@@ -1315,6 +1315,8 @@ struct ShipMission {
 
     b8   return_leg;           // TRUE while flying the return leg
 
+    b8   escorted;             // Phase 5: high-value contract carries a warship escort (abstract defense)
+
 
 
     i32  ship_slot;       // bound live NpcShip pool index while docked in the player's system (-1 = none)
@@ -1808,6 +1810,22 @@ struct NpcShip {
 
 
     i32           work_asteroid;     // index into StarSystem::asteroids[]; -1 = no target
+
+
+
+    // ---- Civilian cargo (Phase 3: miners produce, ambient traders micro-haul) -----------
+
+
+
+    i32           work_station;  // StarSystem::stations[] index currently targeted (-1 = none)
+
+
+
+    f32           cargo_units;   // units in the hold (miner ore run / ambient micro-haul)
+
+
+
+    u8            cargo_good;    // TradeGood being hauled (valid while cargo_units > 0)
 
 
 
@@ -2841,6 +2859,10 @@ struct game_state {
 
 
     i32           mission_capacity;     // allocated slots in missions[] (== MISSION_MAX)
+
+
+
+    f32           military_tick_hours;  // Phase 4: hours since the last military logistics survey
 
 
 

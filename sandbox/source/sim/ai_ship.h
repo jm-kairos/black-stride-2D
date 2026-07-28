@@ -36,9 +36,10 @@ enum AiState : u8 {
     AI_ATTACK,       // hold standoff and fire
     AI_EVADE,        // flee when badly hurt
     AI_RETURN,       // return to home when leashed too far
-    AI_TRADE_DOCK,   // trader bound to a contract: fly to the contract's station
-    AI_TRADE_DOCKED, // trader bound to a contract: halted at the station, loading/unloading
-    AI_TRAVEL_LEG    // mission traveler: fly the macro contract's current in-system leg
+    AI_TRADE_DOCK,   // trader flying to a station (contract dock stage / ambient micro-haul)
+    AI_TRADE_DOCKED, // trader halted at the station, loading/unloading
+    AI_TRAVEL_LEG,   // mission traveler: fly the macro contract's current in-system leg
+    AI_DELIVER       // miner: full hold, deliver ore to the nearest station
 };
 
 // Per-archetype tunables: the single knob that makes different ship types behave differently with

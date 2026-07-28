@@ -8,6 +8,8 @@
 
 #include "sim/station_market.h" // minimal economy: baseline markets + trader-dock deltas
 
+#include "sim/galaxy_history.h" // garrisons + war matrix (Phase 4 military logistics)
+
 #include <core/logger.h>       // BS_LOG_INFO
 
 #include <math.h>
@@ -67,6 +69,10 @@ static const f32 TRADE_DWELL_HOURS = 18.0f;
 // before issuing the next contract.
 
 static const f32 STATION_CONTRACT_COOLDOWN = 60.0f;
+
+// Phase 5: contracts worth at least this much (both legs) buy a warship escort.
+
+static const f32 ESCORT_REWARD_MIN = 1500.0f;
 
 
 
@@ -670,6 +676,18 @@ static b8 mission_issue_contract(game_state* s, ShipMission& m) {
 
 
 
+    // ---- Phase 5: high-value contracts buy a warship escort (abstract defense vs ambush). ----
+
+    m.escorted = (m.reward_credits + m.return_reward >= ESCORT_REWARD_MIN);
+
+    if (m.escorted)
+
+        BS_LOG_INFO("ShipAI escort: contract at N%d/%d (worth %.0f) assigned a warship escort",
+                    station_id_node(m.station_id), station_id_index(m.station_id),
+                    m.reward_credits + m.return_reward);
+
+
+
     // Origin station anchor (cached once; stations are static).
 
     if (!galaxy_station_pos_by_id(s, m.station_id, &m.station_pos, &m.station_radius)) {
@@ -775,6 +793,398 @@ static i32 mission_next_hop(game_state* s, ShipMission& m) {
     }
 
     return m.route[m.route_pos];
+
+}
+
+
+
+// ---- Phase 4+5: military logistics & raids (OBJ_REINFORCE + OBJ_PATROL + OBJ_RAID) ---------------
+
+// A throttled per-civ survey turns garrisons into REAL ship movements: surplus systems launch
+
+// reinforcement columns toward understrength/frontier systems (strength debited at launch,
+
+// credited on arrival -- a column destroyed en route is strength lost forever), and strong
+
+// systems field patrol circuits that wander the civ's territory. Both ride the ordinary mission
+
+// stage machine, so Phase 2 materialises them as live, killable warships near the player.
+
+static const f32 MILITARY_TICK_HOURS   = 6.0f;   // survey cadence (game hours)
+
+static const i32 MIL_REINFORCE_PER_CIV = 2;      // max simultaneous columns per civ
+
+static const i32 MIL_PATROL_PER_CIV    = 2;      // max simultaneous patrol circuits per civ
+
+static const i32 MIL_SURPLUS_MIN       = 10;     // a node needs this much garrison to give any away
+
+static const i32 MIL_WEAK_MAX          = 5;      // nodes at/below this strength want reinforcement
+
+static const i32 MIL_PATROL_HOPS       = 6;      // circuit length before a patrol retires
+
+// ---- Phase 5: raids & piracy --------------------------------------------------------------
+
+static const i32 MIL_RAID_PER_CIV  = 1;      // max simultaneous war raids per civ
+
+static const i32 PIRATE_RAIDS_MAX  = 6;      // galaxy-wide cap on active pirate sorties
+
+static const f32 RAID_INTERCEPT_BASE      = 0.65f;  // ambush odds vs a convoy at the target node
+
+static const f32 RAID_INTERCEPT_PATROLLED = 0.20f;  // ...when a patrol circuit holds that node
+
+
+
+// A free mission slot for a military order: prefer retired military slots (station_id < 0, never
+
+// re-issued by a station), else extend the high-water mark. -1 when the pool is exhausted.
+
+static i32 mission_alloc_military(GalaxyState& g) {
+
+    for (i32 i = 0; i < g.mission_count; ++i)
+
+        if (!g.missions[i].active && g.missions[i].station_id < 0) return i;
+
+    if (g.mission_count < g.mission_capacity) return g.mission_count++;
+
+    return -1;
+
+}
+
+
+
+// Common military mission body: route src -> dst and depart from src's jump circle.
+
+static b8 mission_issue_military(game_state* s, i32 mi, i16 civ, u8 objective, i32 src, i32 dst, f32 strength, u64& rng) {
+
+    GalaxyState& g = s->galaxy;
+
+    ShipMission& m = g.missions[mi];
+
+    m = ShipMission{};
+
+    m.owner       = civ;
+
+    m.archetype   = ARCHETYPE_WARSHIP;
+
+    m.objective   = objective;
+
+    m.home_node   = src;
+
+    m.at_node     = src;
+
+    m.station_id  = -1;                       // not station-owned: never re-issued on cooldown
+
+    m.dest_station_id = -1;
+
+    m.ship_slot   = -1;
+
+    m.cargo_units = strength;                 // strength payload (reinforce) / column size (patrol)
+
+    m.seed        = sm64(rng);
+
+    m.pos         = g.nodes[src].galaxy_center;
+
+    m.dwell_hours = (f32)MIL_PATROL_HOPS;     // patrol: remaining hops (unused by reinforce)
+
+    if (!mission_repath(s, m, src, dst)) return FALSE;
+
+    i32 next = mission_next_hop(s, m);
+
+    if (next < 0) return FALSE;
+
+    m.leg_target        = node_jump_point(g, src, next);
+
+    m.dest_station_pos  = g.nodes[dst].galaxy_center;   // final approach flies to the star
+
+    m.dest_station_radius = 0.0f;
+
+    m.stage  = MISSION_STAGE_TO_JUMP;
+
+    m.active = TRUE;
+
+    return TRUE;
+
+}
+
+
+
+// The survey: one pass over the map collects, per civ, its strongest surplus node and its
+
+// neediest (frontier-weighted) weak node, then issues orders within the per-civ budgets.
+
+static void ship_missions_military_tick(game_state* s) {
+
+    GalaxyState& g = s->galaxy;
+
+    if (!g.missions || !g.node_owner || g.civ_count <= 0) return;
+
+    static u64 mil_rng = 0;
+
+    if (mil_rng == 0) mil_rng = g.galaxy_seed ^ 0x5741525348495053ull;   // "WARSHIPS"
+
+
+
+    i32 civs = (g.civ_count < GALAXY_CIV_MAX) ? g.civ_count : GALAXY_CIV_MAX;
+
+    static i16 rein_n [GALAXY_CIV_MAX];  static i16 pat_n  [GALAXY_CIV_MAX];
+
+    static i32 src    [GALAXY_CIV_MAX];  static i32 src_gar[GALAXY_CIV_MAX];
+
+    static i32 dst    [GALAXY_CIV_MAX];  static i32 dst_sc [GALAXY_CIV_MAX];
+
+    static i16 raid_n   [GALAXY_CIV_MAX];  static i32 raid_seen[GALAXY_CIV_MAX];
+
+    static i32 raid_src [GALAXY_CIV_MAX];  static i32 raid_dst [GALAXY_CIV_MAX];
+
+    for (i32 c = 0; c < civs; ++c) {
+
+        rein_n[c] = pat_n[c] = raid_n[c] = 0;  src[c] = dst[c] = -1;  src_gar[c] = 0;  dst_sc[c] = 0;
+
+        raid_src[c] = raid_dst[c] = -1;  raid_seen[c] = 0;
+
+    }
+
+    i32 pirate_raids = 0;
+
+
+
+    // Budget usage: count live military missions per civ (and pirate sorties galaxy-wide).
+
+    for (i32 i = 0; i < g.mission_count; ++i) {
+
+        const ShipMission& m = g.missions[i];
+
+        if (!m.active) continue;
+
+        if (m.owner < 0) { if (m.objective == OBJ_RAID) ++pirate_raids; continue; }
+
+        if (m.owner >= civs) continue;
+
+        if (m.objective == OBJ_REINFORCE) ++rein_n[m.owner];
+
+        else if (m.objective == OBJ_PATROL) ++pat_n[m.owner];
+
+        else if (m.objective == OBJ_RAID) ++raid_n[m.owner];
+
+    }
+
+
+
+    // Map survey: strongest surplus + weakest (frontier-first) node per civ.
+
+    const GalaxyLaneGraph& lg = g.lanes;
+
+    for (i32 node = 0; node < g.node_count; ++node) {
+
+        i16 owner = g.node_owner[node];
+
+        if (owner < 0 || owner >= civs || g.civs[owner].status != 0) continue;
+
+        i32 gar = galaxy_history_garrison_at(s, node);
+
+        if (gar >= MIL_SURPLUS_MIN && gar > src_gar[owner]) { src[owner] = node; src_gar[owner] = gar; }
+
+        if (gar <= MIL_WEAK_MAX) {
+
+            b8 frontier = FALSE;
+
+            if (lg.adj_start && lg.adj_neighbor) {
+
+                for (i32 a = lg.adj_start[node]; a < lg.adj_start[node + 1] && !frontier; ++a) {
+
+                    i16 no = g.node_owner[lg.adj_neighbor[a]];
+
+                    if (no != owner && (no < 0 || galaxy_history_civ_at_war(s, owner, no))) frontier = TRUE;
+
+                }
+
+            }
+
+            i32 score = (frontier ? 100 : 0) + (MIL_WEAK_MAX - gar) + 1;
+
+            if (score > dst_sc[owner]) { dst_sc[owner] = score; dst[owner] = node; }
+
+        }
+
+        // Phase 5: raid staging -- an owned node (with troops to spare) bordering an enemy at war.
+
+        if (gar >= 4 && lg.adj_start && lg.adj_neighbor) {
+
+            for (i32 a = lg.adj_start[node]; a < lg.adj_start[node + 1]; ++a) {
+
+                i32 nb = lg.adj_neighbor[a];
+
+                i16 no = g.node_owner[nb];
+
+                if (no < 0 || no == owner || no >= civs) continue;
+
+                if (!galaxy_history_civ_at_war(s, owner, no)) continue;
+
+                ++raid_seen[owner];
+
+                if ((sm64(mil_rng) % (u64)raid_seen[owner]) == 0) { raid_src[owner] = node; raid_dst[owner] = nb; }
+
+            }
+
+        }
+
+    }
+
+
+
+    // Issue orders within budget.
+
+    for (i32 c = 0; c < civs; ++c) {
+
+        if (g.civs[c].status != 0) continue;
+
+        if (src[c] >= 0 && rein_n[c] < MIL_REINFORCE_PER_CIV && dst[c] >= 0 && dst[c] != src[c]) {
+
+            i32 strength = src_gar[c] / 3;
+
+            if (strength < 2) strength = 2;
+
+            if (strength > 8) strength = 8;
+
+            i32 mi = mission_alloc_military(g);
+
+            if (mi >= 0 && mission_issue_military(s, mi, (i16)c, OBJ_REINFORCE, src[c], dst[c], (f32)strength, mil_rng)) {
+
+                galaxy_history_garrison_add(s, src[c], -strength);
+
+                BS_LOG_INFO("ShipAI military: civ %d launches reinforcement column N%d -> N%d (strength %d)",
+
+                            c, src[c], dst[c], strength);
+
+            } else if (mi >= 0) g.missions[mi].active = FALSE;
+
+        }
+
+        if (src[c] >= 0 && pat_n[c] < MIL_PATROL_PER_CIV && lg.adj_start && lg.adj_neighbor) {
+
+            // Patrol: wander to a random owned neighbour of the strong node.
+
+            i32 a0 = lg.adj_start[src[c]], a1 = lg.adj_start[src[c] + 1];
+
+            i32 pick = -1, seen = 0;
+
+            for (i32 a = a0; a < a1; ++a) {
+
+                i32 nb = lg.adj_neighbor[a];
+
+                if (g.node_owner[nb] != (i16)c) continue;
+
+                ++seen;
+
+                if ((sm64(mil_rng) % (u64)seen) == 0) pick = nb;
+
+            }
+
+            if (pick >= 0) {
+
+                i32 mi = mission_alloc_military(g);
+
+                if (mi >= 0 && mission_issue_military(s, mi, (i16)c, OBJ_PATROL, src[c], pick, 2.0f, mil_rng)) {
+
+                    BS_LOG_INFO("ShipAI military: civ %d fields a patrol circuit from N%d (%d hops)",
+
+                                c, src[c], MIL_PATROL_HOPS);
+
+                } else if (mi >= 0) g.missions[mi].active = FALSE;
+
+            }
+
+        }
+
+        // Phase 5: war raid -- strike an enemy border node; troops committed are debited at launch.
+
+        if (raid_n[c] < MIL_RAID_PER_CIV && raid_src[c] >= 0) {
+
+            i32 sgar = galaxy_history_garrison_at(s, raid_src[c]);
+
+            i32 strength = sgar / 3;
+
+            if (strength < 2) strength = 2;
+
+            if (strength > 6) strength = 6;
+
+            if (sgar > strength) {                    // never strip the staging node bare
+
+                i32 mi = mission_alloc_military(g);
+
+                if (mi >= 0 && mission_issue_military(s, mi, (i16)c, OBJ_RAID, raid_src[c], raid_dst[c], (f32)strength, mil_rng)) {
+
+                    galaxy_history_garrison_add(s, raid_src[c], -strength);
+
+                    BS_LOG_INFO("ShipAI raid: civ %d launches raid N%d -> enemy N%d (strength %d)",
+
+                                c, raid_src[c], raid_dst[c], strength);
+
+                } else if (mi >= 0) g.missions[mi].active = FALSE;
+
+            }
+
+        }
+
+    }
+
+
+
+    // ---- Phase 5: pirate sorties -- wild nodes with pirate presence strike busy trade hubs. ----
+
+    if (pirate_raids < PIRATE_RAIDS_MAX) {
+
+        // Reservoir-pick a pirate-infested wild node (same deterministic seed as materialize_wild_system).
+
+        i32 wild = -1, wseen = 0;
+
+        for (i32 node = 0; node < g.node_count; ++node) {
+
+            if (g.node_owner[node] >= 0) continue;
+
+            u64 st = (u64)(node + 1) * 0x9E3779B97F4A7C15ull ^ 0xBADC0FFEEull;
+
+            if ((sm64(st) % 6ull) == 0) continue;    // this wild node spawns no pirates
+
+            ++wseen;
+
+            if ((sm64(mil_rng) % (u64)wseen) == 0) wild = node;
+
+        }
+
+        // Reservoir-pick a busy trade destination: the delivery node of a random live contract.
+
+        i32 target = -1, tseen = 0;
+
+        for (i32 i = 0; i < g.mission_count; ++i) {
+
+            const ShipMission& t = g.missions[i];
+
+            if (!t.active || t.objective != OBJ_TRADE || t.dest_station_id < 0) continue;
+
+            ++tseen;
+
+            if ((sm64(mil_rng) % (u64)tseen) == 0) target = station_id_node(t.dest_station_id);
+
+        }
+
+        if (wild >= 0 && target >= 0 && wild != target) {
+
+            i32 strength = 2 + (i32)(sm64(mil_rng) % 3ull);
+
+            i32 mi = mission_alloc_military(g);
+
+            if (mi >= 0 && mission_issue_military(s, mi, FACTION_PIRATE, OBJ_RAID, wild, target, (f32)strength, mil_rng)) {
+
+                BS_LOG_INFO("ShipAI piracy: raiders sortie from wild N%d toward trade hub N%d (strength %d)",
+
+                            wild, target, strength);
+
+            } else if (mi >= 0) g.missions[mi].active = FALSE;
+
+        }
+
+    }
 
 }
 
@@ -1093,6 +1503,174 @@ static void mission_travel_step(game_state* s, ShipMission& m, f32 hours, i32 no
 
             if (!mission_leg_complete(m, spd_sys, hours)) return;
 
+            // ---- Phase 4: military arrivals resolve here (no dock stages) --------------
+
+            if (m.objective == OBJ_REINFORCE) {
+
+                galaxy_history_garrison_add(s, m.at_node, (i32)m.cargo_units);
+
+                BS_LOG_INFO("ShipAI military: reinforcement column arrived N%d (+%d strength, civ %d)",
+
+                            m.at_node, (i32)m.cargo_units, (i32)m.owner);
+
+                m.active = FALSE; m.stage = MISSION_STAGE_COOLDOWN;
+
+                m.ship_slot = -1; m.local_ready = FALSE;
+
+                return;
+
+            }
+
+            if (m.objective == OBJ_PATROL) {
+
+                m.dwell_hours -= 1.0f;               // one circuit hop done (hops ride dwell_hours)
+
+                const GalaxyLaneGraph& lg = g.lanes;
+
+                i32 pick = -1, seen = 0;
+
+                if (m.dwell_hours > 0.0f && lg.adj_start && lg.adj_neighbor && g.node_owner) {
+
+                    for (i32 a = lg.adj_start[m.at_node]; a < lg.adj_start[m.at_node + 1]; ++a) {
+
+                        i32 nb = lg.adj_neighbor[a];
+
+                        if (g.node_owner[nb] != m.owner) continue;
+
+                        ++seen;
+
+                        if ((sm64(m.seed) % (u64)seen) == 0) pick = nb;
+
+                    }
+
+                }
+
+                if (pick < 0 || !mission_repath(s, m, m.at_node, pick)) {
+
+                    BS_LOG_INFO("ShipAI military: patrol circuit completed at N%d (civ %d)", m.at_node, (i32)m.owner);
+
+                    m.active = FALSE; m.stage = MISSION_STAGE_COOLDOWN;
+
+                    m.ship_slot = -1; m.local_ready = FALSE;
+
+                    return;
+
+                }
+
+                i32 next = mission_next_hop(s, m);
+
+                if (next < 0) return;
+
+                m.leg_target       = node_jump_point(g, m.at_node, next);
+
+                m.dest_station_pos = g.nodes[pick].galaxy_center;
+
+                m.stage            = MISSION_STAGE_TO_JUMP;   // any bound live agent just keeps flying
+
+                break;
+
+            }
+
+            // ---- Phase 5: raids resolve here (abstract but consequential) ---------------
+
+            if (m.objective == OBJ_RAID) {
+
+                if (m.owner >= 0) {
+
+                    // Civ war strike: committed strength vs the defending garrison.
+
+                    i32 atk = (i32)m.cargo_units;
+
+                    i32 gar = galaxy_history_garrison_at(s, m.at_node);
+
+                    i32 dmg = atk / 2 + (i32)(sm64(m.seed) % (u64)(atk + 1));
+
+                    if (dmg > gar) dmg = gar;
+
+                    if (dmg > 0) galaxy_history_garrison_add(s, m.at_node, -dmg);
+
+                    BS_LOG_INFO("ShipAI raid: civ %d raid struck N%d (garrison %d -> %d, %s)",
+
+                                (i32)m.owner, m.at_node, gar, gar - dmg,
+
+                                (gar - dmg < atk) ? "raiders withdraw victorious" : "raiders repelled");
+
+                } else {
+
+                    // Pirate ambush at a trade hub: try to intercept a co-located contract.
+
+                    b8 patrolled = FALSE;
+
+                    for (i32 i = 0; i < g.mission_count && !patrolled; ++i) {
+
+                        const ShipMission& p = g.missions[i];
+
+                        if (p.active && p.objective == OBJ_PATROL && p.at_node == m.at_node) patrolled = TRUE;
+
+                    }
+
+                    // Reservoir-pick an abstract (non-materialized) trade contract at this node.
+
+                    i32 victim = -1, seen = 0;
+
+                    for (i32 i = 0; i < g.mission_count; ++i) {
+
+                        const ShipMission& t = g.missions[i];
+
+                        if (!t.active || t.objective != OBJ_TRADE || t.at_node != m.at_node || t.ship_slot >= 0) continue;
+
+                        ++seen;
+
+                        if ((sm64(m.seed) % (u64)seen) == 0) victim = i;
+
+                    }
+
+                    f32 odds = patrolled ? RAID_INTERCEPT_PATROLLED : RAID_INTERCEPT_BASE;
+
+                    if (victim >= 0 && (f32)(sm64(m.seed) % 1000ull) < odds * 1000.0f) {
+
+                        ShipMission& t = g.missions[victim];
+
+                        if (t.escorted) {
+
+                            BS_LOG_INFO("ShipAI piracy: convoy escort drove off raiders at N%d (contract %d protected)",
+
+                                        m.at_node, victim);
+
+                        } else {
+
+                            t.active = FALSE; t.stage = MISSION_STAGE_COOLDOWN;
+
+                            t.respawn_hours = STATION_CONTRACT_COOLDOWN;
+
+                            t.ship_slot = -1; t.local_ready = FALSE;
+
+                            BS_LOG_INFO("ShipAI piracy: raiders ambushed contract %d at N%d (%.0f units of %s lost)%s",
+
+                                        victim, m.at_node, t.cargo_units, TRADE_GOOD_NAMES[t.cargo_good],
+
+                                        patrolled ? " despite patrol presence" : "");
+
+                        }
+
+                    } else {
+
+                        BS_LOG_INFO("ShipAI piracy: raid at N%d found no prey%s",
+
+                                    m.at_node, patrolled ? " (patrol presence)" : "");
+
+                    }
+
+                }
+
+                m.active = FALSE; m.stage = MISSION_STAGE_COOLDOWN;
+
+                m.ship_slot = -1; m.local_ready = FALSE;
+
+                return;
+
+            }
+
             m.stage       = m.return_leg ? MISSION_STAGE_ORIGIN_DOCK : MISSION_STAGE_MARKET_DOCK;
 
             m.dwell_hours = TRADE_DWELL_HOURS;
@@ -1202,6 +1780,18 @@ void ship_missions_update(game_state* s, f32 sim_dt_hours) {
 
     if (!g.missions) return;
 
+    // Phase 4: throttled military logistics survey (reinforcement columns + patrol circuits).
+
+    g.military_tick_hours += sim_dt_hours;
+
+    if (g.military_tick_hours >= MILITARY_TICK_HOURS) {
+
+        g.military_tick_hours = 0.0f;
+
+        ship_missions_military_tick(s);
+
+    }
+
     // The galaxy node the player currently occupies (current_system is a cache SLOT, not a node).
 
     i32 node_here = (g.current_system >= 0 && g.current_system < g.system_count)
@@ -1267,6 +1857,28 @@ void ship_mission_notify_destroyed(game_state* s, i32 mission_id) {
     ShipMission& m = g.missions[mission_id];
 
     if (!m.active) return;
+
+    // Phase 4: a destroyed military column is strength lost forever (reinforce strength was
+
+    // debited at launch and is never credited). The slot is reusable by the next survey.
+
+    if (m.objective == OBJ_REINFORCE || m.objective == OBJ_PATROL || m.objective == OBJ_RAID) {
+
+        BS_LOG_INFO("ShipAI military: %s destroyed en route (owner %d, strength %.0f lost)",
+
+                    (m.objective == OBJ_REINFORCE) ? "reinforcement column"
+
+                    : (m.objective == OBJ_PATROL)  ? "patrol" : "raid party",
+
+                    (i32)m.owner, m.cargo_units);
+
+        m.active = FALSE; m.stage = MISSION_STAGE_COOLDOWN;
+
+        m.ship_slot = -1; m.local_ready = FALSE;
+
+        return;
+
+    }
 
     // Contract failed: the origin station re-issues after the standard cooldown.
 
