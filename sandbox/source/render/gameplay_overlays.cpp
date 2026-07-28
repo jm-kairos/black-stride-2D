@@ -70,22 +70,31 @@ static void draw_enemy_marker(game_state* s) {
 // at any zoom: patrols/combat = triangle (points along heading), miners = square, traders = circle.
 // Hostile agents get an extra outer ring.
 
-// Unidentified-marker zoom fade band: fully opaque at/above FULL, gone at/below GONE, eased in
-// LOG space (zoom is multiplicative). This is intentionally much wider than the arena<->map blend
-// band so the markers are already visible while overviewing the system and dissolve gradually as
-// the view pulls back toward the galaxy map.
-static const f32 UNID_MARKER_ZOOM_FULL = 0.12f;
-static const f32 UNID_MARKER_ZOOM_GONE = 0.015f;
-static f32 unid_marker_fade(f32 zoom) {
-    if (zoom >= UNID_MARKER_ZOOM_FULL) return 1.0f;
-    if (zoom <= UNID_MARKER_ZOOM_GONE) return 0.0f;
-    f32 t = (logf(zoom) - logf(UNID_MARKER_ZOOM_GONE))
-          / (logf(UNID_MARKER_ZOOM_FULL) - logf(UNID_MARKER_ZOOM_GONE));
+// Unidentified-marker fade: driven by how large the player's CURRENT system is on screen
+// (outermost orbit * fringe, in px -- same measure the system-detail passes gate on), NOT by an
+// absolute zoom threshold, because system sizes vary and zoom spans many decades. Markers are
+// fully opaque once the system spans FULL_PX and dissolve by GONE_PX as the view pulls back
+// toward the galaxy map.
+static const f32 UNID_MARKER_FULL_PX = 600.0f;
+static const f32 UNID_MARKER_GONE_PX = 120.0f;
+static f32 unid_marker_fade(const game_state* s, f32 zoom) {
+    const auto& g = s->galaxy;
+    if (g.current_system < 0 || g.current_system >= g.system_count) return 0.0f;
+    const StarSystem& ss = g.systems[g.current_system];
+    f32 outer = 0.0f;
+    i32 pc = ss.planet_count < MAX_SYSTEM_PLANETS ? ss.planet_count : MAX_SYSTEM_PLANETS;
+    for (i32 i = 0; i < pc; ++i)
+        if (ss.planets[i].semi_major_axis > outer) outer = ss.planets[i].semi_major_axis;
+    if (outer <= 0.0f) outer = 250000.0f;             // planetless system: rough extent fallback
+    f32 belt_px = outer * 1.4f * zoom;
+    f32 t = (belt_px - UNID_MARKER_GONE_PX) / (UNID_MARKER_FULL_PX - UNID_MARKER_GONE_PX);
+    if (t < 0.0f) t = 0.0f;
+    if (t > 1.0f) t = 1.0f;
     return t * t * (3.0f - 2.0f * t); // smoothstep
 }
 
 static void draw_npc_ship_markers(game_state* s) {
-    f32 zoom = (s->camera_state.camera.zoom > 0.0001f) ? s->camera_state.camera.zoom : 1.0f;
+    f32 zoom = (s->camera_state.camera.zoom > 1e-12f) ? s->camera_state.camera.zoom : 1.0f;
     f32 zoom_inv = 1.0f / zoom;
     for (i32 i = 0; i < NPC_SHIP_MAX; ++i) {
         NpcShip& n = s->npc_ships[i];
@@ -94,7 +103,7 @@ static void draw_npc_ship_markers(game_state* s) {
         if (!n.discovered) {
             // Visible across the whole system-view zoom range, fading out gradually as the view
             // pulls back toward the galaxy map (see unid_marker_fade above).
-            f32 fade = unid_marker_fade(zoom);
+            f32 fade = unid_marker_fade(s, s->camera_state.camera.zoom);
             if (fade > 0.003f)
                 draw_unidentified_marker(center, zoom_inv, fade, LAYER_UI);
             continue;
