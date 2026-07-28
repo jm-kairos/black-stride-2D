@@ -21,13 +21,16 @@ using namespace bs_math;
 
 // ---- Generic "unidentified object" marker -------------------------------------------------
 // Used by the discovery system for ships/stations the player has not yet scanned at close range.
-static void draw_unidentified_marker(Vec2 center, f32 zoom_inv, u32 layer) {
-    f32 r = 14.0f * zoom_inv;
-    f32 h = r * 0.55f;
-    const bs_color COL = bs_color{ 0.85f, 0.85f, 0.85f, 0.75f };
-    renderer_draw_circle(center, r, 20, 1.5f, COL, layer);
-    renderer_draw_line(Vec2{ center.x - h, center.y - h }, Vec2{ center.x + h, center.y + h }, 1.5f, COL, layer);
-    renderer_draw_line(Vec2{ center.x + h, center.y - h }, Vec2{ center.x - h, center.y + h }, 1.5f, COL, layer);
+// Stroke width is screen-constant (world thickness scaled by zoom_inv) so the marker stays
+// legible when zoomed far out instead of collapsing subpixel; `alpha` drives the zoom-out fade.
+static void draw_unidentified_marker(Vec2 center, f32 zoom_inv, f32 alpha, u32 layer) {
+    f32 r  = 14.0f * zoom_inv;
+    f32 h  = r * 0.55f;
+    f32 th = 1.5f * zoom_inv;
+    const bs_color COL = bs_color{ 0.85f, 0.85f, 0.85f, 0.75f * alpha };
+    renderer_draw_circle(center, r, 20, th, COL, layer);
+    renderer_draw_line(Vec2{ center.x - h, center.y - h }, Vec2{ center.x + h, center.y + h }, th, COL, layer);
+    renderer_draw_line(Vec2{ center.x + h, center.y - h }, Vec2{ center.x - h, center.y + h }, th, COL, layer);
 }
 
 // ---- Static enemy reticle -----------------------------------------------------------------
@@ -74,7 +77,12 @@ static void draw_npc_ship_markers(game_state* s) {
         if (!n.active) continue;
         Vec2 center = render_from_hierpos(s, &n.ship.origin);
         if (!n.discovered) {
-            draw_unidentified_marker(center, zoom_inv, LAYER_UI);
+            // Visible across the whole in-system zoom range; fades out with the arena look as
+            // the view crosses into the galaxy map (view_arena_w: 1 = arena, 0 = map).
+            f32 fade = s->view_arena_w;
+            fade = fade * fade * (3.0f - 2.0f * fade);   // smoothstep for a gentle roll-off
+            if (fade > 0.003f)
+                draw_unidentified_marker(center, zoom_inv, fade, LAYER_UI);
             continue;
         }
         bs_color base = (n.faction >= 0 && n.faction < s->galaxy.civ_count)
