@@ -182,7 +182,13 @@ bs__api__ void renderer_get_frame_timing(f32* out_render_ms, f32* out_present_ms
 
 // Runtime swapchain present mode. FALSE = VSYNC (default, capped to refresh), TRUE = IMMEDIATE
 // (uncapped) for GPU-cost profiling. When IMMEDIATE is active the application loop skips its
-// software frame cap so present_ms reflects GPU submit+execute time. Falls back to VSYNC if the
-// driver does not support IMMEDIATE.
-bs__api__ void renderer_set_present_mode(b8 immediate);
+// software frame cap so present_ms reflects GPU submit+execute time. Returns TRUE if the mode
+// was actually applied; FALSE (swapchain unchanged, still VSYNC) if the driver does not support
+// IMMEDIATE or the reconfigure failed — callers must not assume the toggle succeeded.
+bs__api__ b8   renderer_set_present_mode(b8 immediate);
 bs__api__ b8   renderer_is_present_immediate();
+
+// Breakdown of the previous frame's present cost (ms): acquire_ms is the blocking wait for a
+// free swapchain image inside end_frame (VSYNC pacing / swapchain starvation lands here);
+// submit_ms is the command-buffer submit. acquire_ms + submit_ms ≈ present_ms minus record time.
+bs__api__ void renderer_get_present_breakdown(f32* out_acquire_ms, f32* out_submit_ms);

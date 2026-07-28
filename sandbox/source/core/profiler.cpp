@@ -31,6 +31,8 @@ void Profiler::init()
     present_immediate = FALSE;
     wall_ms  = 0.0;
     present_ms = 0.0;
+    acquire_ms = 0.0;
+    submit_ms  = 0.0;
 
     zones[PROF_UPDATE_TOTAL].name  = "Update total";     zones[PROF_UPDATE_TOTAL].group  = G_FRAME;
     zones[PROF_RENDER_TOTAL].name  = "Render total";     zones[PROF_RENDER_TOTAL].group  = G_FRAME;
@@ -77,6 +79,13 @@ void Profiler::set_present_ms(f32 ms)
     present_ms = (present_ms <= 0.0) ? v : (present_ms * 0.9 + v * 0.1);
 }
 
+void Profiler::set_present_breakdown(f32 acq_ms, f32 sub_ms)
+{
+    f64 a = (f64)acq_ms, s = (f64)sub_ms;
+    if (a >= 0.0 && a <= 1000.0) acquire_ms = (acquire_ms <= 0.0) ? a : (acquire_ms * 0.9 + a * 0.1);
+    if (s >= 0.0 && s <= 1000.0) submit_ms  = (submit_ms  <= 0.0) ? s : (submit_ms  * 0.9 + s * 0.1);
+}
+
 void Profiler::begin(ProfileZoneId id)
 {
     if (!enabled) return;
@@ -110,10 +119,17 @@ void Profiler::build_ui()
     snprintf(buf, sizeof(buf), "Prsnt: %.2f ms", present_ms);
     bs_ui_text_colored(0.90f, 0.75f, 0.45f, 1.0f, buf);
 
+    // Breakdown: acquire = blocking wait for a free swapchain image (VSYNC pacing / swapchain
+    // starvation lands here, NOT in GPU work); submit = command-buffer submission.
+    snprintf(buf, sizeof(buf), " Acqr: %.2f ms  Sbmt: %.2f ms", acquire_ms, submit_ms);
+    bs_ui_text_colored(0.75f, 0.62f, 0.40f, 1.0f, buf);
+
     // Toggle VSYNC <-> IMMEDIATE. IMMEDIATE uncaps the loop so Prsnt reflects true GPU time.
+    // Only mirror the state when the swapchain reconfigure actually succeeded — the driver may
+    // not support IMMEDIATE, in which case the mode (and the frame cap) must stay VSYNC.
     if (bs_ui_button(present_immediate ? "GPU mode: IMMEDIATE" : "GPU mode: VSYNC", TRUE)) {
-        present_immediate = !present_immediate;
-        renderer_set_present_mode(present_immediate);
+        b8 want = present_immediate ? FALSE : TRUE;
+        if (renderer_set_present_mode(want)) present_immediate = want;
     }
 
     if (bs_ui_button(expanded ? "Collapse" : "Expand", TRUE)) expanded = !expanded;

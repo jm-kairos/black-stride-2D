@@ -109,8 +109,16 @@ typedef struct renderer_backend
     void (*get_frame_stats)(struct renderer_backend* backend, bs_frame_stats* out_stats);
 
     // Set the swapchain present mode at runtime (FALSE = VSYNC, TRUE = IMMEDIATE). Used for
-    // GPU-cost profiling; falls back to VSYNC if IMMEDIATE is unsupported.
-    void (*set_present_mode)(struct renderer_backend* backend, b8 immediate);
+    // GPU-cost profiling. Returns FALSE (and leaves the swapchain on VSYNC) when the driver
+    // does not support IMMEDIATE or the swapchain reconfigure fails.
+    b8 (*set_present_mode)(struct renderer_backend* backend, b8 immediate);
+
+    // Breakdown of the previous end_frame's present cost (milliseconds):
+    //   acquire_ms = blocking wait inside SDL_WaitAndAcquireGPUSwapchainTexture (VSYNC /
+    //                swapchain-image starvation shows up HERE, not as GPU work)
+    //   submit_ms  = SDL_SubmitGPUCommandBuffer
+    // May be NULL on a backend that does not track it; the frontend checks before calling.
+    void (*get_present_timing)(struct renderer_backend* backend, f32* out_acquire_ms, f32* out_submit_ms);
 } renderer_backend;
 
 // Factory: wire up the function pointers for the requested backend type.

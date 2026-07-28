@@ -43,6 +43,7 @@ b8 renderer_backend_create(ERendererBackend type, renderer_backend* out_backend)
             out_backend->set_aux_bloom_mode = sdlgpu_backend_set_aux_bloom_mode;
             out_backend->get_frame_stats = sdlgpu_backend_get_frame_stats;
             out_backend->set_present_mode = sdlgpu_backend_set_present_mode;
+            out_backend->get_present_timing = sdlgpu_backend_get_present_timing;
             return TRUE;
         default:
             BS_LOG_FATAL("renderer_backend_create: unknown backend type %d", (int)type);
@@ -82,5 +83,6 @@ void renderer_backend_destroy(renderer_backend* backend)
     backend->set_aux_bloom_mode = 0;
     backend->get_frame_stats = 0;
     backend->set_present_mode = 0;
+    backend->get_present_timing = 0;
     backend->internal_state = 0;
 }

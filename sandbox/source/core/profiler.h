@@ -60,11 +60,14 @@ struct Profiler {
     b8 present_immediate; // UI mirror: TRUE when swapchain forced to IMMEDIATE (uncapped)
     f64 wall_ms;        // real wall-clock frame time (incl. VSYNC/cap wait), rolling avg
     f64 present_ms;     // engine end_frame time (submit + present + VSYNC wait), rolling avg
+    f64 acquire_ms;     // swapchain-image acquire block inside end_frame (VSYNC wait), rolling avg
+    f64 submit_ms;      // command-buffer submit inside end_frame, rolling avg
 
     void init();
     void begin_frame();          // finalize previous frame + reset accumulators
     void set_wall_dt(f32 dt);    // feed the engine's real frame delta (seconds)
     void set_present_ms(f32 ms); // feed the engine's end_frame/present time (ms)
+    void set_present_breakdown(f32 acq_ms, f32 sub_ms); // feed the acquire/submit split (ms)
     void begin(ProfileZoneId id);
     void end(ProfileZoneId id);
     void build_ui();             // emit panel body (call between bs_ui_begin/end_panel)

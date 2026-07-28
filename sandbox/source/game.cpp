@@ -1572,6 +1572,9 @@ b8 game_update(Game* game_inst, f32 dt) {
         f32 eng_render_ms = 0.0f, eng_present_ms = 0.0f;
         renderer_get_frame_timing(&eng_render_ms, &eng_present_ms);
         s->profiler.set_present_ms(eng_present_ms);
+        f32 acq_ms = 0.0f, sub_ms = 0.0f;
+        renderer_get_present_breakdown(&acq_ms, &sub_ms);
+        s->profiler.set_present_breakdown(acq_ms, sub_ms);
     }
 
     BS_PROFILE(&s->profiler, PROF_UPDATE_TOTAL);
@@ -1851,11 +1854,12 @@ b8 game_update(Game* game_inst, f32 dt) {
 
         b8 imm = renderer_is_present_immediate() ? FALSE : TRUE;
 
-        renderer_set_present_mode(imm);
-
-        s->profiler.present_immediate = imm;
-
-        action_log_push(s, imm ? "[F9] Present: IMMEDIATE (uncapped)" : "[F9] Present: VSYNC");
+        if (renderer_set_present_mode(imm)) {
+            s->profiler.present_immediate = imm;
+            action_log_push(s, imm ? "[F9] Present: IMMEDIATE (uncapped)" : "[F9] Present: VSYNC");
+        } else {
+            action_log_push(s, "[F9] Present mode change REFUSED by driver (still VSYNC)");
+        }
 
     }
 

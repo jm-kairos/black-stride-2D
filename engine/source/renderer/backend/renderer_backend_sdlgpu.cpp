@@ -58,6 +58,7 @@
 #include <SDL3/SDL_keyboard.h>   // SDL_GetModState
 #include <SDL3/SDL_mouse.h>      // SDL_BUTTON_LEFT/MIDDLE/RIGHT
 #include <SDL3/SDL_filesystem.h> // SDL_GlobDirectory (font enumeration)
+#include <SDL3/SDL_timer.h>      // SDL_GetPerformanceCounter/Frequency (present timing)
 
 #include <stdlib.h> // qsort
 
@@ -229,6 +230,12 @@ typedef struct sdlgpu_state
 
     // Phase 4: stats snapshotted at the end of end_frame for the previous completed frame.
     bs_frame_stats last_stats;
+
+    // Present-cost breakdown of the previous end_frame (ms). acquire = the blocking wait in
+    // SDL_WaitAndAcquireGPUSwapchainTexture (VSYNC / swapchain starvation lands here);
+    // submit = SDL_SubmitGPUCommandBuffer.
+    f32 last_acquire_ms;
+    f32 last_submit_ms;
 
     // Dear ImGui: TRUE between bs_imgui_initialize and bs_imgui_shutdown. Gates every ImGui
     // call in the frame lifecycle so the engine runs cleanly if ImGui ever fails to init.
@@ -1361,6 +1368,28 @@ b8 sdlgpu_backend_initialize(struct renderer_backend* backend, const char* app_n
     BS_LOG_INFO("SDL GPU device created (driver: %s, shader formats: 0x%x).",
         SDL_GetGPUDeviceDriver(g_sdl.device), (u32)SDL_GetGPUShaderFormats(g_sdl.device));
 
+    // Log the ACTUAL display refresh rate the swapchain will pace against. A 30 Hz mode
+    // (4K TV over HDMI 1.4, misconfigured display) silently caps a VSYNC swapchain to 30 fps
+    // and is invisible to GPU-side profiling — surface it here.
+    {
+        SDL_DisplayID disp = SDL_GetDisplayForWindow(g_sdl.window);
+        const SDL_DisplayMode* dm = disp ? SDL_GetCurrentDisplayMode(disp) : NULL;
+        if (dm)
+        {
+            BS_LOG_INFO("Display %u: %dx%d @ %.2f Hz (VSYNC present paces to this).",
+                        (u32)disp, dm->w, dm->h, dm->refresh_rate);
+            if (dm->refresh_rate > 0.0f && dm->refresh_rate < 50.0f)
+            {
+                BS_LOG_WARN("Display refresh is below 50 Hz — a VSYNC swapchain cannot exceed "
+                            "%.0f fps on this display.", dm->refresh_rate);
+            }
+        }
+        else
+        {
+            BS_LOG_WARN("Could not query current display mode: %s", SDL_GetError());
+        }
+    }
+
     // Load sprite shaders: vertex has 1 uniform buffer (view_proj); fragment has 1 sampler
     // (sprite texture) and 1 uniform buffer (lights at b0 space3).
     SDL_GPUShader* vs = load_shader(g_sdl.device, "sprite", "vert", SDL_GPU_SHADERSTAGE_VERTEX, 0, 1);
@@ -1949,10 +1978,10 @@ void sdlgpu_backend_get_frame_stats(struct renderer_backend* backend, bs_frame_s
     *out_stats = g_sdl.last_stats;
 }
 
-void sdlgpu_backend_set_present_mode(struct renderer_backend* backend, b8 immediate)
+b8 sdlgpu_backend_set_present_mode(struct renderer_backend* backend, b8 immediate)
 {
     (void)backend;
-    if (!g_sdl.device || !g_sdl.window) return;
+    if (!g_sdl.device || !g_sdl.window) return FALSE;
 
     SDL_GPUPresentMode mode = immediate ? SDL_GPU_PRESENTMODE_IMMEDIATE : SDL_GPU_PRESENTMODE_VSYNC;
 
@@ -1961,17 +1990,25 @@ void sdlgpu_backend_set_present_mode(struct renderer_backend* backend, b8 immedi
         !SDL_WindowSupportsGPUPresentMode(g_sdl.device, g_sdl.window, SDL_GPU_PRESENTMODE_IMMEDIATE))
     {
         BS_LOG_WARN("IMMEDIATE present mode unsupported by this driver; staying on VSYNC.");
-        return;
+        return FALSE;
     }
 
     if (!SDL_SetGPUSwapchainParameters(g_sdl.device, g_sdl.window,
                                        SDL_GPU_SWAPCHAINCOMPOSITION_SDR, mode))
     {
         BS_LOG_WARN("SDL_SetGPUSwapchainParameters failed: %s", SDL_GetError());
-        return;
+        return FALSE;
     }
 
     BS_LOG_INFO("Present mode set to %s.", immediate ? "IMMEDIATE" : "VSYNC");
+    return TRUE;
+}
+
+void sdlgpu_backend_get_present_timing(struct renderer_backend* backend, f32* out_acquire_ms, f32* out_submit_ms)
+{
+    (void)backend;
+    if (out_acquire_ms) *out_acquire_ms = g_sdl.last_acquire_ms;
+    if (out_submit_ms)  *out_submit_ms  = g_sdl.last_submit_ms;
 }
 
 // =====================================================================================
@@ -2218,6 +2255,9 @@ b8 sdlgpu_backend_end_frame(struct renderer_backend* backend, f32 dt)
     }
 
     // ---- 4: acquire the swapchain image (may be NULL when minimized -> skip drawing) ----
+    // Timed separately: under VSYNC this call BLOCKS until the driver frees a swapchain image,
+    // so vblank pacing / swapchain starvation shows up here as pure CPU wait, not GPU work.
+    u64 acq_t0 = SDL_GetPerformanceCounter();
     if (!SDL_WaitAndAcquireGPUSwapchainTexture(
             g_sdl.cmd, g_sdl.window, &g_sdl.swapchain_texture, &g_sdl.swap_width, &g_sdl.swap_height))
     {
@@ -2226,6 +2266,8 @@ b8 sdlgpu_backend_end_frame(struct renderer_backend* backend, f32 dt)
         g_sdl.cmd = NULL;
         return FALSE;
     }
+    g_sdl.last_acquire_ms =
+        (f32)((f64)(SDL_GetPerformanceCounter() - acq_t0) * 1000.0 / (f64)SDL_GetPerformanceFrequency());
 
     if (!g_sdl.swapchain_texture)
     {
@@ -2997,7 +3039,10 @@ b8 sdlgpu_backend_end_frame(struct renderer_backend* backend, f32 dt)
     g_sdl.last_stats.sprite_count = g_sdl.batch_count + aux_count + g_sdl.mapped_batch_count;
     g_sdl.last_stats.draw_calls   = draw_calls;
 
+    u64 sub_t0 = SDL_GetPerformanceCounter();
     SDL_SubmitGPUCommandBuffer(g_sdl.cmd);
+    g_sdl.last_submit_ms =
+        (f32)((f64)(SDL_GetPerformanceCounter() - sub_t0) * 1000.0 / (f64)SDL_GetPerformanceFrequency());
     g_sdl.cmd               = NULL;
     g_sdl.swapchain_texture = NULL;
     g_sdl.aux_bloom_mode  = FALSE;

@@ -55,5 +55,9 @@ void       sdlgpu_backend_set_aux_bloom_mode(struct renderer_backend* backend, b
 void       sdlgpu_backend_get_frame_stats(struct renderer_backend* backend, bs_frame_stats* out_stats);
 
 // Runtime swapchain present mode: FALSE = VSYNC (default), TRUE = IMMEDIATE (uncapped, for
-// GPU-cost profiling). Falls back to VSYNC if IMMEDIATE is unsupported.
-void       sdlgpu_backend_set_present_mode(struct renderer_backend* backend, b8 immediate);
+// GPU-cost profiling). Returns FALSE and stays on VSYNC if IMMEDIATE is unsupported or the
+// swapchain reconfigure fails.
+b8         sdlgpu_backend_set_present_mode(struct renderer_backend* backend, b8 immediate);
+
+// Present-cost breakdown of the previous end_frame (ms): swapchain-acquire block vs submit.
+void       sdlgpu_backend_get_present_timing(struct renderer_backend* backend, f32* out_acquire_ms, f32* out_submit_ms);

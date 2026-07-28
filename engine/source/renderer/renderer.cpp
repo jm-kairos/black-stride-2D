@@ -585,14 +585,25 @@ void renderer_get_frame_timing(f32* out_render_ms, f32* out_present_ms)
     if (out_present_ms) *out_present_ms = state.last_present_ms;
 }
 
-void renderer_set_present_mode(b8 immediate)
+b8 renderer_set_present_mode(b8 immediate)
 {
-    if (!state.initialized || !state.backend.set_present_mode) return;
-    state.backend.set_present_mode(&state.backend, immediate);
+    if (!state.initialized || !state.backend.set_present_mode) return FALSE;
+    // Only mirror the mode when the backend actually applied it — a refused IMMEDIATE must not
+    // report as immediate (that would also wrongly disable the app-level frame cap).
+    if (!state.backend.set_present_mode(&state.backend, immediate)) return FALSE;
     state.present_immediate = immediate;
+    return TRUE;
 }
 
 b8 renderer_is_present_immediate()
 {
     return state.present_immediate;
+}
+
+void renderer_get_present_breakdown(f32* out_acquire_ms, f32* out_submit_ms)
+{
+    if (out_acquire_ms) *out_acquire_ms = 0.0f;
+    if (out_submit_ms)  *out_submit_ms  = 0.0f;
+    if (!state.initialized || !state.backend.get_present_timing) return;
+    state.backend.get_present_timing(&state.backend, out_acquire_ms, out_submit_ms);
 }
