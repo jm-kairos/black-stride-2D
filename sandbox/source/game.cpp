@@ -1203,7 +1203,7 @@ static void game_push_hud(game_state* s, f32 dt) {
                 MarketGood gm[GOOD_COUNT];
                 station_market_get(s, sid, gm);
                 snprintf(hud.station_insp_market_head, sizeof(hud.station_insp_market_head),
-                         "%-12s%6s%9s%11s", "", "STOCK", "PRICE", "VS AVG");
+                         "%-12s%8s%10s%8s", "", "STOCK", "PRICE", "VS AVG");
                 char* bufs[CAT_COUNT]  = { hud.station_insp_market_agri, hud.station_insp_market_mine,
                                            hud.station_insp_market_vola, hud.station_insp_market_indu };
                 i32 sizes[CAT_COUNT]   = { (i32)sizeof(hud.station_insp_market_agri), (i32)sizeof(hud.station_insp_market_mine),
@@ -1224,7 +1224,8 @@ static void game_push_hud(game_state* s, f32 dt) {
                                         TRADE_GOOD_NAMES[gd], gm[gd].stock, gm[gd].price, devs);
                 }
                 snprintf(hud.station_insp_market_note, sizeof(hud.station_insp_market_note),
-                         "Buy below avg, sell above.  Station revenue: %.0f cr", station_revenue_get(s, sid));
+                         "VS AVG \xE2\x80\x94 local price vs galactic average\nStation revenue: %.0f cr",
+                         station_revenue_get(s, sid));
             }
 
             // CONTRACTS tab: list missions issued by this station (station_id == sid).

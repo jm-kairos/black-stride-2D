@@ -723,13 +723,13 @@ body {
     border-radius: 7px 7px 0 0;
 }
 
-/* Market tab column-header line (aligned with the pre-formatted resource lines). */
+/* Market tab column-header line: must share the resource-line font metrics
+   (13px, no letter-spacing) so the pre-formatted columns line up. */
 .market-colhead {
     display: block;
     white-space: pre;
     color: #6d84a0;
-    font-size: 11px;
-    letter-spacing: 1px;
+    font-size: 13px;
     padding: 2px 0 0 0;
 }
 
