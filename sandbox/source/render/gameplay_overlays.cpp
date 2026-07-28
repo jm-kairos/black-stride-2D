@@ -21,12 +21,13 @@ using namespace bs_math;
 
 // ---- Generic "unidentified object" marker -------------------------------------------------
 // Used by the discovery system for ships/stations the player has not yet scanned at close range.
-// Stroke width is screen-constant (world thickness scaled by zoom_inv) so the marker stays
-// legible when zoomed far out instead of collapsing subpixel; `alpha` drives the zoom-out fade.
+// Radius is world-space (14 px at current zoom via zoom_inv); stroke thickness is passed straight
+// through in SCREEN PIXELS -- renderer_draw_line/circle already divide thickness by camera zoom.
+// `alpha` drives the zoom-out fade.
 static void draw_unidentified_marker(Vec2 center, f32 zoom_inv, f32 alpha, u32 layer) {
     f32 r  = 14.0f * zoom_inv;
     f32 h  = r * 0.55f;
-    f32 th = 1.5f * zoom_inv;
+    f32 th = 1.5f; // screen px
     const bs_color COL = bs_color{ 0.85f, 0.85f, 0.85f, 0.75f * alpha };
     renderer_draw_circle(center, r, 20, th, COL, layer);
     renderer_draw_line(Vec2{ center.x - h, center.y - h }, Vec2{ center.x + h, center.y + h }, th, COL, layer);
