@@ -2123,6 +2123,14 @@ b8 sdlgpu_backend_end_frame(struct renderer_backend* backend, f32 dt)
 {
     (void)backend; (void)dt;
 
+    // ---- Slow-present forensics: per-section CPU timers across end_frame. On machines where
+    // Prsnt is large but Acqr/Sbmt are small, the stall hides in one of these sections; a
+    // throttled WARN below prints the breakdown so the culprit is identifiable from the log.
+    const f64 perf_to_ms = 1000.0 / (f64)SDL_GetPerformanceFrequency();
+    u64 ef_t0 = SDL_GetPerformanceCounter();
+    f32 tm_imgui_render = 0.0f, tm_build_upload = 0.0f, tm_imgui_prepare = 0.0f,
+        tm_record = 0.0f, tm_rml = 0.0f;
+
     // Finalize ImGui's draw data for this frame. ImGui::Render() is CPU-only (it does not touch
     // the GPU), and it MUST run for every begin_frame that issued NewFrame to keep the pair
     // balanced — including the failed-acquire and minimized early-outs below, where the draw
@@ -2134,6 +2142,7 @@ b8 sdlgpu_backend_end_frame(struct renderer_backend* backend, f32 dt)
         ImGui::Render();
         imgui_draw_data = ImGui::GetDrawData();
     }
+    tm_imgui_render = (f32)((f64)(SDL_GetPerformanceCounter() - ef_t0) * perf_to_ms);
 
     if (!g_sdl.cmd) return FALSE;
 
@@ -2258,6 +2267,7 @@ b8 sdlgpu_backend_end_frame(struct renderer_backend* backend, f32 dt)
     // Timed separately: under VSYNC this call BLOCKS until the driver frees a swapchain image,
     // so vblank pacing / swapchain starvation shows up here as pure CPU wait, not GPU work.
     u64 acq_t0 = SDL_GetPerformanceCounter();
+    tm_build_upload = (f32)((f64)(acq_t0 - ef_t0) * perf_to_ms) - tm_imgui_render;
     if (!SDL_WaitAndAcquireGPUSwapchainTexture(
             g_sdl.cmd, g_sdl.window, &g_sdl.swapchain_texture, &g_sdl.swap_width, &g_sdl.swap_height))
     {
@@ -2283,8 +2293,11 @@ b8 sdlgpu_backend_end_frame(struct renderer_backend* backend, f32 dt)
     // there are no draws (e.g. nothing built any UI this frame).
     if (g_sdl.imgui_active && imgui_draw_data && imgui_draw_data->TotalVtxCount > 0)
     {
+        u64 prep_t0 = SDL_GetPerformanceCounter();
         ImGui_ImplSDLGPU3_PrepareDrawData(imgui_draw_data, g_sdl.cmd);
+        tm_imgui_prepare = (f32)((f64)(SDL_GetPerformanceCounter() - prep_t0) * perf_to_ms);
     }
+    u64 rec_t0 = SDL_GetPerformanceCounter();
 
     // ---- Helper: draw a sub-range of a sprite batch into the CURRENT render pass ----
     auto draw_sprite_batch = [&](b8 render_to_offscreen, batched_sprite* sprites, u32 sprite_count, u32 index_offset, u32 batch_start, u32 batch_end) -> u32
@@ -2912,7 +2925,11 @@ b8 sdlgpu_backend_end_frame(struct renderer_backend* backend, f32 dt)
             draw_calls += draw_sprite_batch(FALSE, g_sdl.batch, g_sdl.batch_count, aux_count, bloom_split, g_sdl.batch_count);
 
         // RmlUi in-game UI, drawn into the swapchain pass beneath the ImGui editor overlay.
-        bs_rml_render_internal();
+        {
+            u64 rml_t0 = SDL_GetPerformanceCounter();
+            bs_rml_render_internal();
+            tm_rml = (f32)((f64)(SDL_GetPerformanceCounter() - rml_t0) * perf_to_ms);
+        }
 
         // ImGui on top of everything.
         if (g_sdl.imgui_active && imgui_draw_data && imgui_draw_data->TotalVtxCount > 0)
@@ -3027,7 +3044,11 @@ b8 sdlgpu_backend_end_frame(struct renderer_backend* backend, f32 dt)
         draw_calls += draw_mapped_batch(FALSE);
 
         // RmlUi in-game UI, drawn into the swapchain pass beneath the ImGui editor overlay.
-        bs_rml_render_internal();
+        {
+            u64 rml_t0 = SDL_GetPerformanceCounter();
+            bs_rml_render_internal();
+            tm_rml = (f32)((f64)(SDL_GetPerformanceCounter() - rml_t0) * perf_to_ms);
+        }
 
         if (g_sdl.imgui_active && imgui_draw_data && imgui_draw_data->TotalVtxCount > 0)
             ImGui_ImplSDLGPU3_RenderDrawData(imgui_draw_data, g_sdl.cmd, g_sdl.pass);
@@ -3040,9 +3061,29 @@ b8 sdlgpu_backend_end_frame(struct renderer_backend* backend, f32 dt)
     g_sdl.last_stats.draw_calls   = draw_calls;
 
     u64 sub_t0 = SDL_GetPerformanceCounter();
+    tm_record = (f32)((f64)(sub_t0 - rec_t0) * perf_to_ms) - tm_rml;
     SDL_SubmitGPUCommandBuffer(g_sdl.cmd);
     g_sdl.last_submit_ms =
         (f32)((f64)(SDL_GetPerformanceCounter() - sub_t0) * 1000.0 / (f64)SDL_GetPerformanceFrequency());
+
+    // Slow-present forensics: when end_frame exceeds the budget, print the per-section breakdown
+    // (throttled to ~1 line/second so a persistent stall doesn't flood the log).
+    {
+        f32 total_ms = (f32)((f64)(SDL_GetPerformanceCounter() - ef_t0) * perf_to_ms);
+        if (total_ms > 20.0f)
+        {
+            static u64 s_last_report = 0;
+            u64 now = SDL_GetPerformanceCounter();
+            if (s_last_report == 0 || (f64)(now - s_last_report) * perf_to_ms > 1000.0)
+            {
+                s_last_report = now;
+                BS_LOG_WARN("end_frame breakdown (%.1fms total): imgui_render=%.2f build_upload=%.2f "
+                            "acquire=%.2f imgui_prepare=%.2f record=%.2f rml=%.2f submit=%.2f",
+                            total_ms, tm_imgui_render, tm_build_upload, g_sdl.last_acquire_ms,
+                            tm_imgui_prepare, tm_record, tm_rml, g_sdl.last_submit_ms);
+            }
+        }
+    }
     g_sdl.cmd               = NULL;
     g_sdl.swapchain_texture = NULL;
     g_sdl.aux_bloom_mode  = FALSE;
