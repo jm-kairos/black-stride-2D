@@ -160,16 +160,17 @@
         <div class="rule"></div>
         <div class="planet-insp-line" data-if="station_insp_show_dock">{{ station_insp_dock }}</div>
         <div class="planet-insp-section" data-if="station_insp_show_market">
-            <div class="planet-insp-head">Agriculture</div>
+            <div class="market-colhead">{{ station_insp_market_head }}</div>
+            <div class="planet-insp-head" data-class-spec="station_insp_spec_agri">Agriculture<span class="spec-tag" data-if="station_insp_spec_agri"> &#8212; specialty</span></div>
             <div class="planet-insp-line">{{ station_insp_market_agri }}</div>
             <div class="rule"></div>
-            <div class="planet-insp-head">Minerals</div>
+            <div class="planet-insp-head" data-class-spec="station_insp_spec_mine">Minerals<span class="spec-tag" data-if="station_insp_spec_mine"> &#8212; specialty</span></div>
             <div class="planet-insp-line">{{ station_insp_market_mine }}</div>
             <div class="rule"></div>
-            <div class="planet-insp-head">Volatiles</div>
+            <div class="planet-insp-head" data-class-spec="station_insp_spec_vola">Volatiles<span class="spec-tag" data-if="station_insp_spec_vola"> &#8212; specialty</span></div>
             <div class="planet-insp-line">{{ station_insp_market_vola }}</div>
             <div class="rule"></div>
-            <div class="planet-insp-head">Industrial</div>
+            <div class="planet-insp-head" data-class-spec="station_insp_spec_indu">Industrial<span class="spec-tag" data-if="station_insp_spec_indu"> &#8212; specialty</span></div>
             <div class="planet-insp-line">{{ station_insp_market_indu }}</div>
             <div class="rule"></div>
             <div class="planet-insp-line dim">{{ station_insp_market_note }}</div>

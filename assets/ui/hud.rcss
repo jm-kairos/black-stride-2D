@@ -723,6 +723,28 @@ body {
     border-radius: 7px 7px 0 0;
 }
 
+/* Market tab column-header line (aligned with the pre-formatted resource lines). */
+.market-colhead {
+    display: block;
+    white-space: pre;
+    color: #6d84a0;
+    font-size: 11px;
+    letter-spacing: 1px;
+    padding: 2px 0 0 0;
+}
+
+/* Category the station specializes in: amber accent head + small tag. */
+.planet-insp-head.spec {
+    color: #ffb648;
+}
+
+.spec-tag {
+    color: #c98f3d;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 1px;
+}
+
 /* --- Planet inspector window (floating, right side; opened by clicking a planet) --- */
 #planet-inspector {
     position: absolute;

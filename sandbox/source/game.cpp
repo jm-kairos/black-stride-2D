@@ -1111,6 +1111,10 @@ static void game_push_hud(game_state* s, f32 dt) {
 
         // Subtitle: market specialization + controlling civilization (planet-inspector style).
         hud.station_insp_subtitle[0] = '\0';
+        hud.station_insp_spec_agri = FALSE;
+        hud.station_insp_spec_mine = FALSE;
+        hud.station_insp_spec_vola = FALSE;
+        hud.station_insp_spec_indu = FALSE;
         if (sid >= 0) {
             i32 node = sid >> 8;
             const char* owner_name = "Independent";
@@ -1121,6 +1125,10 @@ static void game_push_hud(game_state* s, f32 dt) {
             }
             i32 spec = station_specialization(s, sid);
             const char* spec_name = (spec >= 0 && spec < CAT_COUNT) ? TRADE_CATEGORY_NAMES[spec] : "General";
+            hud.station_insp_spec_agri = (spec == CAT_AGRICULTURE) ? TRUE : FALSE;
+            hud.station_insp_spec_mine = (spec == CAT_MINERALS)    ? TRUE : FALSE;
+            hud.station_insp_spec_vola = (spec == CAT_VOLATILES)   ? TRUE : FALSE;
+            hud.station_insp_spec_indu = (spec == CAT_INDUSTRIAL)  ? TRUE : FALSE;
             snprintf(hud.station_insp_subtitle, sizeof(hud.station_insp_subtitle),
                      "%s Hub  \xE2\x80\x94  %s", spec_name, owner_name);
         }
@@ -1145,6 +1153,7 @@ static void game_push_hud(game_state* s, f32 dt) {
 
         // ---- Tab content strings (\n-separated, pre-formatted; white-space:pre in RCSS) ----
         hud.station_insp_dock[0]        = '\0';
+        hud.station_insp_market_head[0] = '\0';
         hud.station_insp_market_agri[0] = '\0';
         hud.station_insp_market_mine[0] = '\0';
         hud.station_insp_market_vola[0] = '\0';
@@ -1186,11 +1195,15 @@ static void game_push_hud(game_state* s, f32 dt) {
             }
 
             // MARKET tab: one aligned line per resource, grouped into per-category strings
-            // (the RML supplies the category section heads). Each line carries a qualitative
-            // supply label derived from the stock/baseline ratio.
+            // (the RML supplies the category section heads). The last column is the local price
+            // deviation from the good's galactic-average price — the actual trade signal (buy
+            // below average, sell above); it folds in both local abundance bias and live stock
+            // swings from AI trade, since both feed the price rule.
             if (tab == 1) {
                 MarketGood gm[GOOD_COUNT];
                 station_market_get(s, sid, gm);
+                snprintf(hud.station_insp_market_head, sizeof(hud.station_insp_market_head),
+                         "%-12s%6s%9s%11s", "", "STOCK", "PRICE", "VS AVG");
                 char* bufs[CAT_COUNT]  = { hud.station_insp_market_agri, hud.station_insp_market_mine,
                                            hud.station_insp_market_vola, hud.station_insp_market_indu };
                 i32 sizes[CAT_COUNT]   = { (i32)sizeof(hud.station_insp_market_agri), (i32)sizeof(hud.station_insp_market_mine),
@@ -1199,19 +1212,19 @@ static void game_push_hud(game_state* s, f32 dt) {
                 for (i32 gd = 0; gd < GOOD_COUNT; ++gd) {
                     i32 c = trade_good_category(gd);
                     if (c < 0 || c >= CAT_COUNT) continue;
-                    f32 ratio = (gm[gd].base_stock > 1.0f) ? gm[gd].stock / gm[gd].base_stock : 1.0f;
-                    const char* supply = ratio < 0.5f ? "Scarce"
-                                       : ratio < 0.9f ? "Low"
-                                       : ratio <= 1.1f ? "Stable"
-                                       : ratio <= 1.5f ? "Surplus" : "Glut";
+                    f32 base_p = trade_good_base_price(gd);
+                    f32 dev    = (base_p > 0.0f) ? (gm[gd].price / base_p - 1.0f) * 100.0f : 0.0f;
+                    char devs[8];
+                    if (dev > -5.0f && dev < 5.0f) snprintf(devs, sizeof(devs), "%s", "avg");
+                    else                           snprintf(devs, sizeof(devs), "%+.0f%%", dev);
                     if (offs[c] < 0 || offs[c] >= sizes[c] - 1) continue;
                     offs[c] += snprintf(bufs[c] + offs[c], (size_t)(sizes[c] - offs[c]),
-                                        "%s%-12s %5.0f u   %4.0f cr   %s",
+                                        "%s%-12s %5.0f u   %4.0f cr  %6s",
                                         offs[c] > 0 ? "\n" : "",
-                                        TRADE_GOOD_NAMES[gd], gm[gd].stock, gm[gd].price, supply);
+                                        TRADE_GOOD_NAMES[gd], gm[gd].stock, gm[gd].price, devs);
                 }
                 snprintf(hud.station_insp_market_note, sizeof(hud.station_insp_market_note),
-                         "Station revenue: %.0f cr", station_revenue_get(s, sid));
+                         "Buy below avg, sell above.  Station revenue: %.0f cr", station_revenue_get(s, sid));
             }
 
             // CONTRACTS tab: list missions issued by this station (station_id == sid).

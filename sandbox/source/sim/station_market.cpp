@@ -103,6 +103,10 @@ i32 trade_good_category(i32 good) {
     return (good >= 0 && good < GOOD_COUNT) ? (i32)GOOD_INFO[good].category : (i32)CAT_COUNT;
 }
 
+f32 trade_good_base_price(i32 good) {
+    return (good >= 0 && good < GOOD_COUNT) ? GOOD_INFO[good].base_price : 0.0f;
+}
+
 // Fill the node's five supply signals (all 0..1). Defensive defaults for out-of-range nodes
 // match the old baseline behaviour (mid habitability, no industry).
 static void node_signals(const game_state* s, i32 node, f32 sig[SIG_COUNT]) {

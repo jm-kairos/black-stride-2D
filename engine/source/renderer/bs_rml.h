@@ -220,6 +220,11 @@ typedef struct bs_rml_hud_state
     b8                 station_insp_show_contracts; // true when tab 2 active
     b8                 station_insp_tab2_visible;   // true when station has a Contracts room
     char               station_insp_dock[512];      // docked ships list (\n-separated, pre-formatted)
+    char               station_insp_market_head[64];  // Market tab: column header line (pre-formatted)
+    b8                 station_insp_spec_agri;      // true when station specializes in Agriculture
+    b8                 station_insp_spec_mine;      // true when station specializes in Minerals
+    b8                 station_insp_spec_vola;      // true when station specializes in Volatiles
+    b8                 station_insp_spec_indu;      // true when station specializes in Industrial
     char               station_insp_market_agri[224]; // Market tab: Agriculture lines (pre-formatted)
     char               station_insp_market_mine[224]; // Market tab: Minerals lines
     char               station_insp_market_vola[224]; // Market tab: Volatiles lines

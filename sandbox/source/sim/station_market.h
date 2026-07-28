@@ -31,6 +31,10 @@ extern const char* const TRADE_CATEGORY_NAMES[];
 // Category (TradeCategory value) of a trade good; CAT_COUNT for an out-of-range good.
 i32 trade_good_category(i32 good);
 
+// Galactic-average unit price of a trade good (the catalog base price); 0 for out-of-range goods.
+// Useful for UI: local price vs. this = the trade signal (buy below, sell above).
+f32 trade_good_base_price(i32 good);
+
 // The category (TradeCategory value) this station specializes in: a deterministic per-station
 // seed roll weighted by the node's abundance signals, so fertile systems tend to host agri hubs,
 // metal-rich ones refineries, etc. The specialized category gets a baseline stock boost (cheap
