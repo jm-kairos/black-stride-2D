@@ -91,6 +91,7 @@ bs__api__ void bs_rml_debugger_toggle(void);
 #define BS_RML_LOG_MAX     12   // most recent action-log lines carried in a snapshot
 #define BS_RML_DISC_MAX    64   // most recent discovery lines carried in a snapshot
 #define BS_RML_WEAPON_MAX  4    // fleet-ship HUD weapon slots
+#define BS_RML_HARDPOINT_MAX 16 // flagship-inspector Arsenal hardpoint rows (Ship SHIP_MAX_HARDPOINTS)
 #define BS_RML_ACTION_CAP  32   // max bytes (incl. NUL) for a polled action string
 
 // One action-log line (already formatted, newest last).
@@ -201,7 +202,7 @@ typedef struct bs_rml_hud_state
     i32                arsenal_def_count;     // valid rows in arsenal_def[0..count-1] (defensive systems)
     bs_rml_weapon_line arsenal_def[BS_RML_WEAPON_MAX];
     i32                arsenal_hp_count;      // valid rows in arsenal_hp[0..count-1] (ship hardpoints)
-    bs_rml_weapon_line arsenal_hp[BS_RML_WEAPON_MAX];
+    bs_rml_weapon_line arsenal_hp[BS_RML_HARDPOINT_MAX];
 
     // Active UI font kit (0 = Neon, 1 = Clean, 2 = Minimal). Toggles a body class on the HUD
     // document so RCSS can swap the whole document's typefaces live from the editor panel.

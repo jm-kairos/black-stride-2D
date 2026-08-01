@@ -366,23 +366,18 @@ b8 game_init(Game* game_inst) {
 
         fs.ship.radiation_emission = 0.05f;
 
-        for (i32 i = 0; i < SHIP_MAX_WEAPONS; ++i) fs.ship.weapons[i] = nullptr;
-
         // The flagship's cannon starts UNMOUNTED in the loadout stash; the player mounts it onto a
-        // hardpoint from the Arsenal inspector. Until mounted, the flagship has no active weapon.
-        fs.ship.weapon_count      = 0;
-
-        fs.ship.active_weapon_idx = -1;
-
+        // hardpoint from the Arsenal inspector (ship_load cleared all hardpoint mounts). Until
+        // mounted, the flagship has no active weapon.
         fs.ship.weapon_stash[0]     = weapon_create_ballistic_cannon(fs.ship.faction);
 
         fs.ship.weapon_stash_count  = 1;
 
         // Point-defense also starts UNMOUNTED in the defensive inventory (disabled until the player
-        // drags it onto a hardpoint from the Arsenal inspector).
+        // drags it onto a defense hardpoint from the Arsenal inspector).
         fs.ship.point_defense.enabled = FALSE;
 
-        fs.ship.point_defense_slot    = -1;
+        fs.ship.point_defense_mount   = -1;
 
     }
 
@@ -432,13 +427,16 @@ b8 game_init(Game* game_inst) {
 
             fs.ship.radiation_emission = 0.05f;
 
-            for (i32 w = 0; w < SHIP_MAX_WEAPONS; ++w) fs.ship.weapons[w] = nullptr;
+            // Auto-mount the escort's cannon on its first free weapon hardpoint.
+            i32 whp = ship_first_free_hardpoint(&fs.ship, MODULE_TYPE_WEAPON);
 
-            fs.ship.weapons[0]        = weapon_create_ballistic_cannon(fs.ship.faction);
+            if (whp >= 0) {
 
-            fs.ship.weapon_count      = 1;
+                fs.ship.mounts[whp]       = weapon_create_ballistic_cannon(fs.ship.faction);
 
-            fs.ship.active_weapon_idx = 0;
+                fs.ship.active_weapon_idx = whp;
+
+            }
 
         }
 
@@ -470,19 +468,19 @@ b8 game_init(Game* game_inst) {
 
     // ---- Enemy weapon inventory ----------------------------------------------------------
 
-    s->fleet_state.enemy_ship.weapon_count = 0;
+    // Auto-mount the enemy cannon on its first weapon hardpoint (legacy hulls get a synthetic
+    // center mount from ship_load, so this always succeeds).
+    i32 enemy_hp = ship_first_free_hardpoint(&s->fleet_state.enemy_ship, MODULE_TYPE_WEAPON);
 
-    s->fleet_state.enemy_ship.active_weapon_idx = -1;
+    if (enemy_hp < 0) enemy_hp = 0;
 
-    for (i32 i = 0; i < SHIP_MAX_WEAPONS; ++i) s->fleet_state.enemy_ship.weapons[i] = nullptr;
-
-    s->fleet_state.enemy_ship.weapons[0] = weapon_create_ballistic_cannon(s->fleet_state.enemy_ship.faction);
+    s->fleet_state.enemy_ship.mounts[enemy_hp] = weapon_create_ballistic_cannon(s->fleet_state.enemy_ship.faction);
 
     // Extend the enemy's effective firing range ~10x by lengthening its projectile lifetime
 
     // (reach = speed * lifetime). Lets it land shots for long-range sensor-detection testing.
 
-    if (BallisticWeapon* enemy_cannon = static_cast<BallisticWeapon*>(s->fleet_state.enemy_ship.weapons[0])) {
+    if (BallisticWeapon* enemy_cannon = static_cast<BallisticWeapon*>(s->fleet_state.enemy_ship.mounts[enemy_hp])) {
 
         enemy_cannon->projectile_lifetime *= 10.0f;
 
@@ -496,9 +494,7 @@ b8 game_init(Game* game_inst) {
 
     }
 
-    s->fleet_state.enemy_ship.weapon_count = 1;
-
-    s->fleet_state.enemy_ship.active_weapon_idx = 0;
+    s->fleet_state.enemy_ship.active_weapon_idx = enemy_hp;
 
     // Default to single-ship command: the escorts are spawned above (so their data + weapons exist
     // and can be revealed instantly), but only the flagship is ACTIVE until the player enables
@@ -795,8 +791,8 @@ static void run_generation_stage(game_state* s) {
 
 // ---- Flagship loadout stash helpers ------------------------------------------------------
 // The Arsenal inspector moves weapon pointers between the ship's unmounted stash (weapon_stash[])
-// and its hardpoints (weapons[]). These small helpers keep the stash compact and the mounted
-// weapon bookkeeping (weapon_count / active_weapon_idx) consistent after every move.
+// and its hardpoints (mounts[]). These small helpers keep the stash compact and the active-weapon
+// bookkeeping consistent after every move.
 static void ship_stash_append(Ship& sh, Weapon* w) {
     if (!w) return;
     if (sh.weapon_stash_count < SHIP_MAX_WEAPONS)
@@ -811,16 +807,23 @@ static void ship_stash_remove_at(Ship& sh, i32 k) {
 }
 
 static void ship_rehome_weapons(Ship& sh) {
-    // weapon_count spans slot 0..last-fitted so the update/fire loops cover every mounted weapon.
-    i32 last = -1;
-    for (i32 k = 0; k < SHIP_MAX_WEAPONS; ++k) if (sh.weapons[k]) last = k;
-    sh.weapon_count = last + 1;
-    // Keep the active index pointing at a live weapon (or -1 when none are mounted).
-    if (sh.active_weapon_idx < 0 || sh.active_weapon_idx >= sh.weapon_count ||
-        !sh.weapons[sh.active_weapon_idx]) {
+    // Keep the active index pointing at a hardpoint with a live mounted weapon (or -1 when
+    // no weapons are mounted anywhere).
+    if (sh.active_weapon_idx < 0 || sh.active_weapon_idx >= sh.hardpoint_count ||
+        !sh.mounts[sh.active_weapon_idx]) {
         sh.active_weapon_idx = -1;
-        for (i32 k = 0; k < SHIP_MAX_WEAPONS; ++k) if (sh.weapons[k]) { sh.active_weapon_idx = k; break; }
+        for (i32 k = 0; k < sh.hardpoint_count; ++k) if (sh.mounts[k]) { sh.active_weapon_idx = k; break; }
     }
+}
+
+// Short label for a hardpoint's accepts-mask, used by Arsenal slot tooltips.
+static const char* hardpoint_kind_label(u32 accepts) {
+    if ((accepts & MODULE_TYPE_WEAPON) && (accepts & MODULE_TYPE_DEFENSE)) return "weapon/defense";
+    if (accepts & MODULE_TYPE_WEAPON)  return "weapon";
+    if (accepts & MODULE_TYPE_DEFENSE) return "defense";
+    if (accepts & MODULE_TYPE_SENSOR)  return "sensor";
+    if (accepts & MODULE_TYPE_ENGINE)  return "engine";
+    return "utility";
 }
 
 // ---- RmlUi HUD snapshot ------------------------------------------------------------------
@@ -941,25 +944,29 @@ static void game_push_hud(game_state* s, f32 dt) {
             snprintf(hud.fleet_heading, sizeof(hud.fleet_heading), "%.0f", ship->angle * bs_math::BS_RAD2DEG);
             snprintf(hud.fleet_health, sizeof(hud.fleet_health), "%s", "--");
             i32 wn = 0;
-            for (i32 i = 0; i < SHIP_MAX_WEAPONS && wn < BS_RML_WEAPON_MAX; ++i, ++wn) {
+            // Rows list mounted weapons in hardpoint order; the row number (1-4) matches the
+            // number-key/weapon:N quick-select. Remaining rows render as empty bays.
+            for (i32 i = 0; i < ship->hardpoint_count && wn < BS_RML_WEAPON_MAX; ++i) {
+                Weapon* w = ship->mounts[i];
+                if (!w) continue;
                 bs_rml_weapon_line& row = hud.fleet_weapon[wn];
-                if (i >= ship->weapon_count || !ship->weapons[i]) {
-                    snprintf(row.text, sizeof(row.text), "-- empty --");
-                    row.action[0] = '\0';   // empty slots enqueue nothing
-                    row.empty      = TRUE;
-                    row.selected   = FALSE;
-                    continue;
-                }
-                Weapon* w = ship->weapons[i];
                 const char* name = w->name ? w->name : "?";
                 if (w->ready())
-                    snprintf(row.text, sizeof(row.text), "%d  %s  READY", i + 1, name);
+                    snprintf(row.text, sizeof(row.text), "%d  %s  READY", wn + 1, name);
                 else
-                    snprintf(row.text, sizeof(row.text), "%d  %s  %.0f%%", i + 1, name,
+                    snprintf(row.text, sizeof(row.text), "%d  %s  %.0f%%", wn + 1, name,
                              w->cooldown_progress() * 100.0f);
-                snprintf(row.action, sizeof(row.action), "weapon:%d", i);
+                snprintf(row.action, sizeof(row.action), "weapon:%d", i);   // hardpoint index
                 row.empty    = FALSE;
                 row.selected = (i == ship->active_weapon_idx);
+                ++wn;
+            }
+            for (; wn < BS_RML_WEAPON_MAX; ++wn) {
+                bs_rml_weapon_line& row = hud.fleet_weapon[wn];
+                snprintf(row.text, sizeof(row.text), "-- empty --");
+                row.action[0] = '\0';   // empty slots enqueue nothing
+                row.empty      = TRUE;
+                row.selected   = FALSE;
             }
             hud.fleet_weapon_count = wn;
             b8 in_free_camera = s->camera_state.free_camera_active;
@@ -982,7 +989,7 @@ static void game_push_hud(game_state* s, f32 dt) {
     //   - LEFT pane = UNMOUNTED inventory the flagship owns: arsenal_inv holds offensive weapons in
     //     the loadout stash (draggable, action "inv:K"); arsenal_def holds defensive systems
     //     (point-defense, scaffold). The offensive list is also an unmount drop target ("stash").
-    //   - RIGHT pane = arsenal_hp, one row per ship hardpoint (weapons[] slot): every row is a drop
+    //   - RIGHT pane = arsenal_hp, one row per ship hardpoint (mounts[] slot): every row is a drop
     //     target (drop "slot:M") and, when occupied, a drag source (action "hp:M").
     // A weapon lives in EITHER the inventory OR a hardpoint, never both, so dropping onto a
     // hardpoint MOVES it (removing it from the left list). Defensive drops are a scaffold no-op.
@@ -1020,8 +1027,8 @@ static void game_push_hud(game_state* s, f32 dt) {
             }
             hud.arsenal_inv_count = iv;
             // Defensive systems: the point-defense laser, shown in the inventory ONLY while it is
-            // unmounted (point_defense_slot < 0). Once mounted it appears on its hardpoint instead.
-            if (fs.point_defense_slot < 0) {
+            // unmounted (point_defense_mount < 0). Once mounted it appears on its hardpoint instead.
+            if (fs.point_defense_mount < 0) {
                 bs_rml_weapon_line& drow = hud.arsenal_def[0];
                 snprintf(drow.text,  sizeof(drow.text),  "Point Defense Laser");
                 snprintf(drow.glyph, sizeof(drow.glyph), "P");
@@ -1033,29 +1040,32 @@ static void game_push_hud(game_state* s, f32 dt) {
             } else {
                 hud.arsenal_def_count = 0;
             }
-            // RIGHT: ship hardpoints, one box per weapons[] slot. A slot may hold an offensive
-            // weapon OR the point-defense (type-agnostic). Occupied slots are drop targets AND drag
-            // sources; empty slots are inert "+" drop targets.
+            // RIGHT: the ship's hardpoint skeleton, one box per hardpoint. A slot may hold an
+            // offensive weapon OR the point-defense, gated by the hardpoint's accepts-mask.
+            // Occupied slots are drop targets AND drag sources; empty slots are inert "+" drop
+            // targets whose tooltip names the slot and what it accepts.
             i32 hp = 0;
-            for (i32 i = 0; i < SHIP_MAX_WEAPONS && hp < BS_RML_WEAPON_MAX; ++i, ++hp) {
+            for (i32 i = 0; i < fs.hardpoint_count && hp < BS_RML_HARDPOINT_MAX; ++i, ++hp) {
                 bs_rml_weapon_line& row = hud.arsenal_hp[hp];
+                const HardpointDef& hpd = fs.hardpoints[i];
                 snprintf(row.drop, sizeof(row.drop), "slot:%d", i);
-                if (fs.weapons[i]) {
-                    Weapon* w = fs.weapons[i];
+                if (fs.mounts[i]) {
+                    Weapon* w = fs.mounts[i];
                     const char* name = w->name ? w->name : "?";
-                    snprintf(row.text,   sizeof(row.text),   "%s", name);
+                    snprintf(row.text,   sizeof(row.text),   "%s \xE2\x80\x94 %s", name, hpd.id);
                     snprintf(row.glyph,  sizeof(row.glyph),  "%c", name[0] ? name[0] : '*');
                     snprintf(row.action, sizeof(row.action), "hp:%d", i);              // dragstart source (weapon)
                     row.empty    = FALSE;
                     row.selected = (i == fs.active_weapon_idx);
-                } else if (fs.point_defense_slot == i) {
-                    snprintf(row.text,   sizeof(row.text),   "Point Defense Laser");
+                } else if (fs.point_defense_mount == i) {
+                    snprintf(row.text,   sizeof(row.text),   "Point Defense Laser \xE2\x80\x94 %s", hpd.id);
                     snprintf(row.glyph,  sizeof(row.glyph),  "P");
                     snprintf(row.action, sizeof(row.action), "hpd:%d", i);             // dragstart source (point-defense)
                     row.empty    = FALSE;
                     row.selected = fs.point_defense.enabled ? TRUE : FALSE;
                 } else {
-                    snprintf(row.text,  sizeof(row.text),  "Empty hardpoint %d", i + 1);
+                    snprintf(row.text,  sizeof(row.text),  "%s \xE2\x80\x94 %s slot",
+                             hpd.id, hardpoint_kind_label(hpd.accepts));
                     snprintf(row.glyph, sizeof(row.glyph), "+");
                     row.action[0] = '\0';
                     row.empty      = TRUE;
@@ -1439,10 +1449,11 @@ static void game_push_hud(game_state* s, f32 dt) {
             continue;
         }
         if (strncmp(action, "weapon:", 7) == 0) {
-            i32 wi = action[7] - '0';
+            i32 wi = atoi(action + 7);   // hardpoint index of the mounted weapon
             FleetShip* p = s->fleet_state.fleet.piloted();
             if (!p) p = &s->fleet_state.fleet.at(0);
-            if (p && wi >= 0 && wi < p->ship.weapon_count) p->ship.active_weapon_idx = wi;
+            if (p && wi >= 0 && wi < p->ship.hardpoint_count && p->ship.mounts[wi])
+                p->ship.active_weapon_idx = wi;
             continue;
         }
         // Flagship inspector: toggle/close the window + arsenal weapon selection (flagship-targeted).
@@ -1479,17 +1490,17 @@ static void game_push_hud(game_state* s, f32 dt) {
         // drop reads this armed source (kind): "slot:M" onto a hardpoint, "stash" onto the offensive
         // inventory (unmount weapon), or "defstash" onto the defensive inventory (unmount PD).
         if (strncmp(action, "inv:", 4) == 0) {
-            s->pending_weapon_drag      = action[4] - '0';
+            s->pending_weapon_drag      = atoi(action + 4);
             s->pending_weapon_drag_kind = 1;   // unmounted offensive weapon (stash)
             continue;
         }
         if (strncmp(action, "hpd:", 4) == 0) {
-            s->pending_weapon_drag      = action[4] - '0';
+            s->pending_weapon_drag      = atoi(action + 4);
             s->pending_weapon_drag_kind = 3;   // mounted point-defense
             continue;
         }
         if (strncmp(action, "hp:", 3) == 0) {
-            s->pending_weapon_drag      = action[3] - '0';
+            s->pending_weapon_drag      = atoi(action + 3);
             s->pending_weapon_drag_kind = 0;   // mounted offensive weapon
             continue;
         }
@@ -1498,70 +1509,106 @@ static void game_push_hud(game_state* s, f32 dt) {
             s->pending_weapon_drag_kind = 2;   // unmounted point-defense (defensive inventory)
             continue;
         }
-        // Arsenal drop onto a hardpoint slot M (type-agnostic — a slot holds an offensive weapon OR
-        // the point-defense). The armed source kind decides the action; a displaced occupant returns
-        // to its own inventory (weapon -> offensive stash, point-defense -> defensive inventory).
+        // Arsenal drop onto hardpoint slot M. The armed source kind decides the action; the drop is
+        // TYPE-GATED by the hardpoint's accepts-mask (weapons need a weapon slot, the point-defense
+        // a defense slot). A displaced occupant returns to its own inventory (weapon -> offensive
+        // stash, point-defense -> defensive inventory).
         if (strncmp(action, "slot:", 5) == 0) {
-            i32 dst = action[5] - '0';
+            i32 dst = atoi(action + 5);
             Ship& fs = s->player_ship();
             i32 src  = s->pending_weapon_drag;
             i32 kind = s->pending_weapon_drag_kind;
-            if (dst >= 0 && dst < SHIP_MAX_WEAPONS) {
+            if (dst >= 0 && dst < fs.hardpoint_count) {
+                const HardpointDef& dhp = fs.hardpoints[dst];
+                b8 dst_takes_weapon  = hardpoint_accepts(&dhp, MODULE_TYPE_WEAPON);
+                b8 dst_takes_defense = hardpoint_accepts(&dhp, MODULE_TYPE_DEFENSE);
                 if (kind == 1 && src >= 0 && src < fs.weapon_stash_count) {
                     // Mount an unmounted offensive weapon onto hardpoint dst; evict any occupant.
-                    Weapon* mounting = fs.weapon_stash[src];
-                    if (fs.weapons[dst]) {
-                        ship_stash_append(fs, fs.weapons[dst]);       // occupant weapon -> offensive stash
-                    } else if (fs.point_defense_slot == dst) {
-                        fs.point_defense_slot    = -1;                // occupant PD -> defensive inventory
-                        fs.point_defense.enabled = FALSE;
+                    if (!dst_takes_weapon) {
+                        action_log_push(s, "'%s' is a %s slot - weapons don't fit.",
+                                        dhp.id, hardpoint_kind_label(dhp.accepts));
+                    } else {
+                        Weapon* mounting = fs.weapon_stash[src];
+                        if (fs.mounts[dst]) {
+                            ship_stash_append(fs, fs.mounts[dst]);        // occupant weapon -> offensive stash
+                        } else if (fs.point_defense_mount == dst) {
+                            fs.point_defense_mount   = -1;                // occupant PD -> defensive inventory
+                            fs.point_defense.enabled = FALSE;
+                        }
+                        fs.mounts[dst] = mounting;
+                        ship_stash_remove_at(fs, src);
+                        if (fs.active_weapon_idx < 0) fs.active_weapon_idx = dst; // first mount becomes active
+                        ship_rehome_weapons(fs);
+                        action_log_push(s, "%s mounted on '%s'.",
+                                        mounting && mounting->name ? mounting->name : "Weapon", dhp.id);
                     }
-                    fs.weapons[dst] = mounting;
-                    ship_stash_remove_at(fs, src);
-                    if (fs.active_weapon_idx < 0) fs.active_weapon_idx = dst; // first mount becomes active
-                    ship_rehome_weapons(fs);
-                    action_log_push(s, "%s mounted on hardpoint %d.",
-                                    mounting && mounting->name ? mounting->name : "Weapon", dst + 1);
-                } else if (kind == 0 && src >= 0 && src < SHIP_MAX_WEAPONS && src != dst && fs.weapons[src]) {
+                } else if (kind == 0 && src >= 0 && src < fs.hardpoint_count && src != dst && fs.mounts[src]) {
                     // Rearrange a mounted offensive weapon from hardpoint src onto hardpoint dst.
-                    if (fs.weapons[dst]) {
-                        Weapon* tmp     = fs.weapons[src];            // dst holds a weapon -> swap
-                        fs.weapons[src] = fs.weapons[dst];
-                        fs.weapons[dst] = tmp;
+                    if (!dst_takes_weapon) {
+                        action_log_push(s, "'%s' is a %s slot - weapons don't fit.",
+                                        dhp.id, hardpoint_kind_label(dhp.accepts));
+                    } else if (fs.mounts[dst]) {
+                        Weapon* tmp    = fs.mounts[src];                  // dst holds a weapon -> swap
+                        fs.mounts[src] = fs.mounts[dst];
+                        fs.mounts[dst] = tmp;
                         if      (fs.active_weapon_idx == src) fs.active_weapon_idx = dst;
                         else if (fs.active_weapon_idx == dst) fs.active_weapon_idx = src;
-                    } else if (fs.point_defense_slot == dst) {
-                        fs.weapons[dst]       = fs.weapons[src];      // dst holds PD -> exchange places
-                        fs.weapons[src]       = nullptr;
-                        fs.point_defense_slot = src;
-                        if (fs.active_weapon_idx == src) fs.active_weapon_idx = dst;
+                        ship_rehome_weapons(fs);
+                        action_log_push(s, "Weapon moved to '%s'.", dhp.id);
+                    } else if (fs.point_defense_mount == dst) {
+                        // dst holds the PD -> exchange places, but only if the PD fits on src.
+                        if (!hardpoint_accepts(&fs.hardpoints[src], MODULE_TYPE_DEFENSE)) {
+                            action_log_push(s, "Can't swap: '%s' doesn't take the point-defense.",
+                                            fs.hardpoints[src].id);
+                        } else {
+                            fs.mounts[dst]         = fs.mounts[src];
+                            fs.mounts[src]         = nullptr;
+                            fs.point_defense_mount = src;
+                            if (fs.active_weapon_idx == src) fs.active_weapon_idx = dst;
+                            ship_rehome_weapons(fs);
+                            action_log_push(s, "Weapon moved to '%s'.", dhp.id);
+                        }
                     } else {
-                        fs.weapons[dst] = fs.weapons[src];            // dst empty -> move
-                        fs.weapons[src] = nullptr;
+                        fs.mounts[dst] = fs.mounts[src];                  // dst empty -> move
+                        fs.mounts[src] = nullptr;
                         if (fs.active_weapon_idx == src) fs.active_weapon_idx = dst;
+                        ship_rehome_weapons(fs);
+                        action_log_push(s, "Weapon moved to '%s'.", dhp.id);
                     }
-                    ship_rehome_weapons(fs);
-                    action_log_push(s, "Weapon moved to hardpoint %d.", dst + 1);
-                } else if (kind == 2 && fs.point_defense_slot != dst) {
+                } else if (kind == 2 && fs.point_defense_mount != dst) {
                     // Mount the point-defense (from the defensive inventory) onto hardpoint dst.
-                    if (fs.weapons[dst]) {
-                        ship_stash_append(fs, fs.weapons[dst]);       // occupant weapon -> offensive stash
-                        fs.weapons[dst] = nullptr;
+                    if (!dst_takes_defense) {
+                        action_log_push(s, "'%s' is a %s slot - the point-defense doesn't fit.",
+                                        dhp.id, hardpoint_kind_label(dhp.accepts));
+                    } else {
+                        if (fs.mounts[dst]) {
+                            ship_stash_append(fs, fs.mounts[dst]);        // occupant weapon -> offensive stash
+                            fs.mounts[dst] = nullptr;
+                        }
+                        fs.point_defense_mount   = dst;
+                        fs.point_defense.enabled = TRUE;
+                        ship_rehome_weapons(fs);
+                        action_log_push(s, "Point Defense Laser mounted on '%s'.", dhp.id);
                     }
-                    fs.point_defense_slot    = dst;
-                    fs.point_defense.enabled = TRUE;
-                    ship_rehome_weapons(fs);
-                    action_log_push(s, "Point Defense Laser mounted on hardpoint %d.", dst + 1);
-                } else if (kind == 3 && src == fs.point_defense_slot && src != dst) {
+                } else if (kind == 3 && src == fs.point_defense_mount && src != dst) {
                     // Move the mounted point-defense from hardpoint src onto hardpoint dst.
-                    if (fs.weapons[dst]) {
-                        fs.weapons[src] = fs.weapons[dst];            // dst holds a weapon -> exchange places
-                        fs.weapons[dst] = nullptr;
-                        if (fs.active_weapon_idx == dst) fs.active_weapon_idx = src;
+                    if (!dst_takes_defense) {
+                        action_log_push(s, "'%s' is a %s slot - the point-defense doesn't fit.",
+                                        dhp.id, hardpoint_kind_label(dhp.accepts));
+                    } else if (fs.mounts[dst] &&
+                               !hardpoint_accepts(&fs.hardpoints[src], MODULE_TYPE_WEAPON)) {
+                        action_log_push(s, "Can't swap: '%s' doesn't take weapons.",
+                                        fs.hardpoints[src].id);
+                    } else {
+                        if (fs.mounts[dst]) {
+                            fs.mounts[src] = fs.mounts[dst];              // dst holds a weapon -> exchange places
+                            fs.mounts[dst] = nullptr;
+                            if (fs.active_weapon_idx == dst) fs.active_weapon_idx = src;
+                        }
+                        fs.point_defense_mount = dst;
+                        ship_rehome_weapons(fs);
+                        action_log_push(s, "Point Defense Laser moved to '%s'.", dhp.id);
                     }
-                    fs.point_defense_slot = dst;
-                    ship_rehome_weapons(fs);
-                    action_log_push(s, "Point Defense Laser moved to hardpoint %d.", dst + 1);
                 }
             }
             s->pending_weapon_drag = -1;
@@ -1573,9 +1620,9 @@ static void game_push_hud(game_state* s, f32 dt) {
             Ship& fs = s->player_ship();
             i32 src  = s->pending_weapon_drag;
             i32 kind = s->pending_weapon_drag_kind;
-            if (kind == 0 && src >= 0 && src < SHIP_MAX_WEAPONS && fs.weapons[src]) {
-                Weapon* w = fs.weapons[src];
-                fs.weapons[src] = nullptr;
+            if (kind == 0 && src >= 0 && src < fs.hardpoint_count && fs.mounts[src]) {
+                Weapon* w = fs.mounts[src];
+                fs.mounts[src] = nullptr;
                 ship_stash_append(fs, w);
                 ship_rehome_weapons(fs);
                 action_log_push(s, "%s returned to inventory.", w->name ? w->name : "Weapon");
@@ -1588,12 +1635,13 @@ static void game_push_hud(game_state* s, f32 dt) {
         if (strcmp(action, "defstash") == 0) {
             Ship& fs = s->player_ship();
             i32 kind = s->pending_weapon_drag_kind;
-            if (kind == 3 && fs.point_defense_slot >= 0) {
-                i32 slot = fs.point_defense_slot;
-                fs.point_defense_slot    = -1;
+            if (kind == 3 && fs.point_defense_mount >= 0) {
+                i32 slot = fs.point_defense_mount;
+                fs.point_defense_mount   = -1;
                 fs.point_defense.enabled = FALSE;
                 ship_rehome_weapons(fs);
-                action_log_push(s, "Point Defense Laser returned to inventory (was hardpoint %d).", slot + 1);
+                action_log_push(s, "Point Defense Laser returned to inventory (was '%s').",
+                                fs.hardpoints[slot].id);
             }
             s->pending_weapon_drag = -1;
             continue;
@@ -2044,39 +2092,23 @@ b8 game_update(Game* game_inst, f32 dt) {
         // left-click anywhere (inside or outside its bounds) must never fire the active weapon.
         if (!s->editor.edit_mode_active && !s->camera_state.free_camera_active && !s->show_flagship_inspector && !bs_imgui_wants_mouse() && !bs_rml_wants_mouse()) {
 
-            // weapon slot switching: 1-4
+            // weapon slot switching: 1-4 (n-th mounted weapon in hardpoint order)
 
-            if (input_is_key_down(KEY_NUM1) && !input_was_key_down(KEY_NUM1)) {
+            if (input_is_key_down(KEY_NUM1) && !input_was_key_down(KEY_NUM1)) ship_select_weapon_slot(psh, 0);
 
-                if (psh->weapon_count > 0) psh->active_weapon_idx = 0;
+            if (input_is_key_down(KEY_NUM2) && !input_was_key_down(KEY_NUM2)) ship_select_weapon_slot(psh, 1);
 
-            }
+            if (input_is_key_down(KEY_NUM3) && !input_was_key_down(KEY_NUM3)) ship_select_weapon_slot(psh, 2);
 
-            if (input_is_key_down(KEY_NUM2) && !input_was_key_down(KEY_NUM2)) {
-
-                if (psh->weapon_count > 1) psh->active_weapon_idx = 1;
-
-            }
-
-            if (input_is_key_down(KEY_NUM3) && !input_was_key_down(KEY_NUM3)) {
-
-                if (psh->weapon_count > 2) psh->active_weapon_idx = 2;
-
-            }
-
-            if (input_is_key_down(KEY_NUM4) && !input_was_key_down(KEY_NUM4)) {
-
-                if (psh->weapon_count > 3) psh->active_weapon_idx = 3;
-
-            }
+            if (input_is_key_down(KEY_NUM4) && !input_was_key_down(KEY_NUM4)) ship_select_weapon_slot(psh, 3);
 
             // left click -> fire active weapon toward mouse cursor
 
             if (input_is_button_down(BUTTON_LEFT) && !input_was_button_down(BUTTON_LEFT)) {
 
-                if (psh->active_weapon_idx >= 0 && psh->active_weapon_idx < psh->weapon_count) {
+                {
 
-                    Weapon* w = psh->weapons[psh->active_weapon_idx];
+                    Weapon* w = ship_active_weapon(psh);
 
                     if (w) {
 
@@ -2108,15 +2140,15 @@ b8 game_update(Game* game_inst, f32 dt) {
 
         Ship& sh = s->fleet_state.fleet.at(i).ship;
 
-        for (i32 w = 0; w < sh.weapon_count; ++w)
+        for (i32 w = 0; w < sh.hardpoint_count; ++w)
 
-            if (sh.weapons[w]) sh.weapons[w]->update(sim_dt);
+            if (sh.mounts[w]) sh.mounts[w]->update(sim_dt);
 
     }
 
-    for (i32 i = 0; i < s->fleet_state.enemy_ship.weapon_count; ++i) {
+    for (i32 i = 0; i < s->fleet_state.enemy_ship.hardpoint_count; ++i) {
 
-        if (s->fleet_state.enemy_ship.weapons[i]) s->fleet_state.enemy_ship.weapons[i]->update(sim_dt);
+        if (s->fleet_state.enemy_ship.mounts[i]) s->fleet_state.enemy_ship.mounts[i]->update(sim_dt);
 
     }
 

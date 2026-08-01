@@ -168,8 +168,7 @@ void combat_arena_update_enemy_ai(game_state* s, f32 dt) {
     // Fire only when roughly aligned and the weapon is off cooldown.
     const f32 ENEMY_FIRE_FACE_ANGLE = 0.20f; // rad
     if (fabsf(angle_diff) > ENEMY_FIRE_FACE_ANGLE) return;
-    if (sh->active_weapon_idx < 0 || sh->active_weapon_idx >= sh->weapon_count) return;
-    Weapon* w = sh->weapons[sh->active_weapon_idx];
+    Weapon* w = ship_active_weapon(sh);
     if (!w || !w->ready()) return;
 
     HierPos2 fire_origin = ship_local_to_world(sh, sh->weapon_fire_offset_local);

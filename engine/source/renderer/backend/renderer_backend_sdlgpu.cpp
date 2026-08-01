@@ -4662,7 +4662,7 @@ void bs_rml_hud_update(const bs_rml_hud_state* s)
     {
         i32 n = s->arsenal_hp_count;
         if (n < 0) n = 0;
-        if (n > BS_RML_WEAPON_MAX) n = BS_RML_WEAPON_MAX;
+        if (n > BS_RML_HARDPOINT_MAX) n = BS_RML_HARDPOINT_MAX;
         g_hud_model.arsenal_hp.resize((size_t)n);
         for (i32 i = 0; i < n; ++i)
         {

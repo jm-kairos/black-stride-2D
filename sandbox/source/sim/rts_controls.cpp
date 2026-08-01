@@ -435,18 +435,10 @@ void RtsControls::draw() {
     if (!piloted) piloted = &m_state->fleet_state.fleet.at(0);
     if (piloted) {
         Ship* ship = &piloted->ship;
-        if (input_is_key_down(KEY_NUM1) && !input_was_key_down(KEY_NUM1)) {
-            if (ship->weapon_count > 0) ship->active_weapon_idx = 0;
-        }
-        if (input_is_key_down(KEY_NUM2) && !input_was_key_down(KEY_NUM2)) {
-            if (ship->weapon_count > 1) ship->active_weapon_idx = 1;
-        }
-        if (input_is_key_down(KEY_NUM3) && !input_was_key_down(KEY_NUM3)) {
-            if (ship->weapon_count > 2) ship->active_weapon_idx = 2;
-        }
-        if (input_is_key_down(KEY_NUM4) && !input_was_key_down(KEY_NUM4)) {
-            if (ship->weapon_count > 3) ship->active_weapon_idx = 3;
-        }
+        if (input_is_key_down(KEY_NUM1) && !input_was_key_down(KEY_NUM1)) ship_select_weapon_slot(ship, 0);
+        if (input_is_key_down(KEY_NUM2) && !input_was_key_down(KEY_NUM2)) ship_select_weapon_slot(ship, 1);
+        if (input_is_key_down(KEY_NUM3) && !input_was_key_down(KEY_NUM3)) ship_select_weapon_slot(ship, 2);
+        if (input_is_key_down(KEY_NUM4) && !input_was_key_down(KEY_NUM4)) ship_select_weapon_slot(ship, 3);
     }
 }
 // =====================================================================================

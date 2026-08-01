@@ -3398,7 +3398,7 @@ struct game_state {
 
 
 
-    i32              pending_weapon_drag_kind; // Arsenal drag source kind: 0=mounted weapon (weapons[]), 1=stash weapon (weapon_stash[]), 2=point-defense from inventory, 3=mounted point-defense
+    i32              pending_weapon_drag_kind; // Arsenal drag source kind: 0=mounted weapon (mounts[]), 1=stash weapon (weapon_stash[]), 2=point-defense from inventory, 3=mounted point-defense
 
 
 

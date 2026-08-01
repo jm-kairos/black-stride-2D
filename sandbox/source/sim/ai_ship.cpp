@@ -132,11 +132,9 @@ void ai_ships_init(game_state* s) {
 
         s->npc_template.faction_id = FACTION_PIRATE;
 
-        s->npc_template.weapon_count = 0;
-
         s->npc_template.active_weapon_idx = -1;
 
-        for (i32 w = 0; w < SHIP_MAX_WEAPONS; ++w) s->npc_template.weapons[w] = nullptr;
+        for (i32 w = 0; w < SHIP_MAX_HARDPOINTS; ++w) s->npc_template.mounts[w] = nullptr;
 
         s->npc_template.glow = s->render.glow_params;
 

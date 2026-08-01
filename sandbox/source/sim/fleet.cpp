@@ -132,8 +132,8 @@ void FleetShip::update_attack(game_state* s, f32 dt) {
     }
     // Fire when facing the target, inside max range, and outside minimum range.
     if (fabsf(angle_diff) < RTS_ATTACK_FACE_ANGLE && dist >= RTS_ATTACK_MIN_RANGE && dist <= RTS_ATTACK_RANGE * 1.5f) {
-        if (sh->active_weapon_idx >= 0 && sh->active_weapon_idx < sh->weapon_count) {
-            Weapon* w = sh->weapons[sh->active_weapon_idx];
+        {
+            Weapon* w = ship_active_weapon(sh);
             if (w) {
                 HierPos2 fire_origin = ship_local_to_world(sh, sh->weapon_fire_offset_local);
                 Vec2 aim_dir = to_target;

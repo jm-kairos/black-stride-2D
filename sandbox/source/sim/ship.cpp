@@ -50,6 +50,33 @@ f32 hardpoint_half_extent(HardpointSize s) {
     }
     return 35.0f;
 }
+b8 hardpoint_accepts(const HardpointDef* hp, u32 module_type) {
+    return (hp && (hp->accepts & module_type)) ? TRUE : FALSE;
+}
+Weapon* ship_active_weapon(const Ship* ship) {
+    if (!ship) return nullptr;
+    if (ship->active_weapon_idx < 0 || ship->active_weapon_idx >= ship->hardpoint_count) return nullptr;
+    return ship->mounts[ship->active_weapon_idx];
+}
+i32 ship_first_free_hardpoint(const Ship* ship, u32 module_type) {
+    if (!ship) return -1;
+    for (i32 i = 0; i < ship->hardpoint_count; ++i) {
+        if (!(ship->hardpoints[i].accepts & module_type)) continue;
+        if (ship->mounts[i]) continue;
+        if (ship->point_defense_mount == i) continue;
+        return i;
+    }
+    return -1;
+}
+void ship_select_weapon_slot(Ship* ship, i32 n) {
+    if (!ship || n < 0) return;
+    i32 seen = 0;
+    for (i32 i = 0; i < ship->hardpoint_count; ++i) {
+        if (!ship->mounts[i]) continue;
+        if (seen == n) { ship->active_weapon_idx = i; return; }
+        ++seen;
+    }
+}
 // Parse a '|'-joined module-kind list ("weapon", "weapon|defense", ...) into a
 // MODULE_TYPE_* bitmask. Unknown kinds are skipped with a warning; returns 0 if
 // nothing matched.
@@ -108,6 +135,10 @@ b8 ship_load(Ship* out_ship, const char* path) {
     b8 class_authored = FALSE;
     out_ship->size_class = SHIP_CLASS_DRONE;
     out_ship->hardpoint_count = 0;
+    for (i32 i = 0; i < SHIP_MAX_HARDPOINTS; ++i) out_ship->mounts[i] = nullptr;
+    out_ship->active_weapon_idx    = -1;
+    out_ship->weapon_stash_count   = 0;
+    out_ship->point_defense_mount  = -1;
     ship_visual_clear(&out_ship->visual);
     char line[512];
     while (fgets(line, sizeof(line), f)) {
@@ -240,6 +271,19 @@ b8 ship_load(Ship* out_ship, const char* path) {
     if (out_ship->visual.layer_count <= 0) {
         BS_LOG_ERROR("ship_load: no visual layers in '%s'.", path);
         return FALSE;
+    }
+    // Legacy hulls without an authored skeleton get one universal center mount so weapons
+    // and the point-defense can still be fitted (e.g. enemy_ship.ship).
+    if (out_ship->hardpoint_count == 0) {
+        HardpointDef& hp = out_ship->hardpoints[0];
+        hp = HardpointDef{};
+        strncpy(hp.id, "mount", sizeof(hp.id) - 1);
+        hp.accepts   = MODULE_TYPE_WEAPON | MODULE_TYPE_DEFENSE;
+        hp.size      = HARDPOINT_MEDIUM;
+        hp.pos_local = out_ship->weapon_fire_offset_local;
+        hp.facing    = 0.0f;
+        hp.arc       = 2.0f * BS_PI;
+        out_ship->hardpoint_count = 1;
     }
     // Resolve the size class (unless authored) from the WORLD hull length, then bake the
     // class's motion tuning into the ship so piloting/autopilot read per-ship parameters.

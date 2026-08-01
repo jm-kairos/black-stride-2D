@@ -288,18 +288,20 @@ struct Ship {
 
     i32           hardpoint_count;
 
-    // ---- Weapon inventory --------------------------------------------------------------
+    // ---- Mounted modules (one per hardpoint slot) ---------------------------------------
+    // mounts[i] is the Weapon mounted on hardpoints[i] (nullptr = empty). The point-defense
+    // occupies a hardpoint via point_defense_mount instead (it is a DefenseLaser, not a
+    // Weapon). A given hardpoint holds at most ONE of the two. Mounting is type-gated by
+    // hardpoints[i].accepts (weapons need MODULE_TYPE_WEAPON, the PD MODULE_TYPE_DEFENSE).
 
-    struct Weapon* weapons[SHIP_MAX_WEAPONS];
+    struct Weapon* mounts[SHIP_MAX_HARDPOINTS];
 
-    i32            weapon_count;
-
-    i32            active_weapon_idx; // -1 = none selected
+    i32            active_weapon_idx; // hardpoint index of the firing weapon; -1 = none
 
     // ---- Unmounted weapon stash (loadout inventory) ------------------------------------
     // Weapons the ship owns but has NOT mounted on a hardpoint. The flagship-inspector Arsenal
-    // editor drags weapons between this stash (the left "available" list) and weapons[] (the
-    // hardpoints on the right). weapons[] and weapon_stash[] never hold the same pointer.
+    // editor drags weapons between this stash (the left "available" list) and mounts[] (the
+    // hardpoints on the right). mounts[] and weapon_stash[] never hold the same pointer.
 
     struct Weapon* weapon_stash[SHIP_MAX_WEAPONS];
 
@@ -325,13 +327,25 @@ struct Ship {
 
     DefenseLaser  point_defense;
 
-    // Which hardpoint (weapons[] index) the point-defense currently occupies in the Arsenal
-    // loadout editor, or -1 when it is unmounted (sitting in the defensive inventory). Only the
-    // flagship's inspector manages this; other ships leave the point-defense always-on (slot -1).
+    // Which hardpoint the point-defense currently occupies, or -1 when it is unmounted
+    // (sitting in the defensive inventory). Only the flagship's inspector manages this;
+    // other ships leave the point-defense always-on (mount -1).
 
-    i32           point_defense_slot = -1;
+    i32           point_defense_mount = -1;
 
 };
+
+// ---- Hardpoint / mount queries ---------------------------------------------------------
+
+// TRUE when the hardpoint's accepts-mask includes the given MODULE_TYPE_* kind.
+b8 hardpoint_accepts(const HardpointDef* hp, u32 module_type);
+
+// The weapon mounted on the ship's active hardpoint, or nullptr when none is selected.
+struct Weapon* ship_active_weapon(const Ship* ship);
+
+// First hardpoint accepting `module_type` that has neither a weapon nor the point-defense
+// mounted, or -1 when none is free. Used for init-time auto-mounting.
+i32 ship_first_free_hardpoint(const Ship* ship, u32 module_type);
 
 // Load a ship from a `.ship` file (path relative to the working directory). Returns FALSE
 
@@ -340,6 +354,10 @@ struct Ship {
 // origin = {0,0}. Call once during game init.
 
 b8 ship_load(Ship* out_ship, const char* path);
+
+// Select the n-th (0-based) mounted weapon in hardpoint order as the active weapon.
+// No-op when fewer than n+1 weapons are mounted.
+void ship_select_weapon_slot(Ship* ship, i32 n);
 
 // ---- Rigid-body transforms -----------------------------------------------------------
 
