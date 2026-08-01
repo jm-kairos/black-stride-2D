@@ -16,3 +16,17 @@ collider -197 -793
 collider 197 -793
 collider 197 793
 collider -197 793
+
+# Hardpoint skeleton: typed module slots pinned to art pixels.
+# Format: hardpoint <id> <accepts> <size> <x> <y> <facing_deg> <arc_deg>
+# Coords are ship-local art texels (origin = image center, +Y = nose):
+#   local_x = pixel_x - 197, local_y = 793 - pixel_y
+# facing is CCW from the nose; arc is the mount's total traverse.
+hardpoint radar_dome sensor          S    0  643   0 360
+hardpoint bow_gun    weapon          M    0  403   0 180
+hardpoint port_gun   weapon          M -122 -107  90 210
+hardpoint stbd_gun   weapon          M  122 -107 -90 210
+hardpoint dorsal_pd  defense         S    0   33   0 360
+hardpoint aft_pd     defense         S    0 -387 180 360
+hardpoint engine_bay engine          L    0 -687 180   0
+hardpoint cargo_bay  utility         M    0 -247   0   0

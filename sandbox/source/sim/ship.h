@@ -42,6 +42,58 @@
 
 #define SHIP_MAX_WEAPONS 4
 
+#define SHIP_MAX_HARDPOINTS 16
+
+// =====================================================================================
+// Hardpoint skeleton (Phase 1 of the ship-module system). Each hull authors a set of
+// typed module slots ("boxes") in SHIP-LOCAL space — the same art-texel space the
+// collider uses (1 local unit == 1 art pixel when the .ship `size` matches the PNG),
+// so a hardpoint sits at a precise pixel of the sprite. Authored per hull in the .ship
+// file:
+//   hardpoint <id> <accepts> <size> <x> <y> <facing_deg> <arc_deg>
+// where <accepts> is one or more module kinds joined by '|' (e.g. weapon|defense),
+// <size> is S/M/L, <x>,<y> are ship-local coords (+Y = nose), <facing_deg> is the
+// mount's rest direction CCW from the nose, and <arc_deg> is its total traverse arc.
+// Phase 1 only stores + renders the skeleton; mounting modules into it is Phase 2.
+// =====================================================================================
+
+// Module kinds a hardpoint can accept (bitmask).
+#define MODULE_TYPE_WEAPON  (1u << 0)
+#define MODULE_TYPE_DEFENSE (1u << 1)
+#define MODULE_TYPE_SENSOR  (1u << 2)
+#define MODULE_TYPE_ENGINE  (1u << 3)
+#define MODULE_TYPE_UTILITY (1u << 4)
+
+enum HardpointSize {
+
+    HARDPOINT_SMALL = 0,
+
+    HARDPOINT_MEDIUM,
+
+    HARDPOINT_LARGE,
+
+};
+
+struct HardpointDef {
+
+    char          id[32];      // author-facing slot name ("bow_gun", "radar_dome", ...)
+
+    u32           accepts;     // MODULE_TYPE_* bitmask of module kinds this slot takes
+
+    HardpointSize size;        // physical slot size (S/M/L); gates module size in Phase 2
+
+    bs_math::Vec2 pos_local;   // ship-local (art texel) position of the slot's center
+
+    f32           facing;      // mount rest direction (radians, CCW from nose = +Y local)
+
+    f32           arc;         // total traverse arc (radians) centered on facing
+
+};
+
+// Half-extent (ship-local units) of a hardpoint's visual/placement box.
+
+f32 hardpoint_half_extent(HardpointSize s);
+
 enum VesselFaction {
 
     VESSEL_PIRATE     = 0,
@@ -229,6 +281,12 @@ struct Ship {
     bs_math::Vec2 collider_verts[SHIP_MAX_COLLIDER_VERTS];
 
     i32           collider_count;
+
+    // ---- Hardpoint skeleton (typed module slots, authored in .ship) ----------------
+
+    HardpointDef  hardpoints[SHIP_MAX_HARDPOINTS];
+
+    i32           hardpoint_count;
 
     // ---- Weapon inventory --------------------------------------------------------------
 

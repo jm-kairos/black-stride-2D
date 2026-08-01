@@ -14,3 +14,8 @@ void draw_fleet_emblems(game_state* s);
 
 // Draw a ship's collider polygon outline (world-space corners) on LAYER_DEBUG.
 void draw_collider_outline(const Ship* ship, bs_color color, f32 thickness);
+
+// Draw the ship's hardpoint skeleton on LAYER_DEBUG: one rotated box per hardpoint at
+// its authored ship-local position, colour-coded by accepted module kind, with a tick
+// line showing the mount's rest facing.
+void draw_hardpoint_overlay(const Ship* ship, f32 thickness);

@@ -42,6 +42,42 @@ const char* ship_size_class_name(ShipSizeClass c) {
     if ((i32)c < 0 || (i32)c >= SHIP_CLASS_COUNT) return "Unknown";
     return g_class_names[c];
 }
+f32 hardpoint_half_extent(HardpointSize s) {
+    switch (s) {
+        case HARDPOINT_SMALL:  return 35.0f;
+        case HARDPOINT_MEDIUM: return 60.0f;
+        case HARDPOINT_LARGE:  return 90.0f;
+    }
+    return 35.0f;
+}
+// Parse a '|'-joined module-kind list ("weapon", "weapon|defense", ...) into a
+// MODULE_TYPE_* bitmask. Unknown kinds are skipped with a warning; returns 0 if
+// nothing matched.
+static u32 parse_module_mask(const char* list, const char* path) {
+    u32 mask = 0;
+    char buf[64];
+    strncpy(buf, list, sizeof(buf) - 1);
+    buf[sizeof(buf) - 1] = '\0';
+    char* tok = buf;
+    while (tok && *tok) {
+        char* sep = strchr(tok, '|');
+        if (sep) *sep = '\0';
+        if      (_stricmp(tok, "weapon")  == 0) mask |= MODULE_TYPE_WEAPON;
+        else if (_stricmp(tok, "defense") == 0) mask |= MODULE_TYPE_DEFENSE;
+        else if (_stricmp(tok, "sensor")  == 0) mask |= MODULE_TYPE_SENSOR;
+        else if (_stricmp(tok, "engine")  == 0) mask |= MODULE_TYPE_ENGINE;
+        else if (_stricmp(tok, "utility") == 0) mask |= MODULE_TYPE_UTILITY;
+        else BS_LOG_WARN("ship_load: unknown module kind '%s' in '%s'.", tok, path);
+        tok = sep ? sep + 1 : nullptr;
+    }
+    return mask;
+}
+static b8 parse_hardpoint_size(const char* tok, HardpointSize* out) {
+    if (_stricmp(tok, "S") == 0 || _stricmp(tok, "small")  == 0) { *out = HARDPOINT_SMALL;  return TRUE; }
+    if (_stricmp(tok, "M") == 0 || _stricmp(tok, "medium") == 0) { *out = HARDPOINT_MEDIUM; return TRUE; }
+    if (_stricmp(tok, "L") == 0 || _stricmp(tok, "large")  == 0) { *out = HARDPOINT_LARGE;  return TRUE; }
+    return FALSE;
+}
 static i32 rstrip(char* s) {
     i32 n = (i32)strlen(s);
     while (n > 0 && (s[n - 1] == '\n' || s[n - 1] == '\r' || s[n - 1] == ' ' || s[n - 1] == '\t'))
@@ -71,6 +107,7 @@ b8 ship_load(Ship* out_ship, const char* path) {
     out_ship->point_defense = DefenseLaser{};
     b8 class_authored = FALSE;
     out_ship->size_class = SHIP_CLASS_DRONE;
+    out_ship->hardpoint_count = 0;
     ship_visual_clear(&out_ship->visual);
     char line[512];
     while (fgets(line, sizeof(line), f)) {
@@ -159,6 +196,35 @@ b8 ship_load(Ship* out_ship, const char* path) {
                 out_ship->collider_verts[out_ship->collider_count++] = Vec2{ cx, cy };
             continue;
         }
+        // hardpoint <id> <accepts> <size> <x> <y> <facing_deg> <arc_deg>
+        // Ship-local coords: same art-texel space as the collider (+Y = nose).
+        char hp_id[32], hp_accepts[32], hp_size[16];
+        f32 hx, hy, hfacing, harc;
+        if (sscanf(line, "hardpoint %31s %31s %15s %f %f %f %f",
+                   hp_id, hp_accepts, hp_size, &hx, &hy, &hfacing, &harc) == 7) {
+            if (out_ship->hardpoint_count >= SHIP_MAX_HARDPOINTS) {
+                BS_LOG_WARN("ship_load: too many hardpoints in '%s' (max %d); '%s' skipped.",
+                            path, SHIP_MAX_HARDPOINTS, hp_id);
+                continue;
+            }
+            u32 mask = parse_module_mask(hp_accepts, path);
+            HardpointSize sz;
+            if (mask == 0 || !parse_hardpoint_size(hp_size, &sz)) {
+                BS_LOG_WARN("ship_load: invalid hardpoint '%s' in '%s' (accepts='%s' size='%s').",
+                            hp_id, path, hp_accepts, hp_size);
+                continue;
+            }
+            HardpointDef& hp = out_ship->hardpoints[out_ship->hardpoint_count++];
+            hp = HardpointDef{};
+            strncpy(hp.id, hp_id, sizeof(hp.id) - 1);
+            hp.id[sizeof(hp.id) - 1] = '\0';
+            hp.accepts   = mask;
+            hp.size      = sz;
+            hp.pos_local = Vec2{ hx, hy };
+            hp.facing    = hfacing * BS_DEG2RAD;
+            hp.arc       = harc * BS_DEG2RAD;
+            continue;
+        }
     }
     fclose(f);
     out_ship->visual.size_local = vec2_scale(out_ship->visual.size_local, out_ship->world_scale);
@@ -181,9 +247,9 @@ b8 ship_load(Ship* out_ship, const char* path) {
     if (!class_authored)
         out_ship->size_class = ship_size_class_from_length(hull_length);
     out_ship->motion = ship_motion_for_class(out_ship->size_class);
-    BS_LOG_INFO("ship_load: '%s' -> %s, %d verts, %d layers, %s-class (%.0f units).",
+    BS_LOG_INFO("ship_load: '%s' -> %s, %d verts, %d layers, %d hardpoints, %s-class (%.0f units).",
                 path, out_ship->vessel_name, out_ship->collider_count, out_ship->visual.layer_count,
-                ship_size_class_name(out_ship->size_class), hull_length);
+                out_ship->hardpoint_count, ship_size_class_name(out_ship->size_class), hull_length);
     return TRUE;
 }
 const char* vessel_faction_name(VesselFaction f) {

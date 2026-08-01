@@ -231,3 +231,35 @@ void draw_collider_outline(const Ship* ship, bs_color color, f32 thickness) {
     }
 }
 
+// Colour per accepted module kind (primary bit wins if a slot accepts several).
+static bs_color hardpoint_color(u32 accepts) {
+    if (accepts & MODULE_TYPE_WEAPON)  return bs_color{ 1.00f, 0.45f, 0.15f, 1.0f }; // orange
+    if (accepts & MODULE_TYPE_DEFENSE) return bs_color{ 0.20f, 0.85f, 1.00f, 1.0f }; // cyan
+    if (accepts & MODULE_TYPE_SENSOR)  return bs_color{ 0.30f, 1.00f, 0.40f, 1.0f }; // green
+    if (accepts & MODULE_TYPE_ENGINE)  return bs_color{ 1.00f, 0.90f, 0.30f, 1.0f }; // yellow
+    return bs_color{ 0.65f, 0.65f, 0.65f, 1.0f };                                    // utility/grey
+}
+
+void draw_hardpoint_overlay(const Ship* ship, f32 thickness) {
+    if (!ship || ship->hardpoint_count <= 0) return;
+    for (i32 i = 0; i < ship->hardpoint_count; ++i) {
+        const HardpointDef& hp = ship->hardpoints[i];
+        bs_color  color = hardpoint_color(hp.accepts);
+        f32       e     = hardpoint_half_extent(hp.size);
+        // Box corners in ship-local space, rotated by the mount's facing.
+        const Vec2 offsets[4] = { { -e, -e }, { e, -e }, { e, e }, { -e, e } };
+        Vec2 w[4];
+        for (i32 c = 0; c < 4; ++c) {
+            Vec2 lc = vec2_add(hp.pos_local, vec2_rotate(offsets[c], hp.facing));
+            w[c]    = vec2_add(ship->render_pos, ship_local_dir(ship, lc));
+        }
+        for (i32 c = 0; c < 4; ++c)
+            renderer_draw_line(w[c], w[(c + 1) % 4], thickness, color, LAYER_DEBUG);
+        // Facing tick: from the slot's center out past the box's forward edge.
+        Vec2 tip_local = vec2_add(hp.pos_local, vec2_rotate(Vec2{ 0.0f, e * 1.8f }, hp.facing));
+        Vec2 c0  = vec2_add(ship->render_pos, ship_local_dir(ship, hp.pos_local));
+        Vec2 tip = vec2_add(ship->render_pos, ship_local_dir(ship, tip_local));
+        renderer_draw_line(c0, tip, thickness, color, LAYER_DEBUG);
+    }
+}
+

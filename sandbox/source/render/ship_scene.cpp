@@ -217,8 +217,9 @@ void draw_ship_scene(game_state* s) {
         draw_ship_visual(ship, 1.0f, light_dir);
         draw_engine_exhaust(ship, s->render.exhaust_texture, &s->render.exhaust_glow,
                             ship_speed_ratio, 1.0f, s->elapsed_time);
-        // ---- DEBUG collider overlay.
+        // ---- DEBUG collider + hardpoint skeleton overlays.
         draw_collider_outline(ship, COLLIDER_COLOR, 1.5f);
+        draw_hardpoint_overlay(ship, 1.5f);
     }
     // ---- NPC AI ships (General Ship AI): moving, civ-coloured hulls ---------------------
     for (i32 i = 0; i < NPC_SHIP_MAX; ++i) {
