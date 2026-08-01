@@ -338,6 +338,10 @@ b8 game_init(Game* game_inst) {
     s->pending_weapon_drag_kind = 0;
     s->ui_font_kit = 1;             // default to the "Clean" kit (Chakra Petch / Inter / JetBrains Mono)
 
+    // ---- Ship module registry (immutable defs; ships mount entries by pointer) -----------
+
+    module_registry_load(&s->module_registry, "assets/modules/modules.list");
+
     s->view.alt_movement_active = FALSE;
 
     // ---- Fleet: flagship (member 0) loaded from the player hull --------------------------
@@ -378,6 +382,19 @@ b8 game_init(Game* game_inst) {
         fs.ship.point_defense.enabled = FALSE;
 
         fs.ship.point_defense_mount   = -1;
+
+        // Ship modules (Phase 4): the module registry was loaded above; the flagship starts with
+        // its sensor arrays UNMOUNTED in the module rack, like the cannon and point-defense. Sensors
+        // run on the hull baseline until a module is installed on a sensor hardpoint.
+        {
+            const ModuleDef* mods[2] = {
+                module_registry_find(&s->module_registry, "surveyor_mk1"),
+                module_registry_find(&s->module_registry, "surveyor_mk2"),
+            };
+            for (i32 m = 0; m < 2; ++m)
+                if (mods[m] && fs.ship.module_stash_count < SHIP_MAX_MODULES)
+                    fs.ship.module_stash[fs.ship.module_stash_count++] = mods[m];
+        }
 
     }
 
@@ -816,6 +833,33 @@ static void ship_rehome_weapons(Ship& sh) {
     }
 }
 
+// Module-rack twins of the weapon-stash helpers: modules move between module_stash[] (the
+// left "Ship modules" list) and module_mounts[] (hardpoints). Every mount/unmount is
+// followed by ship_recompute_stats at the call site.
+static void ship_module_stash_append(Ship& sh, const ModuleDef* m) {
+    if (!m) return;
+    if (sh.module_stash_count < SHIP_MAX_MODULES)
+        sh.module_stash[sh.module_stash_count++] = m;
+}
+
+static void ship_module_stash_remove_at(Ship& sh, i32 k) {
+    if (k < 0 || k >= sh.module_stash_count) return;
+    for (i32 i = k; i < sh.module_stash_count - 1; ++i)
+        sh.module_stash[i] = sh.module_stash[i + 1];
+    sh.module_stash[--sh.module_stash_count] = nullptr;
+}
+
+// Evict whatever module occupies hardpoint dst back into the module rack. TRUE when the
+// slot ends up module-free (also when it already was); FALSE when the rack is full.
+static b8 ship_evict_module(Ship& sh, i32 dst) {
+    if (dst < 0 || dst >= sh.hardpoint_count || !sh.module_mounts[dst]) return TRUE;
+    if (sh.module_stash_count >= SHIP_MAX_MODULES) return FALSE;
+    sh.module_stash[sh.module_stash_count++] = sh.module_mounts[dst];
+    sh.module_mounts[dst] = nullptr;
+    ship_recompute_stats(&sh);
+    return TRUE;
+}
+
 // Short label for a hardpoint's accepts-mask, used by Arsenal slot tooltips.
 static const char* hardpoint_kind_label(u32 accepts) {
     if ((accepts & MODULE_TYPE_WEAPON) && (accepts & MODULE_TYPE_DEFENSE)) return "weapon/defense";
@@ -1040,6 +1084,35 @@ static void game_push_hud(game_state* s, f32 dt) {
             } else {
                 hud.arsenal_def_count = 0;
             }
+            // Ship modules (Phase 4): the module rack, rendered as FIXED bays like the offensive
+            // list so placeholders persist. Occupied bays are drag sources ("mod:K"); tooltips
+            // carry the module's kind/size and its sensor effect.
+            i32 mv = 0;
+            for (i32 k = 0; k < SHIP_MAX_MODULES && mv < BS_RML_WEAPON_MAX; ++k, ++mv) {
+                bs_rml_weapon_line& row = hud.arsenal_mod[mv];
+                const ModuleDef* m = (k < fs.module_stash_count) ? fs.module_stash[k] : nullptr;
+                if (m) {
+                    if (m->type == MODULE_TYPE_SENSOR)
+                        snprintf(row.text, sizeof(row.text), "%s \xE2\x80\x94 sensor %s, range x%.2f",
+                                 m->name, hardpoint_size_name(m->size), m->sensor_mult[1]);
+                    else
+                        snprintf(row.text, sizeof(row.text), "%s \xE2\x80\x94 %s module (%s)",
+                                 m->name, hardpoint_kind_label(m->type), hardpoint_size_name(m->size));
+                    snprintf(row.glyph,  sizeof(row.glyph),  "%s", m->glyph);
+                    snprintf(row.action, sizeof(row.action), "mod:%d", k);              // dragstart source
+                    row.drop[0]  = '\0';
+                    row.empty    = FALSE;
+                    row.selected = FALSE;
+                } else {
+                    snprintf(row.text,  sizeof(row.text),  "Empty module rack");
+                    snprintf(row.glyph, sizeof(row.glyph), "+");
+                    row.action[0] = '\0';
+                    row.drop[0]   = '\0';
+                    row.empty      = TRUE;
+                    row.selected   = FALSE;
+                }
+            }
+            hud.arsenal_mod_count = mv;
             // RIGHT: the ship's hardpoint skeleton, one box per hardpoint. A slot may hold an
             // offensive weapon OR the point-defense, gated by the hardpoint's accepts-mask.
             // Occupied slots are drop targets AND drag sources; empty slots are inert "+" drop
@@ -1063,6 +1136,13 @@ static void game_push_hud(game_state* s, f32 dt) {
                     snprintf(row.action, sizeof(row.action), "hpd:%d", i);             // dragstart source (point-defense)
                     row.empty    = FALSE;
                     row.selected = fs.point_defense.enabled ? TRUE : FALSE;
+                } else if (fs.module_mounts[i]) {
+                    const ModuleDef* m = fs.module_mounts[i];
+                    snprintf(row.text,   sizeof(row.text),   "%s \xE2\x80\x94 %s", m->name, hpd.id);
+                    snprintf(row.glyph,  sizeof(row.glyph),  "%s", m->glyph);
+                    snprintf(row.action, sizeof(row.action), "hpm:%d", i);             // dragstart source (module)
+                    row.empty    = FALSE;
+                    row.selected = FALSE;
                 } else {
                     snprintf(row.text,  sizeof(row.text),  "%s \xE2\x80\x94 %s slot",
                              hpd.id, hardpoint_kind_label(hpd.accepts));
@@ -1486,9 +1566,11 @@ static void game_push_hud(game_state* s, f32 dt) {
         }
         // Arsenal drag source armed on dragstart. "inv:K" = an unmounted weapon in the loadout
         // stash; "hp:M" = a weapon mounted on hardpoint M; "defdrag" = the point-defense from the
-        // defensive inventory; "hpd:M" = the point-defense mounted on hardpoint M. The following
+        // defensive inventory; "hpd:M" = the point-defense mounted on hardpoint M; "mod:K" = a ship
+        // module in the module rack; "hpm:M" = a module installed on hardpoint M. The following
         // drop reads this armed source (kind): "slot:M" onto a hardpoint, "stash" onto the offensive
-        // inventory (unmount weapon), or "defstash" onto the defensive inventory (unmount PD).
+        // inventory (unmount weapon), "defstash" onto the defensive inventory (unmount PD), or
+        // "modstash" onto the module rack (uninstall module).
         if (strncmp(action, "inv:", 4) == 0) {
             s->pending_weapon_drag      = atoi(action + 4);
             s->pending_weapon_drag_kind = 1;   // unmounted offensive weapon (stash)
@@ -1499,9 +1581,19 @@ static void game_push_hud(game_state* s, f32 dt) {
             s->pending_weapon_drag_kind = 3;   // mounted point-defense
             continue;
         }
+        if (strncmp(action, "hpm:", 4) == 0) {
+            s->pending_weapon_drag      = atoi(action + 4);
+            s->pending_weapon_drag_kind = 5;   // installed ship module
+            continue;
+        }
         if (strncmp(action, "hp:", 3) == 0) {
             s->pending_weapon_drag      = atoi(action + 3);
             s->pending_weapon_drag_kind = 0;   // mounted offensive weapon
+            continue;
+        }
+        if (strncmp(action, "mod:", 4) == 0) {
+            s->pending_weapon_drag      = atoi(action + 4);
+            s->pending_weapon_drag_kind = 4;   // unmounted ship module (rack)
             continue;
         }
         if (strcmp(action, "defdrag") == 0) {
@@ -1527,6 +1619,9 @@ static void game_push_hud(game_state* s, f32 dt) {
                     if (!dst_takes_weapon) {
                         action_log_push(s, "'%s' is a %s slot - weapons don't fit.",
                                         dhp.id, hardpoint_kind_label(dhp.accepts));
+                    } else if (!ship_evict_module(fs, dst)) {
+                        action_log_push(s, "Module rack full - can't displace '%s'.",
+                                        fs.module_mounts[dst]->name);
                     } else {
                         Weapon* mounting = fs.weapon_stash[src];
                         if (fs.mounts[dst]) {
@@ -1568,6 +1663,9 @@ static void game_push_hud(game_state* s, f32 dt) {
                             ship_rehome_weapons(fs);
                             action_log_push(s, "Weapon moved to '%s'.", dhp.id);
                         }
+                    } else if (!ship_evict_module(fs, dst)) {
+                        action_log_push(s, "Module rack full - can't displace '%s'.",
+                                        fs.module_mounts[dst]->name);
                     } else {
                         fs.mounts[dst] = fs.mounts[src];                  // dst empty -> move
                         fs.mounts[src] = nullptr;
@@ -1580,6 +1678,9 @@ static void game_push_hud(game_state* s, f32 dt) {
                     if (!dst_takes_defense) {
                         action_log_push(s, "'%s' is a %s slot - the point-defense doesn't fit.",
                                         dhp.id, hardpoint_kind_label(dhp.accepts));
+                    } else if (!ship_evict_module(fs, dst)) {
+                        action_log_push(s, "Module rack full - can't displace '%s'.",
+                                        fs.module_mounts[dst]->name);
                     } else {
                         if (fs.mounts[dst]) {
                             ship_stash_append(fs, fs.mounts[dst]);        // occupant weapon -> offensive stash
@@ -1599,6 +1700,9 @@ static void game_push_hud(game_state* s, f32 dt) {
                                !hardpoint_accepts(&fs.hardpoints[src], MODULE_TYPE_WEAPON)) {
                         action_log_push(s, "Can't swap: '%s' doesn't take weapons.",
                                         fs.hardpoints[src].id);
+                    } else if (!ship_evict_module(fs, dst)) {
+                        action_log_push(s, "Module rack full - can't displace '%s'.",
+                                        fs.module_mounts[dst]->name);
                     } else {
                         if (fs.mounts[dst]) {
                             fs.mounts[src] = fs.mounts[dst];              // dst holds a weapon -> exchange places
@@ -1608,6 +1712,66 @@ static void game_push_hud(game_state* s, f32 dt) {
                         fs.point_defense_mount = dst;
                         ship_rehome_weapons(fs);
                         action_log_push(s, "Point Defense Laser moved to '%s'.", dhp.id);
+                    }
+                } else if (kind == 4 && src >= 0 && src < fs.module_stash_count) {
+                    // Install a rack module onto hardpoint dst; evict any occupant (weapon/PD/module).
+                    const ModuleDef* m = fs.module_stash[src];
+                    if (!hardpoint_fits_module(&dhp, m)) {
+                        if (!(dhp.accepts & m->type))
+                            action_log_push(s, "'%s' is a %s slot - %s modules don't fit.",
+                                            dhp.id, hardpoint_kind_label(dhp.accepts),
+                                            hardpoint_kind_label(m->type));
+                        else
+                            action_log_push(s, "'%s' is too small for %s (needs %s).",
+                                            dhp.id, m->name, hardpoint_size_name(m->size));
+                    } else if (!ship_evict_module(fs, dst)) {
+                        action_log_push(s, "Module rack full - can't displace '%s'.",
+                                        fs.module_mounts[dst]->name);
+                    } else {
+                        if (fs.mounts[dst]) {
+                            ship_stash_append(fs, fs.mounts[dst]);        // occupant weapon -> offensive stash
+                            fs.mounts[dst] = nullptr;
+                            ship_rehome_weapons(fs);
+                        } else if (fs.point_defense_mount == dst) {
+                            fs.point_defense_mount   = -1;                // occupant PD -> defensive inventory
+                            fs.point_defense.enabled = FALSE;
+                        }
+                        fs.module_mounts[dst] = m;
+                        ship_module_stash_remove_at(fs, src);
+                        ship_recompute_stats(&fs);
+                        action_log_push(s, "%s installed in '%s'.", m->name, dhp.id);
+                    }
+                } else if (kind == 5 && src >= 0 && src < fs.hardpoint_count && src != dst &&
+                           fs.module_mounts[src]) {
+                    // Move an installed module from hardpoint src onto hardpoint dst.
+                    const ModuleDef* m = fs.module_mounts[src];
+                    if (!hardpoint_fits_module(&dhp, m)) {
+                        if (!(dhp.accepts & m->type))
+                            action_log_push(s, "'%s' is a %s slot - %s modules don't fit.",
+                                            dhp.id, hardpoint_kind_label(dhp.accepts),
+                                            hardpoint_kind_label(m->type));
+                        else
+                            action_log_push(s, "'%s' is too small for %s (needs %s).",
+                                            dhp.id, m->name, hardpoint_size_name(m->size));
+                    } else if (fs.mounts[dst] || fs.point_defense_mount == dst) {
+                        action_log_push(s, "'%s' is occupied - clear it first.", dhp.id);
+                    } else if (fs.module_mounts[dst]) {
+                        // dst holds another module -> swap, but only if it fits back on src.
+                        if (!hardpoint_fits_module(&fs.hardpoints[src], fs.module_mounts[dst])) {
+                            action_log_push(s, "Can't swap: '%s' doesn't fit '%s'.",
+                                            fs.module_mounts[dst]->name, fs.hardpoints[src].id);
+                        } else {
+                            const ModuleDef* tmp  = fs.module_mounts[src];
+                            fs.module_mounts[src] = fs.module_mounts[dst];
+                            fs.module_mounts[dst] = tmp;
+                            ship_recompute_stats(&fs);
+                            action_log_push(s, "%s moved to '%s'.", m->name, dhp.id);
+                        }
+                    } else {
+                        fs.module_mounts[dst] = m;                        // dst empty -> move
+                        fs.module_mounts[src] = nullptr;
+                        ship_recompute_stats(&fs);
+                        action_log_push(s, "%s moved to '%s'.", m->name, dhp.id);
                     }
                 }
             }
@@ -1642,6 +1806,26 @@ static void game_push_hud(game_state* s, f32 dt) {
                 ship_rehome_weapons(fs);
                 action_log_push(s, "Point Defense Laser returned to inventory (was '%s').",
                                 fs.hardpoints[slot].id);
+            }
+            s->pending_weapon_drag = -1;
+            continue;
+        }
+        // Arsenal drop onto the module rack (left list): UNINSTALL a mounted module. Any other
+        // source dropped here is a no-op.
+        if (strcmp(action, "modstash") == 0) {
+            Ship& fs = s->player_ship();
+            i32 src  = s->pending_weapon_drag;
+            i32 kind = s->pending_weapon_drag_kind;
+            if (kind == 5 && src >= 0 && src < fs.hardpoint_count && fs.module_mounts[src]) {
+                const ModuleDef* m = fs.module_mounts[src];
+                if (fs.module_stash_count >= SHIP_MAX_MODULES) {
+                    action_log_push(s, "Module rack full - can't remove '%s'.", m->name);
+                } else {
+                    fs.module_mounts[src] = nullptr;
+                    ship_module_stash_append(fs, m);
+                    ship_recompute_stats(&fs);
+                    action_log_push(s, "%s returned to the module rack.", m->name);
+                }
             }
             s->pending_weapon_drag = -1;
             continue;

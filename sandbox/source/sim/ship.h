@@ -44,6 +44,8 @@
 
 #define SHIP_MAX_HARDPOINTS 16
 
+#define SHIP_MAX_MODULES 4   // unmounted module rack (loadout inventory) capacity
+
 // =====================================================================================
 // Hardpoint skeleton (Phase 1 of the ship-module system). Each hull authors a set of
 // typed module slots ("boxes") in SHIP-LOCAL space — the same art-texel space the
@@ -93,6 +95,15 @@ struct HardpointDef {
 // Half-extent (ship-local units) of a hardpoint's visual/placement box.
 
 f32 hardpoint_half_extent(HardpointSize s);
+
+// Display letter for a hardpoint/module size ("S"/"M"/"L").
+
+const char* hardpoint_size_name(HardpointSize s);
+
+// Data-driven ship module definition (Phase 4; full declaration in sim/module.h). Ships
+// reference immutable registry defs by pointer — modules carry no per-instance state.
+
+struct ModuleDef;
 
 enum VesselFaction {
 
@@ -298,6 +309,22 @@ struct Ship {
 
     i32            active_weapon_idx; // hardpoint index of the firing weapon; -1 = none
 
+    // ---- Mounted ship modules (Phase 4; one per hardpoint slot) -------------------------
+    // module_mounts[i] is the registry ModuleDef installed in hardpoints[i] (nullptr =
+    // empty). A hardpoint holds at most ONE occupant across mounts[]/point_defense_mount/
+    // module_mounts[]. Installing/removing a module must be followed by
+    // ship_recompute_stats() so composed stats (sensors) stay in sync.
+
+    const struct ModuleDef* module_mounts[SHIP_MAX_HARDPOINTS];
+
+    // ---- Unmounted module rack (loadout inventory) --------------------------------------
+    // Modules the ship owns but has NOT installed; the Arsenal inspector drags them between
+    // this rack and module_mounts[].
+
+    const struct ModuleDef* module_stash[SHIP_MAX_MODULES];
+
+    i32                     module_stash_count;
+
     // ---- Unmounted weapon stash (loadout inventory) ------------------------------------
     // Weapons the ship owns but has NOT mounted on a hardpoint. The flagship-inspector Arsenal
     // editor drags weapons between this stash (the left "available" list) and mounts[] (the
@@ -320,8 +347,13 @@ struct Ship {
     f32           radiation_emission;
 
     // ---- Sensor suite (three concentric detection layers) ----------------------------
+    // `sensors` is the EFFECTIVE suite every consumer reads (discovery, reveal radii,
+    // point-defense range). It is DERIVED: ship_recompute_stats() re-composes it from the
+    // hull baseline `sensors_base` x mounted sensor modules. Tune the baseline, not it.
 
     SensorSuite   sensors;
+
+    SensorSuite   sensors_base;
 
     // ---- Point-defense laser (auto-targets incoming hostile projectiles) -------------
 
@@ -343,9 +375,18 @@ b8 hardpoint_accepts(const HardpointDef* hp, u32 module_type);
 // The weapon mounted on the ship's active hardpoint, or nullptr when none is selected.
 struct Weapon* ship_active_weapon(const Ship* ship);
 
-// First hardpoint accepting `module_type` that has neither a weapon nor the point-defense
-// mounted, or -1 when none is free. Used for init-time auto-mounting.
+// First hardpoint accepting `module_type` with no occupant (no weapon, point-defense, or
+// module mounted), or -1 when none is free. Used for init-time auto-mounting.
 i32 ship_first_free_hardpoint(const Ship* ship, u32 module_type);
+
+// TRUE when the module's kind is accepted by the hardpoint AND its physical size fits
+// (a module mounts on slots of its own size or larger).
+b8 hardpoint_fits_module(const HardpointDef* hp, const struct ModuleDef* def);
+
+// Re-derive composed ship stats from the hull baseline + mounted modules: effective
+// `sensors` = sensors_base with each mounted sensor module's layer multipliers applied.
+// Call after any module mount/unmount (ship_load calls it itself).
+void ship_recompute_stats(Ship* ship);
 
 // ---- Per-hardpoint fire origins + traverse arcs (Phase 3) -------------------------------
 

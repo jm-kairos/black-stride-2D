@@ -189,7 +189,8 @@ typedef struct bs_rml_hud_state
     // window while it is open. The single Arsenal tab is a two-pane loadout editor:
     //   - The LEFT pane lists UNMOUNTED systems the flagship owns: arsenal_inv = offensive weapons
     //     in the loadout stash (draggable, action "inv:K"); arsenal_def = defensive systems
-    //     (scaffold). The left offensive list is also an unmount drop target ("stash").
+    //     (scaffold); arsenal_mod = ship modules in the module rack (draggable, action "mod:K").
+    //     Each left list is also an unmount drop target ("stash" / "defstash" / "modstash").
     //   - The RIGHT pane (arsenal_hp) is the ship's hardpoints: one row per hardpoint slot, each a
     //     drop target (drop "slot:M") and, when occupied, a drag source (action "hp:M").
     // A weapon is shown in EITHER the inventory OR a hardpoint, never both. Rows reuse
@@ -201,6 +202,8 @@ typedef struct bs_rml_hud_state
     bs_rml_weapon_line arsenal_inv[BS_RML_WEAPON_MAX];
     i32                arsenal_def_count;     // valid rows in arsenal_def[0..count-1] (defensive systems)
     bs_rml_weapon_line arsenal_def[BS_RML_WEAPON_MAX];
+    i32                arsenal_mod_count;     // valid rows in arsenal_mod[0..count-1] (unmounted ship modules)
+    bs_rml_weapon_line arsenal_mod[BS_RML_WEAPON_MAX];
     i32                arsenal_hp_count;      // valid rows in arsenal_hp[0..count-1] (ship hardpoints)
     bs_rml_weapon_line arsenal_hp[BS_RML_HARDPOINT_MAX];
 

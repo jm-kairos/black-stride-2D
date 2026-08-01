@@ -4310,6 +4310,7 @@ struct BsRmlHudModel
     Rml::String                 insp_ship_name;
     Rml::Vector<BsRmlHudWeapon> arsenal_inv;
     Rml::Vector<BsRmlHudWeapon> arsenal_def;
+    Rml::Vector<BsRmlHudWeapon> arsenal_mod;
     Rml::Vector<BsRmlHudWeapon> arsenal_hp;
 
     int                         ui_kit = 1; // 0 = Neon, 1 = Clean, 2 = Minimal (drives body class)
@@ -4456,6 +4457,7 @@ b8 bs_rml_hud_init(const char* rml_path)
     c.Bind("insp_ship_name",        &g_hud_model.insp_ship_name);
     c.Bind("arsenal_inv",           &g_hud_model.arsenal_inv);
     c.Bind("arsenal_def",           &g_hud_model.arsenal_def);
+    c.Bind("arsenal_mod",           &g_hud_model.arsenal_mod);
     c.Bind("arsenal_hp",            &g_hud_model.arsenal_hp);
 
     c.Bind("ui_kit", &g_hud_model.ui_kit);
@@ -4657,6 +4659,25 @@ void bs_rml_hud_update(const bs_rml_hud_state* s)
                           sizeof(s->arsenal_def[i].drop));
             g_hud_model.arsenal_def[(size_t)i].selected = s->arsenal_def[i].selected ? true : false;
             g_hud_model.arsenal_def[(size_t)i].empty    = s->arsenal_def[i].empty ? true : false;
+        }
+    }
+    {
+        i32 n = s->arsenal_mod_count;
+        if (n < 0) n = 0;
+        if (n > BS_RML_WEAPON_MAX) n = BS_RML_WEAPON_MAX;
+        g_hud_model.arsenal_mod.resize((size_t)n);
+        for (i32 i = 0; i < n; ++i)
+        {
+            bs_rml_assign(g_hud_model.arsenal_mod[(size_t)i].text, s->arsenal_mod[i].text,
+                          sizeof(s->arsenal_mod[i].text));
+            bs_rml_assign(g_hud_model.arsenal_mod[(size_t)i].glyph, s->arsenal_mod[i].glyph,
+                          sizeof(s->arsenal_mod[i].glyph));
+            bs_rml_assign(g_hud_model.arsenal_mod[(size_t)i].action, s->arsenal_mod[i].action,
+                          sizeof(s->arsenal_mod[i].action));
+            bs_rml_assign(g_hud_model.arsenal_mod[(size_t)i].drop, s->arsenal_mod[i].drop,
+                          sizeof(s->arsenal_mod[i].drop));
+            g_hud_model.arsenal_mod[(size_t)i].selected = s->arsenal_mod[i].selected ? true : false;
+            g_hud_model.arsenal_mod[(size_t)i].empty    = s->arsenal_mod[i].empty ? true : false;
         }
     }
     {

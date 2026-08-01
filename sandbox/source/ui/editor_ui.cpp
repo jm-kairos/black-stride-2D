@@ -370,8 +370,10 @@ void build_editor_panel(game_state* s) {
         bool show_mb = (bool)s->show_metaball_ui;
         bs_ui_slider_float("Ship sensor range (units)", &s->ship_sensor_range, 0.0f, 100000.0f);
         // ---- Three-layer sensor overlay radii (Layer 0 < Layer 1 < Layer 2, press V) --------
+        // The sliders edit the hull BASELINE (sensors_base); the effective suite is re-derived
+        // per ship by ship_recompute_stats so mounted sensor modules keep their multipliers.
         {
-            SensorSuite& sen = s->player_ship().sensors;
+            SensorSuite& sen = s->player_ship().sensors_base;
             const f32 GAP = 1000.0f; // enforced minimum separation between adjacent layers
             f32 l0 = sen.layer0_radius, l1 = sen.layer1_radius, l2 = sen.layer2_radius;
             b8 changed = FALSE;
@@ -384,9 +386,13 @@ void build_editor_panel(game_state* s) {
                 if (l1 < l0 + GAP) l1 = l0 + GAP;
                 if (l2 < l1 + GAP) l2 = l1 + GAP;
                 sen.layer0_radius = l0; sen.layer1_radius = l1; sen.layer2_radius = l2;
-                // Propagate to the whole fleet so fleet-wide detection matches the drawn rings.
+                // Propagate the baseline to the whole fleet, then recompose each ship's
+                // effective sensors from baseline x its own mounted modules.
                 Fleet& fleet = s->fleet_state.fleet;
-                for (i32 i = 0; i < fleet.count(); ++i) fleet.at(i).ship.sensors = sen;
+                for (i32 i = 0; i < fleet.count(); ++i) {
+                    fleet.at(i).ship.sensors_base = sen;
+                    ship_recompute_stats(&fleet.at(i).ship);
+                }
             }
         }
         // Unbounded Layer 2: distance (world units) at which distant contact blips fade to the dim floor.

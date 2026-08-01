@@ -3,6 +3,7 @@
 #define _CRT_SECURE_NO_WARNINGS
 #include "sim/ship.h"
 #include "sim/weapon.h"   // Weapon::ready (bearing-weapon selection)
+#include "sim/module.h"   // ModuleDef (fit test + sensor stat composition)
 #include <core/logger.h>
 #include <renderer/renderer.h>
 #include <stdio.h>
@@ -51,6 +52,14 @@ f32 hardpoint_half_extent(HardpointSize s) {
     }
     return 35.0f;
 }
+const char* hardpoint_size_name(HardpointSize s) {
+    switch (s) {
+        case HARDPOINT_SMALL:  return "S";
+        case HARDPOINT_MEDIUM: return "M";
+        case HARDPOINT_LARGE:  return "L";
+    }
+    return "?";
+}
 b8 hardpoint_accepts(const HardpointDef* hp, u32 module_type) {
     return (hp && (hp->accepts & module_type)) ? TRUE : FALSE;
 }
@@ -65,9 +74,28 @@ i32 ship_first_free_hardpoint(const Ship* ship, u32 module_type) {
         if (!(ship->hardpoints[i].accepts & module_type)) continue;
         if (ship->mounts[i]) continue;
         if (ship->point_defense_mount == i) continue;
+        if (ship->module_mounts[i]) continue;
         return i;
     }
     return -1;
+}
+b8 hardpoint_fits_module(const HardpointDef* hp, const ModuleDef* def) {
+    if (!hp || !def) return FALSE;
+    if (!(hp->accepts & def->type)) return FALSE;
+    return (def->size <= hp->size) ? TRUE : FALSE;
+}
+void ship_recompute_stats(Ship* ship) {
+    if (!ship) return;
+    // Effective sensors = hull baseline x the product of every mounted sensor module's
+    // per-layer multipliers (multiple arrays compose multiplicatively).
+    ship->sensors = ship->sensors_base;
+    for (i32 i = 0; i < ship->hardpoint_count; ++i) {
+        const ModuleDef* m = ship->module_mounts[i];
+        if (!m || m->type != MODULE_TYPE_SENSOR) continue;
+        ship->sensors.layer0_radius *= m->sensor_mult[0];
+        ship->sensors.layer1_radius *= m->sensor_mult[1];
+        ship->sensors.layer2_radius *= m->sensor_mult[2];
+    }
 }
 void ship_select_weapon_slot(Ship* ship, i32 n) {
     if (!ship || n < 0) return;
@@ -164,13 +192,16 @@ b8 ship_load(Ship* out_ship, const char* path) {
     out_ship->size_local   = Vec2{ 0.0f, 0.0f };
     out_ship->weapon_fire_offset_local = Vec2{ 0.0f, 0.0f };
     out_ship->sensors      = SensorSuite{};
+    out_ship->sensors_base = SensorSuite{};
     out_ship->point_defense = DefenseLaser{};
     b8 class_authored = FALSE;
     out_ship->size_class = SHIP_CLASS_DRONE;
     out_ship->hardpoint_count = 0;
     for (i32 i = 0; i < SHIP_MAX_HARDPOINTS; ++i) out_ship->mounts[i] = nullptr;
+    for (i32 i = 0; i < SHIP_MAX_HARDPOINTS; ++i) out_ship->module_mounts[i] = nullptr;
     out_ship->active_weapon_idx    = -1;
     out_ship->weapon_stash_count   = 0;
+    out_ship->module_stash_count   = 0;
     out_ship->point_defense_mount  = -1;
     ship_visual_clear(&out_ship->visual);
     char line[512];
@@ -324,6 +355,7 @@ b8 ship_load(Ship* out_ship, const char* path) {
     if (!class_authored)
         out_ship->size_class = ship_size_class_from_length(hull_length);
     out_ship->motion = ship_motion_for_class(out_ship->size_class);
+    ship_recompute_stats(out_ship); // sensors = baseline (no modules mounted at load)
     BS_LOG_INFO("ship_load: '%s' -> %s, %d verts, %d layers, %d hardpoints, %s-class (%.0f units).",
                 path, out_ship->vessel_name, out_ship->collider_count, out_ship->visual.layer_count,
                 out_ship->hardpoint_count, ship_size_class_name(out_ship->size_class), hull_length);

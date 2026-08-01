@@ -16,6 +16,8 @@
 
 #include "sim/ship.h"
 
+#include "sim/module.h"
+
 
 
 #include "sim/projectile.h"
@@ -3398,7 +3400,13 @@ struct game_state {
 
 
 
-    i32              pending_weapon_drag_kind; // Arsenal drag source kind: 0=mounted weapon (mounts[]), 1=stash weapon (weapon_stash[]), 2=point-defense from inventory, 3=mounted point-defense
+    i32              pending_weapon_drag_kind; // Arsenal drag source kind: 0=mounted weapon (mounts[]), 1=stash weapon (weapon_stash[]), 2=point-defense from inventory, 3=mounted point-defense, 4=rack module (module_stash[]), 5=mounted module (module_mounts[])
+
+
+
+    // ---- Ship module registry (immutable defs loaded once from assets/modules) -------------------
+
+    ModuleRegistry   module_registry;         // shared ModuleDef pool; ships mount entries by pointer
 
 
 

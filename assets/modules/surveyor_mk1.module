@@ -1,0 +1,8 @@
+# Basic sensor array. Installed on a sensor hardpoint it multiplies the hull's
+# baseline detection radii per layer (layer0 layer1 layer2).
+id surveyor_mk1
+name "Surveyor Array Mk I"
+type sensor
+size S
+glyph S1
+sensor_mult 1.15 1.35 1.60

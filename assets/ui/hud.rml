@@ -119,6 +119,15 @@
                         <div class="weapon-tip">{{ w.text }}</div>
                     </div>
                 </div>
+                <div class="insp-section-hdr">Ship modules</div>
+                <div class="weapon-queue inv-drop" data-event-dragdrop="hud_action('modstash')">
+                    <div class="weapon-symbol" data-for="w : arsenal_mod"
+                         data-class-empty="w.empty"
+                         data-event-dragstart="hud_action(w.action)">
+                        <span class="weapon-glyph">{{ w.glyph }}</span>
+                        <div class="weapon-tip">{{ w.text }}</div>
+                    </div>
+                </div>
             </div>
             <div class="arsenal-right">
                 <div class="ship-preview">
