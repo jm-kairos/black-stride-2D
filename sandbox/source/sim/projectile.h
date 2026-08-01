@@ -5,8 +5,14 @@
 #include <renderer/renderer_types.h>
 #include "sim/ship.h"
 #define MAX_PROJECTILES 256
+// Projectile kinds: plain shells fly straight; missiles are steered toward hostile combat
+// entities each tick by combat_arena_steer_missiles (flight model in game_state::missile_tuning);
+// flak shells proximity-detonate against hostile ordnance (game_state::flak_tuning) and never
+// damage ships.
+enum ProjectileKind : u8 { PROJ_SHELL = 0, PROJ_MISSILE = 1, PROJ_FLAK = 2 };
 struct Projectile {
     b8            active;     // FALSE => free slot
+    u8            kind;       // PROJ_SHELL / PROJ_MISSILE
     bs_math::HierPos2 position;   // world-space (hierarchical grid cell + local offset)
     bs_math::Vec2 velocity;   // world-space units/s
     f32           lifetime;   // seconds remaining
@@ -31,7 +37,12 @@ struct ProjectileSystem {
     // kill attribution; `owner` remains the legacy binary faction for visuals/back-compat.
     b8 spawn(bs_math::HierPos2 origin, bs_math::Vec2 velocity,
              f32 lifetime, f32 radius, bs_color color, VesselFaction owner, i16 faction_id,
-             f32 radiation_emission = 0.0f, f32 hp = 1.0f);
+             f32 radiation_emission = 0.0f, f32 hp = 1.0f, u8 kind = PROJ_SHELL);
+    // spawn a guided missile (kind = PROJ_MISSILE): same pool, fat HP so point-defense needs a
+    // dwell to kill it. Steering happens in the combat-arena pass, not here.
+    b8 spawn_missile(bs_math::HierPos2 origin, bs_math::Vec2 velocity,
+                     f32 lifetime, f32 radius, bs_color color, VesselFaction owner, i16 faction_id,
+                     f32 radiation_emission, f32 hp);
     // advance all active projectiles; retire those whose lifetime expired
     void update(f32 dt);
     // submit draw commands for all active projectiles. Positions are transformed into render

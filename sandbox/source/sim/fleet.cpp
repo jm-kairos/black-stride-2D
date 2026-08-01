@@ -153,7 +153,10 @@ void FleetShip::update_attack(game_state* s, f32 dt) {
                     }
                 }
                 w->owner_faction_id = sh->faction_id;   // stamp attacker faction for hit attribution
-                w->fire(fire_origin, aim_dir, fl->velocity, &s->projectiles);
+                // Capacitor gate: spend only when the weapon is actually ready to fire
+                // (fire() itself no-ops on cooldown, which must not drain the bank).
+                if (w->ready() && ship_try_spend_cap(sh, w->cap_cost()))
+                    w->fire(fire_origin, aim_dir, fl->velocity, &s->projectiles);
             }
         }
     }

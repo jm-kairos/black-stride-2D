@@ -4,7 +4,7 @@
     <link type="text/rcss" href="hud.rcss"/>
     <title>Black Stride HUD</title>
 </head>
-<body data-model="hud" data-class-kit-neon="ui_kit == 0" data-class-kit-clean="ui_kit == 1" data-class-kit-minimal="ui_kit == 2">
+<body data-model="hud" data-class-kit-neon="ui_kit == 0" data-class-kit-clean="ui_kit == 1" data-class-kit-minimal="ui_kit == 2" data-class-kit-frontier="ui_kit == 3">
 
     <!-- Navigation readout (top-right) -->
     <div id="nav" class="hud-panel" data-if="nav_visible">
@@ -54,11 +54,14 @@
         <div class="fleet-stat">Speed: {{ fleet_speed }}</div>
         <div class="fleet-stat">Heading: {{ fleet_heading }}</div>
         <div class="fleet-stat">Health: {{ fleet_health }}</div>
+        <div class="fleet-stat">{{ fleet_cap_label }}</div>
+        <div class="cap-gauge"><div class="cap-gauge-fill" data-style-width="fleet_cap_w"></div></div>
+        <div class="fleet-pd" data-class-warn="fleet_pd_warn">{{ fleet_pd_label }}</div>
         <div class="rule"></div>
-        <div class="fleet-hdr">WEAPONS</div>
-        <div class="weapon-row" data-for="w : fleet_weapon"
-             data-class-selected="w.selected" data-class-empty="w.empty"
-             data-event-click="hud_action(w.action)">{{ w.text }}</div>
+        <div class="fleet-hdr">FIRE GROUPS</div>
+        <div class="weapon-row" data-for="g : fleet_group"
+             data-class-selected="g.selected" data-class-dim="g.empty"
+             data-event-click="hud_action(g.action)">{{ g.text }}</div>
         <div class="rule"></div>
         <div class="fleet-mode" data-class-disabled="!fleet_mode_enabled"
              data-event-click="hud_action('fleet_mode')">{{ fleet_mode_label }}</div>
@@ -106,7 +109,8 @@
                  data-class-empty="w.empty"
                  data-event-dragstart="hud_action(w.action)"
                  data-event-dragend="hud_action('dragend')">
-                <span class="weapon-glyph">{{ w.glyph }}</span>
+                <img class="weapon-icon" data-if="w.icon != ''" data-attr-sprite="w.icon"/>
+                <span class="weapon-glyph" data-if="w.icon == ''">{{ w.glyph }}</span>
                 <div class="weapon-tip">{{ w.text }}</div>
             </div>
         </div>
@@ -116,7 +120,8 @@
                  data-class-selected="w.selected" data-class-empty="w.empty"
                  data-event-dragstart="hud_action('defdrag')"
                  data-event-dragend="hud_action('dragend')">
-                <span class="weapon-glyph">{{ w.glyph }}</span>
+                <img class="weapon-icon" data-if="w.icon != ''" data-attr-sprite="w.icon"/>
+                <span class="weapon-glyph" data-if="w.icon == ''">{{ w.glyph }}</span>
                 <div class="weapon-tip">{{ w.text }}</div>
             </div>
         </div>
@@ -126,11 +131,45 @@
                  data-class-empty="w.empty"
                  data-event-dragstart="hud_action(w.action)"
                  data-event-dragend="hud_action('dragend')">
-                <span class="weapon-glyph">{{ w.glyph }}</span>
+                <img class="weapon-icon" data-if="w.icon != ''" data-attr-sprite="w.icon"/>
+                <span class="weapon-glyph" data-if="w.icon == ''">{{ w.glyph }}</span>
                 <div class="weapon-tip">{{ w.text }}</div>
             </div>
         </div>
-        <div class="ship-preview-label">Drag onto the ship to mount - drag a mounted item off the ship to unmount</div>
+        <div class="insp-section-hdr" data-if="pd_visible">Point defense</div>
+        <div class="pd-doctrine" data-if="pd_visible">
+            <div class="pd-row">
+                <span class="pd-lbl">Stance</span>
+                <span class="pd-opt" data-class-active="pd_stance == 0" data-event-click="hud_action('pd:stance:0')">Hold</span>
+                <span class="pd-opt" data-class-active="pd_stance == 1" data-event-click="hud_action('pd:stance:1')">Standard</span>
+                <span class="pd-opt" data-class-active="pd_stance == 2" data-event-click="hud_action('pd:stance:2')">Overdrive</span>
+            </div>
+            <div class="pd-row">
+                <span class="pd-lbl">Priority</span>
+                <span class="pd-opt" data-class-active="pd_priority == 0" data-event-click="hud_action('pd:pri:0')">Impact time</span>
+                <span class="pd-opt" data-class-active="pd_priority == 1" data-event-click="hud_action('pd:pri:1')">Missiles first</span>
+                <span class="pd-opt" data-class-active="pd_priority == 2" data-event-click="hud_action('pd:pri:2')">Nearest</span>
+            </div>
+            <div class="pd-row">
+                <span class="pd-lbl">Gate</span>
+                <span class="pd-opt" data-class-active="pd_gate == 0" data-event-click="hud_action('pd:gate:0')">Near 60%</span>
+                <span class="pd-opt" data-class-active="pd_gate == 1" data-event-click="hud_action('pd:gate:1')">Mid 80%</span>
+                <span class="pd-opt" data-class-active="pd_gate == 2" data-event-click="hud_action('pd:gate:2')">Full 100%</span>
+            </div>
+        </div>
+        <div class="insp-section-hdr" data-if="gm_visible">Fire groups</div>
+        <div class="gm-table" data-if="gm_visible">
+            <div class="gm-hdr-row">
+                <div class="gm-corner">key</div>
+                <div class="gm-col-hdr" data-for="cname : gm_col">{{ cname }}</div>
+            </div>
+            <div class="gm-row" data-for="r : gm_row" data-class-active="r.selected">
+                <div class="gm-row-hdr">{{ r.label }}</div>
+                <div class="gm-cell" data-for="cl : r.cell" data-class-on="cl.on"
+                     data-event-click="hud_action(cl.action)"><span data-if="cl.on">X</span></div>
+            </div>
+        </div>
+        <div class="ship-preview-label">Drag onto the ship to mount - drag a mounted item off the ship to unmount - check a Fire groups box to assign that weapon to that key</div>
         <div class="ship-preview-name">{{ insp_ship_name }}</div>
     </div>
 

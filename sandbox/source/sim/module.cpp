@@ -74,6 +74,7 @@ static b8 module_def_load(ModuleDef* out, const char* path) {
             continue;
         }
         if (sscanf(line, "glyph %7s", out->glyph) == 1) continue;
+        if (sscanf(line, "icon %15s", out->icon) == 1) continue;
         f32 m0, m1, m2;
         if (sscanf(line, "sensor_mult %f %f %f", &m0, &m1, &m2) == 3) {
             out->sensor_mult[0] = m0;
@@ -94,6 +95,13 @@ static b8 module_def_load(ModuleDef* out, const char* path) {
     if (out->glyph[0] == '\0') {
         out->glyph[0] = out->name[0];
         out->glyph[1] = '\0';
+    }
+    if (out->icon[0] == '\0') {
+        // Default emblem by module kind (only sensors exist today; others fall back to glyph text).
+        if (out->type == MODULE_TYPE_SENSOR) {
+            strncpy(out->icon, "ic-sensor", sizeof(out->icon) - 1);
+            out->icon[sizeof(out->icon) - 1] = '\0';
+        }
     }
     return TRUE;
 }

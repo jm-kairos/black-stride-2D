@@ -63,11 +63,6 @@ const char* hardpoint_size_name(HardpointSize s) {
 b8 hardpoint_accepts(const HardpointDef* hp, u32 module_type) {
     return (hp && (hp->accepts & module_type)) ? TRUE : FALSE;
 }
-Weapon* ship_active_weapon(const Ship* ship) {
-    if (!ship) return nullptr;
-    if (ship->active_weapon_idx < 0 || ship->active_weapon_idx >= ship->hardpoint_count) return nullptr;
-    return ship->mounts[ship->active_weapon_idx];
-}
 i32 ship_first_free_hardpoint(const Ship* ship, u32 module_type) {
     if (!ship) return -1;
     for (i32 i = 0; i < ship->hardpoint_count; ++i) {
@@ -96,14 +91,47 @@ void ship_recompute_stats(Ship* ship) {
         ship->sensors.layer1_radius *= m->sensor_mult[1];
         ship->sensors.layer2_radius *= m->sensor_mult[2];
     }
+    // Effective capacitor = hull baseline (capacitor modules will multiply here later).
+    ship->cap_max   = ship->cap_max_base;
+    ship->cap_regen = ship->cap_regen_base;
+    if (ship->cap_current > ship->cap_max) ship->cap_current = ship->cap_max;
 }
-void ship_select_weapon_slot(Ship* ship, i32 n) {
-    if (!ship || n < 0) return;
-    i32 seen = 0;
+b8 ship_try_spend_cap(Ship* ship, f32 cost) {
+    if (!ship) return FALSE;
+    if (cost <= 0.0f) return TRUE;
+    if (ship->cap_current < cost) return FALSE;
+    ship->cap_current -= cost;
+    return TRUE;
+}
+void ship_capacitor_update(Ship* ship, f32 dt) {
+    if (!ship || dt <= 0.0f) return;
+    ship->cap_current += ship->cap_regen * dt;
+    if (ship->cap_current > ship->cap_max) ship->cap_current = ship->cap_max;
+}
+void ship_select_weapon_group(Ship* ship, i32 g) {
+    if (!ship || g < 0 || g >= SHIP_WEAPON_GROUPS) return;
+    ship->active_group = (u8)g;
+    // Re-home the legacy active index onto the group's first member (kept for the HUD
+    // weapon bar and other single-weapon consumers); left untouched when the group is empty.
     for (i32 i = 0; i < ship->hardpoint_count; ++i) {
-        if (!ship->mounts[i]) continue;
-        if (seen == n) { ship->active_weapon_idx = i; return; }
-        ++seen;
+        if (ship->mounts[i] && ((ship->mount_groups[i] >> g) & 1)) {
+            ship->active_weapon_idx = i;
+            return;
+        }
+    }
+}
+i32 ship_group_size(const Ship* ship, i32 g) {
+    if (!ship || g < 0 || g >= SHIP_WEAPON_GROUPS) return 0;
+    i32 n = 0;
+    for (i32 i = 0; i < ship->hardpoint_count; ++i)
+        if (ship->mounts[i] && ((ship->mount_groups[i] >> g) & 1)) ++n;
+    return n;
+}
+void ship_groups_sanitize(Ship* ship) {
+    if (!ship) return;
+    for (i32 i = 0; i < ship->hardpoint_count; ++i) {
+        if (!ship->mounts[i])              ship->mount_groups[i] = 0;
+        else if (!ship->mount_groups[i])   ship->mount_groups[i] = 1;   // default: group 1
     }
 }
 HierPos2 ship_hardpoint_fire_origin(const Ship* ship, i32 hp_index) {
@@ -235,11 +263,17 @@ b8 ship_load(Ship* out_ship, const char* path) {
     out_ship->sensors      = SensorSuite{};
     out_ship->sensors_base = SensorSuite{};
     out_ship->point_defense = DefenseLaser{};
+    // Capacitor defaults (overridable via a `capacitor <max> <regen>` line): every hull
+    // gets a working budget without touching existing assets.
+    out_ship->cap_max_base   = 100.0f;
+    out_ship->cap_regen_base = 8.0f;
     b8 class_authored = FALSE;
     out_ship->size_class = SHIP_CLASS_DRONE;
     out_ship->hardpoint_count = 0;
     for (i32 i = 0; i < SHIP_MAX_HARDPOINTS; ++i) out_ship->mounts[i] = nullptr;
     for (i32 i = 0; i < SHIP_MAX_HARDPOINTS; ++i) out_ship->module_mounts[i] = nullptr;
+    for (i32 i = 0; i < SHIP_MAX_HARDPOINTS; ++i) out_ship->mount_groups[i] = 0;
+    out_ship->active_group         = 0;
     out_ship->active_weapon_idx    = -1;
     out_ship->weapon_stash_count   = 0;
     out_ship->module_stash_count   = 0;
@@ -264,6 +298,12 @@ b8 ship_load(Ship* out_ship, const char* path) {
         f32 ws;
         if (sscanf(line, "world_scale %f", &ws) == 1 && ws > 0.0f) {
             out_ship->world_scale = ws;
+            continue;
+        }
+        f32 cmax, cregen;
+        if (sscanf(line, "capacitor %f %f", &cmax, &cregen) == 2 && cmax > 0.0f && cregen >= 0.0f) {
+            out_ship->cap_max_base   = cmax;
+            out_ship->cap_regen_base = cregen;
             continue;
         }
         f32 sw, sh;
@@ -403,7 +443,8 @@ b8 ship_load(Ship* out_ship, const char* path) {
     if (!class_authored)
         out_ship->size_class = ship_size_class_from_length(hull_length);
     out_ship->motion = ship_motion_for_class(out_ship->size_class);
-    ship_recompute_stats(out_ship); // sensors = baseline (no modules mounted at load)
+    ship_recompute_stats(out_ship); // sensors/capacitor = baseline (no modules mounted at load)
+    out_ship->cap_current = out_ship->cap_max;   // spawn with a full bank
     BS_LOG_INFO("ship_load: '%s' -> %s, %d verts, %d layers, %d hardpoints, %s-class (%.0f units).",
                 path, out_ship->vessel_name, out_ship->collider_count, out_ship->visual.layer_count,
                 out_ship->hardpoint_count, ship_size_class_name(out_ship->size_class), hull_length);

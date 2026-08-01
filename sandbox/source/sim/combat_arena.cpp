@@ -192,7 +192,21 @@ void combat_arena_update_enemy_ai(game_state* s, f32 dt) {
     }
     // Enemy is static, so its own muzzle velocity contribution is zero.
     w->owner_faction_id = sh->faction_id;   // stamp attacker faction (the patrol hull's live civ)
-    w->fire(fire_origin, aim_dir, Vec2{ 0.0f, 0.0f }, &s->projectiles);
+    if (w->ready() && ship_try_spend_cap(sh, w->cap_cost()))   // capacitor gate
+        w->fire(fire_origin, aim_dir, Vec2{ 0.0f, 0.0f }, &s->projectiles);
+
+    // Missile launchers fire independently of the bearing-weapon pick: any mounted, ready
+    // launcher looses a seeker at the flagship whenever the hull is roughly aligned. Missiles
+    // guide themselves after launch (combat_arena_steer_missiles), so no lead is needed.
+    for (i32 hpi = 0; hpi < sh->hardpoint_count; ++hpi) {
+        Weapon* ml = sh->mounts[hpi];
+        if (!ml || ml->wkind != WEAPON_KIND_MISSILE || ml == w || !ml->ready()) continue;
+        if (!ship_try_spend_cap(sh, ml->cap_cost())) continue;   // capacitor gate
+        HierPos2 ml_origin = ship_hardpoint_fire_origin(sh, hpi);
+        Vec2 ml_dir = hierpos_diff(&flag->origin, &ml_origin);
+        ml->owner_faction_id = sh->faction_id;
+        ml->fire(ml_origin, ml_dir, Vec2{ 0.0f, 0.0f }, &s->projectiles);
+    }
 }
 
 void combat_arena_sync_entities(game_state* s, f32 sim_dt) {
@@ -229,14 +243,114 @@ void combat_arena_sync_entities(game_state* s, f32 sim_dt) {
 }
 
 void combat_arena_update_projectiles(game_state* s, f32 sim_dt) {
-    // ---- Update projectiles -------------------------------------------------------------
+    // ---- Missile guidance (fire-and-seek) -------------------------------------------------
+    // Steer every live PROJ_MISSILE toward the nearest hostile combat entity inside its
+    // seeker cone/range BEFORE positions advance. Runs after point_defense_update in the
+    // tick order, so PD kills this frame never steer. Breaking the cone (a hard turn behind
+    // the missile) drops it to dumbfire until lifetime expiry -- that is the maneuver
+    // counterplay. Flight model lives in s->missile_tuning (editor-tunable, single type).
     s->profiler.begin(PROF_PROJECTILES);
+    {
+        const f32 cone_cos = cosf(s->missile_tuning.seeker_cone_deg * (3.14159265f / 180.0f));
+        for (i32 pi = 0; pi < MAX_PROJECTILES; ++pi) {
+            Projectile* p = &s->projectiles.pool[pi];
+            if (!p->active || p->kind != PROJ_MISSILE) continue;
+
+            f32 speed = vec2_length(p->velocity);
+            if (speed < 1.0e-3f) speed = 1.0e-3f;
+            Vec2 heading = vec2_scale(p->velocity, 1.0f / speed);
+
+            // Nearest hostile combat entity inside the seeker cone.
+            i32 best   = -1;
+            f32 best_d = s->missile_tuning.seeker_range;
+            for (i32 ci = 0; ci < s->combat_entity_count; ++ci) {
+                const CombatEntity* ce = &s->combat_entities[ci];
+                if (!ce->active) continue;
+                if (ce->faction_id == p->faction_id) continue;
+                Vec2 to = hierpos_diff(&ce->position, &p->position, BS_HIERPOS_CELL_SIZE);
+                f32 d = vec2_length(to);
+                if (d <= 1.0e-3f || d > best_d) continue;
+                if ((to.x * heading.x + to.y * heading.y) / d < cone_cos) continue;
+                best_d = d;
+                best   = ci;
+            }
+
+            if (best >= 0) {
+                // Rotate the heading toward the target, clamped by turn_rate * dt.
+                Vec2 to  = hierpos_diff(&s->combat_entities[best].position, &p->position,
+                                        BS_HIERPOS_CELL_SIZE);
+                f32 want = atan2f(to.y, to.x);
+                f32 cur  = atan2f(heading.y, heading.x);
+                f32 delta = want - cur;
+                while (delta >  3.14159265f) delta -= 6.28318531f;
+                while (delta < -3.14159265f) delta += 6.28318531f;
+                f32 max_step = s->missile_tuning.turn_rate * sim_dt;
+                if (delta >  max_step) delta =  max_step;
+                if (delta < -max_step) delta = -max_step;
+                cur += delta;
+                heading = Vec2{ cosf(cur), sinf(cur) };
+            }
+
+            // Thrust along the (possibly unchanged) heading up to the speed clamp.
+            speed += s->missile_tuning.accel * sim_dt;
+            if (speed > s->missile_tuning.max_speed) speed = s->missile_tuning.max_speed;
+            p->velocity = vec2_scale(heading, speed);
+        }
+    }
+
+    // ---- Update projectiles -------------------------------------------------------------
     s->projectiles.update(sim_dt);
+
+    // ---- Flak fuse + burst (Phase D) ------------------------------------------------------
+    // Each live PROJ_FLAK shell detonates when hostile ordnance enters its fuse radius,
+    // applying linear-falloff HP damage to ALL hostile projectiles inside the burst radius
+    // (missiles and shells alike -- a manually-laid defensive wall). Flak never touches
+    // ships: it is skipped in the entity-collision loop below.
+    {
+        const f32 fuse  = s->flak_tuning.fuse_radius;
+        const f32 burst = s->flak_tuning.burst_radius;
+        for (i32 fi = 0; fi < MAX_PROJECTILES; ++fi) {
+            Projectile* fp = &s->projectiles.pool[fi];
+            if (!fp->active || fp->kind != PROJ_FLAK) continue;
+            // Fuse scan: any hostile ordnance close enough?
+            b8 trigger = FALSE;
+            for (i32 pi = 0; pi < MAX_PROJECTILES; ++pi) {
+                const Projectile* p = &s->projectiles.pool[pi];
+                if (!p->active || pi == fi) continue;
+                if (p->faction_id == fp->faction_id) continue;
+                Vec2 d = hierpos_diff(&p->position, &fp->position, BS_HIERPOS_CELL_SIZE);
+                if (d.x * d.x + d.y * d.y <= fuse * fuse) { trigger = TRUE; break; }
+            }
+            if (!trigger) continue;
+            // Burst: falloff damage to every hostile projectile in radius.
+            i32 kills = 0;
+            for (i32 pi = 0; pi < MAX_PROJECTILES; ++pi) {
+                Projectile* p = &s->projectiles.pool[pi];
+                if (!p->active || pi == fi) continue;
+                if (p->faction_id == fp->faction_id) continue;
+                Vec2 dv = hierpos_diff(&p->position, &fp->position, BS_HIERPOS_CELL_SIZE);
+                f32 d = sqrtf(dv.x * dv.x + dv.y * dv.y);
+                if (d > burst) continue;
+                p->hp -= s->flak_tuning.burst_damage * (1.0f - d / burst);
+                if (p->hp <= 0.0f) {
+                    p->active = FALSE;
+                    --s->projectiles.count;
+                    ++kills;
+                }
+            }
+            // Attribution (Phase E): the player's manually-laid screen reports its work.
+            if (kills > 0 && fp->faction_id == FACTION_PLAYER)
+                action_log_push(s, "Flak burst: %d ordnance destroyed", kills);
+            fp->active = FALSE;   // the shell is consumed by its own burst
+            --s->projectiles.count;
+        }
+    }
 
     // ---- Projectile vs combat entity collision ------------------------------------------
     for (i32 pi = 0; pi < MAX_PROJECTILES; ++pi) {
         Projectile* p = &s->projectiles.pool[pi];
         if (!p->active) continue;
+        if (p->kind == PROJ_FLAK) continue;   // flak is purely anti-ordnance: never hits hulls
         for (i32 ci = 0; ci < s->combat_entity_count; ++ci) {
             CombatEntity* ce = &s->combat_entities[ci];
             if (!ce->active) continue;
@@ -258,6 +372,20 @@ void combat_arena_update_projectiles(game_state* s, f32 sim_dt) {
                     // General Ship AI: NPC agents take damage; the projectile's faction id
                     // attributes the kill (player kills raid the civ, NPC kills don't).
                     if (ce->is_npc) ai_ship_damage(s, ce->npc_index, 15.0f, p->faction_id);
+                    // Attributed missile-hit feedback (Phase E): when a missile lands on a
+                    // player fleet ship, say WHY the defenses missed it -- read from the hit
+                    // ship's own PD state at impact time. Disabled/unmounted reads as holding.
+                    if (p->kind == PROJ_MISSILE && ce->is_drone && ce->ship) {
+                        const DefenseLaser& pdl = ce->ship->point_defense;
+                        const char* cause;
+                        if (!pdl.enabled || pdl.stance == PD_HOLD)
+                            cause = "PD holding";
+                        else if (ce->ship->cap_current < pdl.reserve_floor * ce->ship->cap_max)
+                            cause = "capacitor dry";
+                        else
+                            cause = "PD saturated";
+                        action_log_push(s, "MISSILE HIT -- %s", cause);
+                    }
                     p->active = FALSE;
                     --s->projectiles.count;
                     break; // projectile can only hit one entity

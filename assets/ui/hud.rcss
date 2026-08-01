@@ -14,14 +14,10 @@ body {
     pointer-events: none;
 }
 
-/* --- Shared HUD readout panel (translucent sci-fi slab) --------------------------- */
+/* --- Shared HUD readout panel (small fabricated plate, chamfered) ------------------ */
 .hud-panel {
     display: block;
-    background-color: #0e1a2999;                              /* translucent fallback if the GPU backdrop is unavailable */
-    decorator: backdrop(#0e1a2998) border-box;               /* real frosted-glass blur of the scene behind the panel */
-    border: 1px #47688c;
-    border-top-color: #7099bf;                              /* glass bevel highlight */
-    border-radius: 6px;
+    decorator: ninepatch(plate-sm, plate-sm-inner);
     padding: 8px 10px;
 }
 
@@ -33,14 +29,14 @@ body {
 .hud-key {
     display: inline-block;
     width: 64px;
-    color: #59d0f2;          /* dim cyan label */
+    color: #a89a7e;          /* dusty beige label */
     font-size: 12px;
     text-transform: uppercase;
     letter-spacing: 1px;
 }
 
 .hud-val {
-    color: #bfe8fb;
+    color: #ddd6c4;
     font-size: 13px;
 }
 
@@ -73,7 +69,7 @@ body {
 
 .time-date {
     display: block;
-    color: #bfe8fb;
+    color: #ddd6c4;
     font-size: 13px;
     letter-spacing: 1px;
     margin-bottom: 6px;
@@ -85,30 +81,25 @@ body {
 
 .time-btn {
     display: inline-block;
-    background-color: #1c3a54;
-    decorator: vertical-gradient(#274263 #172a40) border-box;
-    border: 1px #47688c;
-    border-top-color: #789fc3;
-    border-radius: 4px;
-    color: #dce8f4;
+    decorator: ninepatch(btn, btn-inner);
+    border: 1px transparent;     /* preserves the Phase-1 box size; edges live in the texture */
+    color: #ddd6c4;
     font-size: 12px;
     font-weight: 600;
     padding: 4px 7px;
     margin: 0 1px;
     pointer-events: auto;        /* buttons are interactive */
-    transition: decorator border-color color 0.12s quadratic-out;
+    transition: decorator color 0.12s quadratic-out;
 }
 
 .time-btn:hover {
-    decorator: vertical-gradient(#315a83 #1e3f5f) border-box;
-    border-color: #5fd0ff;
+    decorator: ninepatch(btn-hi, btn-hi-inner);
+    color: #f2ead6;
 }
 
 .time-btn.active {
-    decorator: vertical-gradient(#3a6d99 #24486b) border-box;
-    border-color: #5fd0ff;
-    color: #ffffff;
-    font-effect: glow(1px 2px #33ccff99);
+    decorator: ninepatch(btn-amber, btn-amber-inner);
+    color: #e8b45a;
 }
 
 /* --- Action log (bottom-right, right-aligned, fades via data-style-opacity) -------- */
@@ -122,7 +113,7 @@ body {
 
 .log-line {
     display: block;
-    color: #dbe6f5;
+    color: #ddd6c4;
     font-size: 13px;
     margin-bottom: 1px;
 }
@@ -139,61 +130,52 @@ body {
 
 .win-title {
     display: block;
-    color: #cfe8f5;
+    color: #f2ead6;
     font-size: 15px;
     font-weight: 700;              /* bold, crisp title (was thin 13px) */
     margin-bottom: 6px;
     text-transform: uppercase;
     letter-spacing: 3px;
-    font-effect: glow(1px 3px #5fd0ff55);   /* restrained cyan halo */
+    font-effect: shadow(1px 1px #000000a0);   /* stamped into the plate */
 }
 
 .win-close {
     float: right;
-    color: #ff8b6a;
+    color: #a3543a;              /* oxidized copper */
     padding: 0 4px;
     pointer-events: auto;    /* only the close box is clickable */
     transition: color 0.12s quadratic-out;   /* ease the hover brighten */
 }
 
 .win-close:hover {
-    color: #ffb6a0;
+    color: #c76b4d;
 }
 
-/* Inspector uses a small pulsing red "Collapse" button instead of a bare X (the window is fullscreen).
-   Scoped to #inspector so other windows keep their plain X close glyph. The pulse breathes the red
-   fill/edge in and out to keep the exit affordance noticeable without being loud. */
-@keyframes collapse-pulse {
-    0%   { background-color: #7a221c; border-color: #b3392f; }
-    100% { background-color: #d1483a; border-color: #ff8a7e; }
-}
-
+/* Inspector uses a static oxidized-copper machined "Collapse" button instead of a bare X (the
+   window is fullscreen). Scoped to #inspector so other windows keep their plain X close glyph.
+   Utilitarian: no pulse, just a clear pressed-metal exit control. */
 #inspector .win-close {
     float: right;
     margin-top: -3px;                       /* seat the button within the header band */
     padding: 3px 12px;
-    color: #ffe4e0;
-    background-color: #b3312a;              /* red button (static fallback if animation is unavailable) */
-    border: 1px #e0574d;
-    border-radius: 4px;
+    color: #e8d6c8;
+    decorator: ninepatch(copper-btn, copper-btn-inner);   /* oxidized copper cap */
+    border: 1px transparent;
     font-size: 12px;
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 1px;
     pointer-events: auto;
-    animation: 1.3s cubic-in-out infinite alternate collapse-pulse;   /* steady attention pulse */
-    transition: background-color color border-color 0.12s quadratic-out;   /* ease hover */
+    transition: color 0.12s quadratic-out;   /* ease hover */
 }
 
 #inspector .win-close:hover {
     color: #ffffff;
-    background-color: #e05346;
-    border-color: #ff9c92;
 }
 
 .win-count {
     display: block;
-    color: #8fa6bd;
+    color: #a89a7e;
     font-size: 12px;
     margin-bottom: 6px;
 }
@@ -219,43 +201,41 @@ body {
 
 .modal-title {
     display: block;
-    color: #ffffff;
+    color: #f2ead6;
     font-size: 16px;
     margin-bottom: 6px;
+    font-effect: shadow(1px 1px #000000a0);
 }
 
 .modal-row {
     display: block;
-    color: #cfd9e6;
+    color: #ddd6c4;
     margin-bottom: 3px;
 }
 
 .modal-desc {
     display: block;
-    color: #9fb2c6;
+    color: #a89a7e;
     font-style: italic;
     margin: 6px 0;
 }
 
 .modal-btn {
     display: block;
-    background-color: #1c3a54;
-    decorator: vertical-gradient(#274263 #172a40) border-box;
-    border: 1px #47688c;
-    border-top-color: #789fc3;
-    border-radius: 5px;
-    color: #dce8f4;
+    decorator: ninepatch(btn, btn-inner);
+    border: 1px transparent;
+    color: #ddd6c4;
     font-weight: 600;
     padding: 6px 8px;
     margin-top: 6px;
     text-align: center;
     pointer-events: auto;    /* buttons are interactive */
-    transition: decorator border-color color 0.12s quadratic-out;   /* ease hover states */
+    transition: decorator color 0.12s quadratic-out;   /* ease hover states */
 }
 
 .modal-btn:hover {
-    decorator: vertical-gradient(#315a83 #1e3f5f) border-box;
-    border-color: #5fd0ff;
+    decorator: ninepatch(btn-hi, btn-hi-inner);
+    color: #f2ead6;
 }
 
 /* --- Fleet ship panel (top-right, stacked below the nav/ship readouts) ------------ */
@@ -268,80 +248,186 @@ body {
 
 .fleet-name {
     display: block;
-    color: #59d9f2;
+    color: #f2ead6;
     font-size: 14px;
-    font-effect: glow(1px 3px #33ccff99);
+    font-effect: shadow(1px 1px #000000a0);
 }
 
 .fleet-faction {
     display: block;
-    color: #8fa6bd;
+    color: #a89a7e;
     font-size: 12px;
 }
 
 .fleet-stat {
     display: block;
-    color: #cfd9e6;
+    color: #ddd6c4;
     font-size: 12px;
     margin-bottom: 1px;
 }
 
 .fleet-hdr {
     display: block;
-    color: #8cd8f2;
+    color: #a89a7e;
     font-size: 12px;
     margin-bottom: 3px;
     text-transform: uppercase;
     letter-spacing: 1px;
 }
 
+/* --- Capacitor gauge + PD doctrine line (fleet panel; Phase E feedback) ------------ */
+.cap-gauge {
+    display: block;
+    width: 100%;
+    height: 6px;
+    background-color: #0c0d11;   /* recessed channel */
+    border: 1px #060708;
+    border-bottom-color: #454b53;
+    overflow: hidden;
+    margin: 2px 0 4px 0;
+}
+
+.cap-gauge-fill {
+    display: block;
+    width: 0%;                   /* driven per-frame by data-style-width */
+    height: 100%;
+    decorator: horizontal-gradient(#6a7439 #8f9a4f);   /* brass-olive = power good */
+}
+
+.fleet-pd {
+    display: block;
+    color: #a89a7e;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 2px;
+}
+
+.fleet-pd.warn {
+    color: #e8b45a;              /* amber: stance is not STANDARD (HOLD / OVERDRIVE) */
+}
+
+/* Fire-group assignment matrix (inspector): columns = mounted weapons, rows = keys 1-5.
+   Each cell is a checkbox toggling that weapon's membership in that group. */
+.gm-table {
+    display: block;
+    margin-bottom: 6px;
+}
+
+.gm-hdr-row, .gm-row {
+    display: block;
+    margin-bottom: 2px;
+}
+
+.gm-corner, .gm-row-hdr {
+    display: inline-block;
+    width: 34px;
+    color: #8a8069;
+    font-size: 11px;
+    text-align: center;
+    vertical-align: top;
+    padding-top: 3px;
+}
+
+.gm-row-hdr {
+    color: #ddd6c4;
+    font-size: 12px;
+}
+
+.gm-row.active .gm-row-hdr {
+    color: #b5c063;
+}
+
+.gm-col-hdr {
+    display: inline-block;
+    width: 38px;
+    margin-right: 3px;
+    color: #8a8069;
+    font-size: 10px;
+    text-align: center;
+    overflow: hidden;
+    vertical-align: top;
+}
+
+.gm-cell {
+    display: inline-block;
+    width: 38px;
+    height: 18px;
+    margin-right: 3px;
+    text-align: center;
+    color: #e8b45a;
+    font-size: 12px;
+    padding-top: 1px;
+    border-radius: 0;
+    border-width: 1px;
+    border-color: #0b0c0e;
+    border-bottom-color: #3a3f46;   /* light lip = recessed socket */
+    background-color: #101115;
+    vertical-align: top;         /* empty and checked cells share the same top edge (an empty
+                                    inline-block otherwise aligns by its bottom edge and the
+                                    row jumps when a checkmark appears) */
+    overflow: hidden;
+    pointer-events: auto;        /* checkbox: click toggles membership */
+}
+
+.gm-cell:hover {
+    background-color: #1a1c21;
+    border-bottom-color: #4a5058;
+}
+
+.gm-cell.on {
+    background-color: #2b2415;   /* amber-stained recess */
+    border-color: #5c4a24;
+}
+
 .weapon-row {
     display: block;
-    color: #cfe0f0;
+    color: #ddd6c4;
     font-size: 12px;
     padding: 2px 4px;
     margin-bottom: 1px;
-    border-radius: 3px;
+    border-radius: 0;
     pointer-events: auto;        /* fitted weapons are clickable to select */
 }
 
 .weapon-row:hover {
-    background-color: #16304688;
+    background-color: #2e333a;
 }
 
 .weapon-row.selected {
-    background-color: #1d4058;
-    color: #ffffff;
+    background-color: #3a3325;   /* amber-tinted graphite */
+    color: #e8b45a;
 }
 
 .weapon-row.empty {
-    color: #4a5a66;
+    color: #6e6555;
     pointer-events: none;        /* empty slots are inert */
+}
+
+/* Fire-group row with no member weapons: dimmed but still clickable to select. */
+.weapon-row.dim {
+    color: #6e6555;
 }
 
 .fleet-mode {
     display: block;
-    background-color: #1c3a54;
-    decorator: vertical-gradient(#274263 #172a40) border-box;
-    border: 1px #47688c;
-    border-top-color: #789fc3;
-    border-radius: 5px;
-    color: #dce8f4;
+    decorator: ninepatch(btn, btn-inner);
+    border: 1px transparent;
+    color: #ddd6c4;
     font-weight: 600;
     padding: 6px 8px;
     text-align: center;
     pointer-events: auto;
-    transition: decorator border-color color 0.12s quadratic-out;   /* ease hover states */
+    transition: decorator color 0.12s quadratic-out;   /* ease hover states */
 }
 
 .fleet-mode:hover {
-    decorator: vertical-gradient(#315a83 #1e3f5f) border-box;
-    border-color: #5fd0ff;
+    decorator: ninepatch(btn-hi, btn-hi-inner);
+    color: #f2ead6;
 }
 
 .fleet-mode.disabled {
-    color: #5a6a76;
-    border-color: #33ccff33;     /* dimmed while a camera transition is in flight */
+    color: #6e6555;              /* dimmed while a camera transition is in flight */
 }
 
 /* --- FTL jump-mode banner (bottom-center) ----------------------------------------- */
@@ -351,11 +437,11 @@ body {
     left: 0;
     width: 100%;
     text-align: center;
-    color: #8cf2a6;              /* matches JUMP_CIRCLE_COLOR */
+    color: #c9963f;              /* stenciled amber military labeling */
     font-size: 22px;
     text-transform: uppercase;
     letter-spacing: 4px;
-    font-effect: glow(1px 5px #8cf2a6cc);
+    font-effect: shadow(1px 2px #000000c0);
 }
 
 /* --- HierPos2 debug readout (top-left, dev toggle) -------------------------------- */
@@ -363,17 +449,19 @@ body {
     position: absolute;
     top: 120px;
     left: 12px;
-    color: #bfe6ff;
+    color: #ddd6c4;
     font-size: 13px;
     white-space: pre;            /* honour the '\n' line breaks in debug_text */
 }
 
-/* --- Galaxy-map hover tooltip (cursor-anchored; .panel supplies the themed slab) --- */
+/* --- Galaxy-map hover tooltip (cursor-anchored; light plate, tighter than .panel) --- */
 #tooltip {
     position: absolute;          /* left/top set per-frame via data-style-left/top */
     display: block;
     max-width: 460px;
-    color: #cfe0f0;
+    decorator: ninepatch(plate-sm, plate-sm-inner);   /* small plate, no bolt zone */
+    padding: 8px 10px;
+    color: #ddd6c4;
     font-size: 13px;
     white-space: pre;            /* honour the '\n' breaks + column alignment in tip_text */
     pointer-events: none;        /* stay click-through so world picking works underneath */
@@ -386,12 +474,9 @@ body {
     left: 50%;
     width: 140px;
     margin-left: -70px;          /* pull back half the width to centre */
-    background-color: #1c3a54;
-    decorator: vertical-gradient(#274263 #172a40) border-box;
-    border: 1px #47688c;
-    border-top-color: #789fc3;
-    border-radius: 6px;
-    color: #dce8f4;
+    decorator: ninepatch(btn, btn-inner);
+    border: 1px transparent;
+    color: #ddd6c4;
     padding: 6px 8px;
     text-align: center;
     font-size: 13px;
@@ -399,12 +484,12 @@ body {
     text-transform: uppercase;
     letter-spacing: 2px;
     pointer-events: auto;        /* the launcher is interactive */
-    transition: decorator border-color color 0.12s quadratic-out;   /* ease hover states */
+    transition: decorator color 0.12s quadratic-out;   /* ease hover states */
 }
 
 #inspector-btn:hover {
-    decorator: vertical-gradient(#315a83 #1e3f5f) border-box;
-    border-color: #5fd0ff;
+    decorator: ninepatch(btn-hi, btn-hi-inner);
+    color: #f2ead6;
 }
 
 /* --- Flagship inspector window (floating, right side; planet-inspector footprint) -- */
@@ -422,13 +507,12 @@ body {
     pointer-events: auto;        /* solid window; does not pass clicks through to the world */
 }
 
-/* Floating side window: chrome header band bleeding to the panel's rounded top edges. */
+/* Floating side window: stamped header rail bleeding to the panel's top edges (margins
+   cancel the .panel 16px padding). */
 #inspector .win-title {
-    margin: -12px -14px 10px -14px;
-    padding: 12px 14px 10px 14px;
-    decorator: vertical-gradient(#2d425f #1a2941) border-box;
-    border-bottom: 1px #47688c;
-    border-radius: 7px 7px 0 0;
+    margin: -16px -16px 10px -16px;
+    padding: 12px 16px 10px 16px;
+    decorator: ninepatch(rail, rail-inner);
 }
 
 .insp-tabs {
@@ -439,33 +523,33 @@ body {
 .insp-tab {
     display: inline-block;
     padding: 4px 12px;
-    color: #8fa6bd;
+    color: #a89a7e;
     font-size: 13px;
     text-transform: uppercase;
     letter-spacing: 2px;
-    border: 1px #2f4a6300;       /* transparent border keeps inactive tabs the same size */
-    border-radius: 4px;
+    border: 1px #2e333a00;       /* transparent border keeps inactive tabs the same size */
+    border-radius: 0;
     transition: color background-color border-color 0.12s quadratic-out;   /* ease tab activation */
 }
 
 .insp-tab.active {
-    color: #6fd3ff;
-    border-color: #5fd0ff88;
-    background-color: #16304a88;
+    color: #e8b45a;
+    border-color: #c9963f;
+    background-color: #2b2415;
 }
 
 /* Vertically stacked Arsenal body: inventory sections, then the hardpoint slot strip. */
 
 .insp-section-hdr {
     display: block;
-    color: #bfe0f2;
+    color: #ddd6c4;
     font-size: 14px;
     font-weight: 600;
     margin-top: 10px;
     margin-bottom: 5px;
     text-transform: uppercase;
     letter-spacing: 2px;
-    border-left: 3px #5fd0ff;    /* single restrained accent spine -- hierarchy without ornament */
+    border-left: 3px #c9963f;    /* single painted marking on the plate -- hierarchy without ornament */
     padding-left: 8px;
 }
 
@@ -480,26 +564,25 @@ body {
 
 /* The offensive inventory list doubles as an UNMOUNT drop target: dragging a mounted weapon back
    here returns it to the stash. It must stay hit-testable and keep a visible drop area even when it
-   holds no weapons, so give it a min-height and a dashed "drop zone" border. */
+   holds no weapons, so give it a min-height and a recessed "drop tray" treatment. */
 .inv-drop {
     min-height: 44px;
     padding: 6px;
-    border: 1px #47688c66;       /* neutral steel at rest; cyan is reserved for the drag-over cue */
-    border-radius: 5px;
+    decorator: ninepatch(well, well-inner);   /* recessed tray */
+    border: 1px transparent;     /* border reserved for the amber drag-over cue */
     pointer-events: auto;
-    transition: border-color background-color 0.12s quadratic-out;
+    transition: border-color 0.12s quadratic-out;
 }
 
 .inv-drop:hover {
-    border-color: #33ccff;       /* drag-over cue while unmounting */
-    background-color: #12283c55;
+    border-color: #c9963f;       /* drag-over cue while unmounting */
 }
 
-/* One-shot "acknowledge" bloom, played once when a weapon becomes the active selection: the border
-   flares bright then settles back to the resting accent cyan. Interest through motion, not ornament. */
+/* One-shot "acknowledge" flash, played once when a weapon becomes the active selection: the border
+   flares bright then settles back to the resting amber accent. Interest through motion, not ornament. */
 @keyframes sel-flash {
-    0%   { border-color: #bfefff; }
-    100% { border-color: #5fd0ff; }
+    0%   { border-color: #f2d391; }
+    100% { border-color: #c9963f; }
 }
 
 .weapon-symbol {
@@ -507,46 +590,56 @@ body {
     width: 32px;
     height: 32px;
     margin: 0 6px 6px 0;
-    background-color: #1c3a54;
-    decorator: vertical-gradient(#274263 #172a40) border-box;
-    border: 1px #47688c;
-    border-top-color: #789fc3;   /* bevel highlight */
-    border-radius: 5px;
+    background-color: #2e333a;
+    decorator: ninepatch(btn, btn-inner);   /* raised armor-plate emblem socket */
+    border: 1px transparent;     /* box-size keeper; also hosts the sel-flash edge */
     transition: decorator color 0.12s quadratic-out;   /* ease hover; border-color owned by sel-flash */
     text-align: center;
-    color: #dce8f4;
+    color: #ddd6c4;
     position: relative;          /* anchor for the absolutely-positioned tooltip */
     pointer-events: auto;        /* interactive: hover tooltip + click-select + drag */
     drag: clone;                 /* native RmlUi visual drag (a clone follows the cursor) */
 }
 
 .weapon-symbol:hover {
-    decorator: vertical-gradient(#315a83 #1e3f5f) border-box;
-    border-color: #5fd0ff;
+    decorator: ninepatch(btn-hi, btn-hi-inner);
+    color: #f2ead6;
 }
 
 .weapon-symbol.selected {
-    decorator: vertical-gradient(#3a6f9a #24506f) border-box;
-    border-color: #5fd0ff;
-    color: #ffffff;
-    animation: 0.4s cubic-out 1 sel-flash;   /* one-shot bloom on select */
+    decorator: ninepatch(btn-amber, btn-amber-inner);
+    border-color: #c9963f;
+    color: #e8b45a;
+    animation: 0.4s cubic-out 1 sel-flash;   /* one-shot flash on select */
 }
 
 .weapon-symbol.empty {
-    color: #4a5a66;
-    decorator: none;             /* placeholders sit flat/recessed, no glassy sheen */
-    border-color: #3f5f8455;
-    background-color: #101c2caa;
+    color: #6e6555;
+    decorator: ninepatch(socket, socket-inner);   /* recessed empty socket */
     drag: none;                  /* empty placeholders are not draggable */
     pointer-events: none;        /* and inert (no hover tooltip) */
 }
 
 .weapon-glyph {
     display: block;
-    line-height: 32px;           /* vertically centre the single-char placeholder */
+    line-height: 32px;           /* vertically centre the single-char fallback text */
     font-size: 15px;
     text-align: center;
 }
+
+/* Emblem stencil inside a tile: white ui-icons sprite tinted per tile state. */
+.weapon-icon {
+    display: block;
+    width: 26px;
+    height: 26px;
+    margin: 3px auto;            /* centred inside the 32px tile */
+    image-color: #ddd6c4;        /* ivory at rest */
+    transition: image-color 0.12s quadratic-out;
+}
+
+.weapon-symbol:hover .weapon-icon    { image-color: #f2ead6; }
+.weapon-symbol.selected .weapon-icon { image-color: #e8b45a; }   /* amber = selected */
+.weapon-symbol.empty .weapon-icon    { image-color: #6e6555; }   /* dim open socket  */
 
 /* Tooltip child: themed like the star-system tooltip (.panel slab). Shown on hover, hidden the
    instant the symbol is pressed to begin a drag (the :active rule below wins by source order). */
@@ -558,10 +651,11 @@ body {
     margin-left: -80px;
     width: 160px;
     padding: 6px 8px;
-    background-color: #0b1420ee;
-    border: 1px #33ccffaa;
-    border-radius: 5px;
-    color: #cfe0f0;
+    background-color: #141518f2;
+    border: 1px #0b0c0e;
+    border-top-color: #33383f;
+    border-radius: 0;
+    color: #ddd6c4;
     font-size: 13px;
     text-align: center;
     pointer-events: none;
@@ -573,14 +667,58 @@ body {
 /* Inspector captions (hint line + ship name under the module sections). */
 .ship-preview-label {
     display: block;
-    color: #5f7488;
+    color: #8a8069;
     font-size: 13px;
     margin-top: 6px;
 }
 
+/* --- Point-defense doctrine chips (inspector; Phase C) ----------------------------- */
+.pd-doctrine {
+    display: block;
+    margin-bottom: 6px;
+}
+
+.pd-row {
+    display: block;
+    margin-bottom: 3px;
+}
+
+.pd-lbl {
+    display: inline-block;
+    width: 58px;
+    color: #a89a7e;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+.pd-opt {
+    display: inline-block;
+    padding: 2px 8px;
+    margin-right: 2px;
+    color: #a89a7e;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    border: 1px #2e333a00;       /* transparent border keeps inactive chips the same size */
+    pointer-events: auto;        /* clickable doctrine chip */
+    transition: color background-color border-color 0.12s quadratic-out;
+}
+
+.pd-opt:hover {
+    color: #f2ead6;
+    background-color: #2e333a;
+}
+
+.pd-opt.active {
+    color: #e8b45a;              /* amber = the selected doctrine */
+    border-color: #c9963f;
+    background-color: #2b2415;
+}
+
 .ship-preview-name {
     display: block;
-    color: #8fa6bd;
+    color: #a89a7e;
     font-size: 13px;
     margin-top: 4px;
     text-align: center;
@@ -590,7 +728,8 @@ body {
 #station-menu {
     position: absolute;          /* left/top set per-frame via data-style-left/top */
     display: block;
-    padding: 4px;
+    decorator: ninepatch(plate-sm, plate-sm-inner);   /* small plate, tighter than .panel */
+    padding: 8px;
     min-width: 120px;
     pointer-events: auto;        /* solid, clickable menu */
 }
@@ -598,15 +737,15 @@ body {
 .station-menu-item {
     display: block;
     padding: 6px 12px;
-    color: #cfe0f0;
+    color: #ddd6c4;
     font-size: 13px;
-    border-radius: 4px;
+    border-radius: 0;
     pointer-events: auto;
 }
 
 .station-menu-item:hover {
-    background-color: #315a83;
-    color: #ffffff;
+    background-color: #3a3325;   /* amber-tinted graphite = selection language */
+    color: #e8b45a;
 }
 
 /* --- Space-station inspector window (floating, right side; planet-inspector rules) -- */
@@ -621,11 +760,9 @@ body {
 }
 
 #station-inspector .win-title {
-    margin: -12px -14px 10px -14px;
-    padding: 12px 14px 10px 14px;
-    decorator: vertical-gradient(#2d425f #1a2941) border-box;
-    border-bottom: 1px #47688c;
-    border-radius: 7px 7px 0 0;
+    margin: -16px -16px 10px -16px;
+    padding: 12px 16px 10px 16px;
+    decorator: ninepatch(rail, rail-inner);
 }
 
 /* Market tab column-header line: must share the resource-line font metrics
@@ -633,18 +770,18 @@ body {
 .market-colhead {
     display: block;
     white-space: pre;
-    color: #6d84a0;
+    color: #8a8069;
     font-size: 13px;
     padding: 2px 0 0 0;
 }
 
 /* Category the station specializes in: amber accent head + small tag. */
 .planet-insp-head.spec {
-    color: #ffb648;
+    color: #e8b45a;
 }
 
 .spec-tag {
-    color: #c98f3d;
+    color: #c9963f;
     font-size: 10px;
     font-weight: 600;
     letter-spacing: 1px;
@@ -663,7 +800,7 @@ body {
 
 .planet-insp-subtitle {
     display: block;
-    color: #9fd7c8;
+    color: #a89a7e;
     font-size: 13px;
     font-weight: 600;
     letter-spacing: 1px;
@@ -676,7 +813,7 @@ body {
 
 .planet-insp-head {
     display: block;
-    color: #cfe8f5;
+    color: #f2ead6;
     font-size: 12px;
     font-weight: 700;
     text-transform: uppercase;
@@ -687,19 +824,19 @@ body {
 .planet-insp-line {
     display: block;
     white-space: pre;
-    color: #bfe8fb;
+    color: #ddd6c4;
     font-size: 13px;
     padding: 2px 0;
 }
 
 .planet-insp-line.dim {
-    color: #8fa6bd;
+    color: #a89a7e;
     font-size: 12px;
 }
 
 .planet-gauge-label {
     display: block;
-    color: #dbe6f5;
+    color: #ddd6c4;
     font-size: 12px;
     font-weight: 600;
     margin: 4px 0 2px 0;
@@ -709,9 +846,10 @@ body {
     display: block;
     width: 100%;
     height: 8px;
-    background-color: #12203269;
-    border: 1px #47688c;
-    border-radius: 3px;
+    background-color: #0c0d11;   /* recessed channel — a step darker than the plate interior */
+    border: 1px #060708;
+    border-bottom-color: #454b53;
+    border-radius: 0;
     overflow: hidden;
 }
 
@@ -719,13 +857,13 @@ body {
     display: block;      /* RmlUi defaults to inline: without this the fill has zero size */
     width: 0%;           /* actual width driven per-frame by data-style-width */
     height: 100%;
-    border-radius: 2px;
+    border-radius: 0;
 }
 
 .planet-gauge-fill.hab {
-    decorator: horizontal-gradient(#2e8f6b #57d9a3);
+    decorator: horizontal-gradient(#6a7439 #8f9a4f);   /* faded brass-olive */
 }
 
 .planet-gauge-fill.haz {
-    decorator: horizontal-gradient(#8f4b2e #e0574d);
+    decorator: horizontal-gradient(#7a4322 #b3622f);   /* dull oxidized orange */
 }

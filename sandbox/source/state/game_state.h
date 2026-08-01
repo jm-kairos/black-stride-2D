@@ -3274,6 +3274,41 @@ struct game_state {
 
 
 
+    // ---- Missile flight model (Phase A guided missiles; editor-tunable) -----------------
+    // Global v1 flight model shared by every PROJ_MISSILE in flight (single missile type).
+    // Consumed by combat_arena_steer_missiles each tick. Split per-projectile when multiple
+    // missile classes exist.
+
+    struct MissileTuning {
+
+        f32 turn_rate;        // max steering rate (rad/s); the maneuver-counterplay knob
+
+        f32 accel;            // forward thrust (world units/s^2)
+
+        f32 max_speed;        // velocity clamp (below cannon shell speed: outrunnable head-on)
+
+        f32 seeker_cone_deg;  // seeker half-angle; targets outside the cone are not tracked
+
+        f32 seeker_range;     // seeker acquisition range (world units)
+
+    } missile_tuning;
+
+    // ---- Flak burst model (Phase D; editor-tunable) --------------------------------------
+    // PROJ_FLAK shells proximity-detonate against hostile ordnance in
+    // combat_arena_update_projectiles; damage falls off linearly to the burst edge.
+
+    struct FlakTuning {
+
+        f32 fuse_radius;      // detonate when hostile ordnance is this close (world units)
+
+        f32 burst_radius;     // damage radius of the burst
+
+        f32 burst_damage;     // ordnance HP damage at burst center (missile hp = 3.5)
+
+    } flak_tuning;
+
+
+
     // ---- Point-defense laser beams (rebuilt each frame by sim/point_defense.cpp) --------
 
 
@@ -3412,7 +3447,7 @@ struct game_state {
 
 
 
-    i32              ui_font_kit;              // Active in-game UI font kit: 0=Neon, 1=Clean, 2=Minimal (editor panel)
+    i32              ui_font_kit;              // Active in-game UI font kit: 0=Neon, 1=Clean, 2=Minimal, 3=Frontier (editor panel)
 
 
 

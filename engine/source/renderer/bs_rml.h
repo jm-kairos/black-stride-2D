@@ -70,7 +70,7 @@ bs__api__ b8 bs_rml_wants_keyboard(void);
 bs__api__ void bs_rml_on_resize(u16 width, u16 height);
 
 // Toggle the RmlUi in-UI debugger/inspector (element tree, live RCSS, event log). A dev tool,
-// wired to F8 in the game. The debugger is initialised at bs_rml_initialize; this just flips its
+// wired to F12 in the game. The debugger is initialised at bs_rml_initialize; this just flips its
 // visibility. No-op if RmlUi is inactive.
 bs__api__ void bs_rml_debugger_toggle(void);
 
@@ -90,8 +90,9 @@ bs__api__ void bs_rml_debugger_toggle(void);
 
 #define BS_RML_LOG_MAX     12   // most recent action-log lines carried in a snapshot
 #define BS_RML_DISC_MAX    64   // most recent discovery lines carried in a snapshot
-#define BS_RML_WEAPON_MAX  4    // fleet-ship HUD weapon slots
-#define BS_RML_HARDPOINT_MAX 16 // flagship-inspector Arsenal hardpoint rows (Ship SHIP_MAX_HARDPOINTS)
+#define BS_RML_WEAPON_MAX  4    // flagship-inspector Arsenal inventory rows per section
+#define BS_RML_GROUP_MAX   5    // fleet-ship HUD fire-group rows (SHIP_WEAPON_GROUPS game-side)
+#define BS_RML_GM_COLS     8    // fire-group matrix: max weapon columns (mounted weapons)
 #define BS_RML_ACTION_CAP  32   // max bytes (incl. NUL) for a polled action string
 
 // One action-log line (already formatted, newest last).
@@ -107,18 +108,37 @@ typedef struct bs_rml_disc_line
     char color[10];
 } bs_rml_disc_line;
 
-// One fleet-ship weapon row: preformatted "N  Name  READY/%" text plus flags for styling.
-// In the flagship-inspector Arsenal queue the SAME struct backs a draggable weapon symbol:
-// `glyph` is the placeholder icon shown in the box and `text` is the hover-tooltip (weapon name).
+// A generic HUD list row, used by the fleet panel's fire-group rows ("K - weapon, ..." text,
+// action "group:N" on click) and by the flagship-inspector Arsenal queues, where the SAME
+// struct backs a draggable weapon symbol: `icon` names a ui-icons emblem sprite shown in the
+// box (falls back to the `glyph` text when empty) and `text` is the hover-tooltip (weapon name).
 typedef struct bs_rml_weapon_line
 {
     char text[64];
-    char glyph[8];   // arsenal only: placeholder symbol shown in the draggable box
-    char action[16]; // "weapon:N" / "arsenal:N" enqueued on click OR dragstart (grabs the source)
-    char drop[16];   // arsenal hardpoint only: "slot:N" enqueued on dragdrop (assign dragged weapon here)
-    b8   selected;   // the active weapon (highlighted row)
-    b8   empty;      // an unfitted slot ("-- empty --", dimmed, not clickable)
+    char glyph[8];   // arsenal only: fallback text symbol when `icon` is empty
+    char icon[16];   // arsenal only: ui-icons sprite name ("ic-cannon"; "" = use glyph text)
+    char action[16]; // "group:N" / "inv:K" / "mod:K" enqueued on click OR dragstart
+    char drop[16];   // arsenal only: enqueued on dragdrop (unused since the slot strip retired)
+    b8   selected;   // highlighted row (the active fire group)
+    b8   empty;      // no content (dim style; group rows stay clickable, arsenal bays go inert)
 } bs_rml_weapon_line;
+
+// One cell of the flagship-inspector fire-group matrix: `action` ("gm:W:G") is enqueued on
+// click to toggle weapon column W's membership in group row G; `on` renders the checkmark.
+typedef struct bs_rml_gm_cell
+{
+    char action[16];
+    b8   on;
+} bs_rml_gm_cell;
+
+// One row of the fire-group matrix (a weapon group): `label` is the group digit, `selected`
+// marks the active fire group, and cell[0..col_count-1] are the per-weapon checkboxes.
+typedef struct bs_rml_gm_row
+{
+    char           label[8];
+    b8             selected;
+    bs_rml_gm_cell cell[BS_RML_GM_COLS];
+} bs_rml_gm_row;
 
 // Full per-frame HUD snapshot. Zero-initialize, fill the visible sections, then push it.
 typedef struct bs_rml_hud_state
@@ -165,10 +185,17 @@ typedef struct bs_rml_hud_state
     char               fleet_speed[32];
     char               fleet_heading[32];
     char               fleet_health[32];
-    i32                fleet_weapon_count;    // valid rows in fleet_weapon[0..count-1]
-    bs_rml_weapon_line fleet_weapon[BS_RML_WEAPON_MAX];
+    // Fire-group rows (always BS_RML_GROUP_MAX): text = "K - weapon, weapon, ...", selected =
+    // active fire group, empty = no member weapons (dim style), action = "group:N" (select on
+    // click).
+    bs_rml_weapon_line fleet_group[BS_RML_GROUP_MAX];
     char               fleet_mode_label[32];  // "Pilot unit" / "Auto-pilot / RTS"
     b8                 fleet_mode_enabled;     // FALSE mid camera transition (button dimmed)
+    // Capacitor + point-defense readout (Phase E feedback; docs/POINT_DEFENSE_AND_MISSILES.md).
+    char               fleet_cap_w[16];       // capacitor gauge fill width ("62%")
+    char               fleet_cap_label[32];   // "Capacitor 62 / 100"
+    char               fleet_pd_label[40];    // "PD: OVERDRIVE - missiles first - 80%"
+    b8                 fleet_pd_warn;         // TRUE when stance != STANDARD (amber cue)
 
     // Jump-mode banner (bottom-center; "Currently in Jump Mode").
     b8 jump_visible;
@@ -186,15 +213,12 @@ typedef struct bs_rml_hud_state
 
     // Flagship inspector: a persistent window opened via the bottom-center "Inspector" button.
     // inspector_btn_visible shows the launcher button during gameplay; inspector_visible shows the
-    // window while it is open. The single Arsenal tab is a two-pane loadout editor:
-    //   - The LEFT pane lists UNMOUNTED systems the flagship owns: arsenal_inv = offensive weapons
-    //     in the loadout stash (draggable, action "inv:K"); arsenal_def = defensive systems
-    //     (scaffold); arsenal_mod = ship modules in the module rack (draggable, action "mod:K").
-    //     Each left list is also an unmount drop target ("stash" / "defstash" / "modstash").
-    //   - The RIGHT pane (arsenal_hp) is the ship's hardpoints: one row per hardpoint slot, each a
-    //     drop target (drop "slot:M") and, when occupied, a drag source (action "hp:M").
-    // A weapon is shown in EITHER the inventory OR a hardpoint, never both. Rows reuse
-    // bs_rml_weapon_line; empty hardpoints set .empty and use glyph "+".
+    // window while it is open. The single Arsenal tab lists the flagship's UNMOUNTED inventory:
+    // arsenal_inv = offensive weapons in the loadout stash (draggable, action "inv:K");
+    // arsenal_def = defensive systems; arsenal_mod = ship modules in the module rack (draggable,
+    // action "mod:K"). Each list is also an unmount drop target ("stash" / "defstash" /
+    // "modstash"). Mounted items live on the SHIP itself (world hardpoint boxes), not in the
+    // window; a weapon is shown in EITHER the inventory OR on a hardpoint, never both.
     b8                 inspector_btn_visible;
     b8                 inspector_visible;
     char               insp_ship_name[64];
@@ -204,12 +228,25 @@ typedef struct bs_rml_hud_state
     bs_rml_weapon_line arsenal_def[BS_RML_WEAPON_MAX];
     i32                arsenal_mod_count;     // valid rows in arsenal_mod[0..count-1] (unmounted ship modules)
     bs_rml_weapon_line arsenal_mod[BS_RML_WEAPON_MAX];
-    i32                arsenal_hp_count;      // valid rows in arsenal_hp[0..count-1] (ship hardpoints)
-    bs_rml_weapon_line arsenal_hp[BS_RML_HARDPOINT_MAX];
 
-    // Active UI font kit (0 = Neon, 1 = Clean, 2 = Minimal). Toggles a body class on the HUD
-    // document so RCSS can swap the whole document's typefaces live from the editor panel.
+    // Fire-group assignment matrix (inspector): columns = mounted weapons, rows = groups 1..5.
+    // gm_col_count is the number of weapon columns this frame (0 hides the section); gm_col
+    // holds the short column header labels; gm_row the BS_RML_GROUP_MAX checkbox rows.
+    i32                gm_col_count;
+    char               gm_col[BS_RML_GM_COLS][12];
+    bs_rml_gm_row      gm_row[BS_RML_GROUP_MAX];
+
+    // Active UI font kit (0 = Neon, 1 = Clean, 2 = Minimal, 3 = Frontier). Toggles a body class
+    // on the HUD document so RCSS can swap the whole document's typefaces live from the editor.
     i32                ui_kit;
+
+    // Flagship point-defense doctrine (inspector "Point defense" section). pd_visible shows the
+    // section; the three indices drive the active chip highlight and are round-tripped via the
+    // actions "pd:stance:N" / "pd:pri:N" / "pd:gate:N" (see docs/POINT_DEFENSE_AND_MISSILES.md).
+    b8                 pd_visible;
+    i32                pd_stance;    // 0 = HOLD, 1 = STANDARD, 2 = OVERDRIVE
+    i32                pd_priority;  // 0 = impact time, 1 = missiles first, 2 = nearest
+    i32                pd_gate;      // 0 = 60%, 1 = 80%, 2 = 100% of resolved PD range
 
     // Space-station interaction: a cursor-anchored right-click context menu ("Inspect") and a
     // fullscreen Inspect window (collapsible). menu_left/top are prebuilt "NNNpx" CSS strings.

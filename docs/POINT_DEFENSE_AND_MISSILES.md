@@ -1,5 +1,32 @@
 # Point-Defense & Missile Combat — Design + Implementation Plan
 
+> **Status: phases A–E implemented** (see the log below). This document remains the
+> design reference; tuning lives in the editor panel (MISSILES / CAPACITOR / FLAK
+> sections) and the constants noted per phase.
+>
+> Combat controls: `P` cycles PD stance (HOLD/STANDARD/OVERDRIVE); `T` toggles the
+> active fire group between AP and FLAK; PD priority + engagement gate are set from
+> the flagship inspector's "Point defense" chips.
+>
+> Implementation log:
+> - **A — Guided missiles**: fire-and-seek `PROJ_MISSILE` (steering pass in
+>   `combat_arena.cpp`, flight model `game_state::missile_tuning`), `MissileLauncher`
+>   (`weapon.cpp`), enemy launcher auto-mounted, flagship launcher in stash slot 4,
+>   `ic-missile` emblem.
+> - **B — Capacitor**: `Ship::cap_*` baseline→derived (`ship_recompute_stats`),
+>   optional `capacitor <max> <regen>` in `.ship` files, `Weapon::cap_cost()`
+>   (cannon 4 / missile 25), fire-site gating, PD drain 6/s + 15% reserve floor.
+> - **C — Doctrine**: `DefenseLaser` stance/priority/gate_tier; OVERDRIVE = 2x dps,
+>   3x drain, 0.5x retarget; TTI / missiles-first / nearest scoring; inspector chips
+>   round-tripped via `pd:*` HUD actions.
+> - **D — Flak**: `MODE_FLAK` on `BallisticWeapon` (0.6x speed, 1.4s life), fuse +
+>   linear-falloff burst pass vs hostile ordnance (`game_state::flak_tuning`), flak
+>   never damages hulls.
+> - **E — Feedback**: fleet-panel capacitor bar + PD doctrine line (amber off-STANDARD),
+>   attributed logs (`PD: missile intercepted`, `MISSILE HIT -- PD holding / capacitor
+>   dry / PD saturated`, `Flak burst: N ordnance destroyed`), gated engagement ring in
+>   `defense_laser_overlay.cpp`.
+
 Design principle (agreed): **automated hands, player brain.** PD tracking is never manual;
 player agency lives in doctrine (stances/priorities), a shared resource (capacitor),
 geometry (positioning/screens), and a manual skill channel (flak cannons).

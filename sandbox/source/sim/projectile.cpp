@@ -66,12 +66,41 @@ void ProjectileSystem::init() {
 }
 b8 ProjectileSystem::spawn(HierPos2 origin, Vec2 velocity,
                            f32 lifetime, f32 radius, bs_color color, VesselFaction owner, i16 faction_id,
-                           f32 radiation_emission, f32 hp)
+                           f32 radiation_emission, f32 hp, u8 kind)
 {
     // find first free slot
     for (i32 i = 0; i < MAX_PROJECTILES; ++i) {
         if (!pool[i].active) {
             pool[i].active             = TRUE;
+            pool[i].kind               = kind;
+            pool[i].position           = origin;
+            pool[i].velocity           = velocity;
+            pool[i].lifetime           = lifetime;
+            pool[i].age                = 0.0f;
+            pool[i].radius             = radius;
+            pool[i].color              = color;
+            pool[i].owner              = owner;
+            pool[i].faction_id         = faction_id;
+            pool[i].radiation_emission = radiation_emission;
+            pool[i].hp                 = hp;
+            pool[i].max_hp             = hp;
+            ++count;
+            return TRUE;
+        }
+    }
+    return FALSE; // pool full
+}
+b8 ProjectileSystem::spawn_missile(HierPos2 origin, Vec2 velocity,
+                                   f32 lifetime, f32 radius, bs_color color, VesselFaction owner,
+                                   i16 faction_id, f32 radiation_emission, f32 hp)
+{
+    // Same free-slot scan as spawn(), but the slot is tagged PROJ_MISSILE so the combat-arena
+    // steering pass picks it up. Kept as a separate loop (not a spawn() call) because spawn()
+    // does not report which slot it filled.
+    for (i32 i = 0; i < MAX_PROJECTILES; ++i) {
+        if (!pool[i].active) {
+            pool[i].active             = TRUE;
+            pool[i].kind               = PROJ_MISSILE;
             pool[i].position           = origin;
             pool[i].velocity           = velocity;
             pool[i].lifetime           = lifetime;

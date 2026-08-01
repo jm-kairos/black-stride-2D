@@ -113,11 +113,54 @@ void build_editor_panel(game_state* s) {
         bs_ui_text("Discovery uses Sensor Layer 1 (identification range).");
         if (bs_ui_button("Open Discoveries", TRUE)) s->show_discoveries = !s->show_discoveries;
         // ---- UI FONT KIT ---------------------------------------------------------------------
-        // Swaps the in-game RmlUi typefaces live (0 = Neon, 1 = Clean, 2 = Minimal) to compare kits.
+        // Swaps the in-game RmlUi typefaces live (0 = Neon, 1 = Clean, 2 = Minimal, 3 = Frontier).
         bs_ui_separator();
         const f32 UK[4] = { 0.70f, 0.80f, 0.95f, 1.0f };
         bs_ui_text_colored(UK[0], UK[1], UK[2], UK[3], "UI FONT KIT");
-        bs_ui_combo("Font kit", &s->ui_font_kit, "Neon\0Clean\0Minimal\0");
+        bs_ui_combo("Font kit", &s->ui_font_kit, "Neon\0Clean\0Minimal\0Frontier\0");
+        // ---- MISSILES --------------------------------------------------------------------------
+        // Live flight-model tuning for guided missiles (Phase A; docs/POINT_DEFENSE_AND_MISSILES.md).
+        bs_ui_separator();
+        const f32 MS[4] = { 0.95f, 0.60f, 0.40f, 1.0f };
+        bs_ui_text_colored(MS[0], MS[1], MS[2], MS[3], "MISSILES");
+        bs_ui_slider_float("Turn rate (rad/s)##msl", &s->missile_tuning.turn_rate,       0.2f,   6.0f);
+        bs_ui_slider_float("Accel##msl",             &s->missile_tuning.accel,           0.0f,  8000.0f);
+        bs_ui_slider_float("Max speed##msl",         &s->missile_tuning.max_speed,    1000.0f, 16000.0f);
+        bs_ui_slider_float("Seeker cone (deg)##msl", &s->missile_tuning.seeker_cone_deg, 10.0f,  180.0f);
+        bs_ui_slider_float("Seeker range##msl",      &s->missile_tuning.seeker_range, 1000.0f, 40000.0f);
+        // ---- FLAK ------------------------------------------------------------------------------
+        // Proximity-burst screen tuning (Phase D; toggled per fire group with the T key).
+        bs_ui_separator();
+        const f32 FK[4] = { 0.85f, 0.85f, 0.60f, 1.0f };
+        bs_ui_text_colored(FK[0], FK[1], FK[2], FK[3], "FLAK");
+        bs_ui_slider_float("Fuse radius##flak",  &s->flak_tuning.fuse_radius,   20.0f, 400.0f);
+        bs_ui_slider_float("Burst radius##flak", &s->flak_tuning.burst_radius,  50.0f, 800.0f);
+        bs_ui_slider_float("Burst damage##flak", &s->flak_tuning.burst_damage,   0.5f,  10.0f);
+        // ---- CAPACITOR -------------------------------------------------------------------------
+        // Shared energy budget (Phase B): live flagship readout + baseline/PD-drain tuning.
+        bs_ui_separator();
+        const f32 CP[4] = { 0.60f, 0.90f, 0.70f, 1.0f };
+        bs_ui_text_colored(CP[0], CP[1], CP[2], CP[3], "CAPACITOR");
+        {
+            Ship& flag = s->player_ship();
+            char capbuf[96];
+            snprintf(capbuf, sizeof(capbuf), "Flagship: %.0f / %.0f (regen %.1f/s)",
+                     flag.cap_current, flag.cap_max, flag.cap_regen);
+            bs_ui_text(capbuf);
+            if (bs_ui_slider_float("Cap max##cap",   &flag.cap_max_base,   20.0f, 400.0f)) ship_recompute_stats(&flag);
+            if (bs_ui_slider_float("Cap regen##cap", &flag.cap_regen_base,  0.0f,  40.0f)) ship_recompute_stats(&flag);
+            bs_ui_slider_float("PD drain /s##cap",   &flag.point_defense.cap_drain_per_s, 0.0f, 30.0f);
+            bs_ui_slider_float("PD reserve##cap",    &flag.point_defense.reserve_floor,   0.0f,  0.5f);
+            // Read-only doctrine state (set via the inspector chips / the P stance key).
+            static const char* PD_ST[3] = { "HOLD", "STANDARD", "OVERDRIVE" };
+            static const char* PD_PR[3] = { "impact-time", "missiles-first", "nearest" };
+            static const char* PD_GT[3] = { "60%", "80%", "100%" };
+            char pdbuf[96];
+            snprintf(pdbuf, sizeof(pdbuf), "PD doctrine: %s / %s / gate %s",
+                     PD_ST[flag.point_defense.stance % 3], PD_PR[flag.point_defense.priority % 3],
+                     PD_GT[flag.point_defense.gate_tier % 3]);
+            bs_ui_text(pdbuf);
+        }
         // ---- LIGHTS ----------------------------------------------------------------------------
         // Spawn / remove / edit the editor-managed 2D point lights.
         bs_ui_separator();

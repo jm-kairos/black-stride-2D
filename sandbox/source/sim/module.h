@@ -14,7 +14,8 @@
 //   name "Surveyor Array Mk I"
 //   type sensor                 # weapon|defense|sensor|engine|utility (single kind)
 //   size S                      # S/M/L; fits hardpoints of this size OR LARGER
-//   glyph S1                    # short symbol shown in the Arsenal box
+//   glyph S1                    # fallback text symbol for the Arsenal box
+//   icon ic-sensor              # optional ui-icons emblem sprite (defaults by type)
 //   sensor_mult 1.15 1.35 1.60  # sensor modules: layer 0/1/2 radius multipliers
 //
 // The registry itself is a manifest file (assets/modules/modules.list) naming one
@@ -35,7 +36,8 @@ struct ModuleDef {
 
     char          id[32];         // registry key ("surveyor_mk1"), from the .module file
     char          name[48];       // display name ("Surveyor Array Mk I")
-    char          glyph[8];       // short Arsenal-box symbol ("S1")
+    char          glyph[8];       // fallback Arsenal-box text symbol ("S1")
+    char          icon[16];       // ui-icons emblem sprite ("ic-sensor"; defaulted by type)
     u32           type;           // single MODULE_TYPE_* kind bit
     HardpointSize size;           // physical size; mounts on slots of this size or larger
     f32           sensor_mult[3]; // sensor modules: layer 0/1/2 radius multipliers (else 1.0)

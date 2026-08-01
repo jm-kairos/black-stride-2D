@@ -46,6 +46,8 @@
 
 #define SHIP_MAX_MODULES 4   // unmounted module rack (loadout inventory) capacity
 
+#define SHIP_WEAPON_GROUPS 5 // player fire-control groups (number keys 1..5)
+
 // =====================================================================================
 // Hardpoint skeleton (Phase 1 of the ship-module system). Each hull authors a set of
 // typed module slots ("boxes") in SHIP-LOCAL space — the same art-texel space the
@@ -182,9 +184,22 @@ struct SensorSuite {
 
 // =====================================================================================
 
+// Point-defense doctrine (Phase C, docs/POINT_DEFENSE_AND_MISSILES.md): the player owns
+// the WHEN and WHAT of the automated laser, never the aiming.
+enum PdStance   : u8 { PD_HOLD = 0, PD_STANDARD = 1, PD_OVERDRIVE = 2 };
+enum PdPriority : u8 { PD_PRI_TTI = 0, PD_PRI_GUIDED_FIRST = 1, PD_PRI_NEAREST = 2 };
+
 struct DefenseLaser {
 
-    b8  enabled            = TRUE;    // auto-fire when a target is in range
+    b8  enabled            = TRUE;    // master mount/editor switch (unmounted = disabled);
+                                      // PD_HOLD is the TACTICAL off, this is the physical one
+
+    u8  stance             = PD_STANDARD;    // HOLD (no fire, no drain) / STANDARD / OVERDRIVE
+                                              // (2x dps, 3x drain, 0.5x retarget)
+
+    u8  priority           = PD_PRI_TTI;      // target scoring: impact time / missiles first / nearest
+
+    u8  gate_tier          = 2;       // engagement gate: 0 = 60%, 1 = 80%, 2 = 100% of resolved range
 
     f32 range              = 0.0f;    // 0 => use sensors.layer1_radius (live-coupled)
 
@@ -193,6 +208,12 @@ struct DefenseLaser {
     f32 dwell_time         = 0.15f;   // seconds the beam tracks one target before releasing
 
     f32 retarget_cooldown  = 0.08f;   // brief gap before acquiring the next target
+
+    f32 cap_drain_per_s    = 6.0f;    // capacitor drain while a beam is active (Phase B)
+
+    f32 reserve_floor      = 0.15f;   // fraction of cap_max below which the laser stops ACQUIRING
+                                      // (an existing lock burns to its dwell end; PD dies last but
+                                      // never bottoms the bank on its own)
 
     // ---- runtime state (not tuning) ----------------------------------------------------
 
@@ -309,6 +330,17 @@ struct Ship {
 
     i32            active_weapon_idx; // hardpoint index of the firing weapon; -1 = none
 
+    // ---- Weapon groups (player fire control) --------------------------------------------
+    // mount_groups[i] is the group-membership bitmask of the weapon on hardpoints[i]: bit g
+    // set = member of group g+1 (selected with number keys 1..SHIP_WEAPON_GROUPS). Non-zero
+    // only where mounts[i] holds a weapon; a newly mounted weapon defaults to group 1. The
+    // point-defense and AI-piloted ships ignore groups entirely (AI fires via
+    // ship_select_bearing_weapon).
+
+    u8             mount_groups[SHIP_MAX_HARDPOINTS];
+
+    u8             active_group;      // selected fire group, 0..SHIP_WEAPON_GROUPS-1
+
     // ---- Mounted ship modules (Phase 4; one per hardpoint slot) -------------------------
     // module_mounts[i] is the registry ModuleDef installed in hardpoints[i] (nullptr =
     // empty). A hardpoint holds at most ONE occupant across mounts[]/point_defense_mount/
@@ -355,6 +387,23 @@ struct Ship {
 
     SensorSuite   sensors_base;
 
+    // ---- Capacitor (shared energy budget: cannons, missile launchers, point-defense) --
+    // `cap_max` / `cap_regen` are DERIVED by ship_recompute_stats() from the authored
+    // `*_base` hull baselines (capacitor modules will multiply them later, like sensors).
+    // `cap_current` is the runtime charge: weapons spend via ship_try_spend_cap at their
+    // fire sites, the PD laser drains per beam-second, and ship_capacitor_update regens.
+    // See docs/POINT_DEFENSE_AND_MISSILES.md (Phase B).
+
+    f32           cap_max_base;
+
+    f32           cap_regen_base;
+
+    f32           cap_max;
+
+    f32           cap_regen;
+
+    f32           cap_current;
+
     // ---- Point-defense laser (auto-targets incoming hostile projectiles) -------------
 
     DefenseLaser  point_defense;
@@ -384,9 +433,6 @@ struct Ship {
 // TRUE when the hardpoint's accepts-mask includes the given MODULE_TYPE_* kind.
 b8 hardpoint_accepts(const HardpointDef* hp, u32 module_type);
 
-// The weapon mounted on the ship's active hardpoint, or nullptr when none is selected.
-struct Weapon* ship_active_weapon(const Ship* ship);
-
 // First hardpoint accepting `module_type` with no occupant (no weapon, point-defense, or
 // module mounted), or -1 when none is free. Used for init-time auto-mounting.
 i32 ship_first_free_hardpoint(const Ship* ship, u32 module_type);
@@ -399,6 +445,14 @@ b8 hardpoint_fits_module(const HardpointDef* hp, const struct ModuleDef* def);
 // `sensors` = sensors_base with each mounted sensor module's layer multipliers applied.
 // Call after any module mount/unmount (ship_load calls it itself).
 void ship_recompute_stats(Ship* ship);
+
+// Spend `cost` from the ship's capacitor if affordable. FALSE = starved (hold fire).
+// Zero/negative costs always succeed without touching the bank.
+b8 ship_try_spend_cap(Ship* ship, f32 cost);
+
+// Continuous capacitor regeneration + clamp to cap_max. Tick wherever the ship's
+// weapon cooldowns tick.
+void ship_capacitor_update(Ship* ship, f32 dt);
 
 // ---- Per-hardpoint fire origins + traverse arcs (Phase 3) -------------------------------
 
@@ -435,9 +489,18 @@ void ship_update_turrets(Ship* ship, f32 dt);
 
 b8 ship_load(Ship* out_ship, const char* path);
 
-// Select the n-th (0-based) mounted weapon in hardpoint order as the active weapon.
-// No-op when fewer than n+1 weapons are mounted.
-void ship_select_weapon_slot(Ship* ship, i32 n);
+// ---- Weapon groups (player fire control) ----------------------------------------------
+
+// Select fire group g (0-based; key N selects N-1). Also re-homes active_weapon_idx onto
+// the group's first member so legacy single-weapon consumers (HUD bar, gizmos) stay sane.
+void ship_select_weapon_group(Ship* ship, i32 g);
+
+// Number of mounted weapons whose mask has group g's bit set.
+i32 ship_group_size(const Ship* ship, i32 g);
+
+// Enforce the mask invariant after any loadout mutation: empty slots carry no mask, and a
+// mounted weapon with no assignment defaults to group 1. Cheap; safe to call every frame.
+void ship_groups_sanitize(Ship* ship);
 
 // ---- Rigid-body transforms -----------------------------------------------------------
 

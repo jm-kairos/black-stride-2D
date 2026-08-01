@@ -6,16 +6,17 @@ including in commercial builds, provided the OFL terms are met (keep this notice
 do not sell the fonts on their own, and do not use the Reserved Font Names for
 modified versions). The full licence text is available from each project below.
 
-The in-game UI (RmlUi) ships **three switchable font "kits"**. Each kit fills three
+The in-game UI (RmlUi) ships **four switchable font "kits"**. Each kit fills three
 type roles — **display** (titles/headings/tabs), **body** (general UI text) and
 **mono** (numeric / technical readouts). The active kit is chosen live from the
 editor panel's *UI FONT KIT* combo (see `assets/ui/theme.rcss` → FONT KITS section).
 
-| Kit         | Display        | Body          | Mono              |
-|-------------|----------------|---------------|-------------------|
-| Neon        | Orbitron       | Rajdhani      | Share Tech Mono   |
-| Clean (def) | Chakra Petch   | Inter         | JetBrains Mono    |
-| Minimal     | Exo 2          | Exo 2         | JetBrains Mono    |
+| Kit            | Display          | Body          | Mono              |
+|----------------|------------------|---------------|-------------------|
+| Neon           | Orbitron         | Rajdhani      | Share Tech Mono   |
+| Clean          | Chakra Petch     | Inter         | JetBrains Mono    |
+| Minimal        | Exo 2            | Exo 2         | JetBrains Mono    |
+| Frontier (def) | Barlow Condensed | Barlow        | B612 Mono         |
 
 ## Bundled families (all SIL OFL 1.1)
 
@@ -26,6 +27,8 @@ editor panel's *UI FONT KIT* combo (see `assets/ui/theme.rcss` → FONT KITS sec
 - **Inter** — © The Inter Project Authors (rsms)
 - **JetBrains Mono** — © JetBrains s.r.o.
 - **Exo 2** — © Natanael Gama (Ndiscover)
+- **Barlow / Barlow Condensed** — © Jeremy Tribby
+- **B612 Mono** — © Airbus / Intactile Design
 
 Weight-specific static instances are named `<family>-<weight>.ttf` (e.g.
 `inter-600.ttf`). A few mid-weights advertise a distinct family name in their

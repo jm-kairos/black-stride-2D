@@ -6,11 +6,18 @@
 // ---------------------------------------------------------------------------
 // Weapon base class — firing interface, cooldown handling, generic behaviour.
 // ---------------------------------------------------------------------------
+// Weapon kind tag (no RTTI in the hot path): set by each subclass constructor.
+enum WeaponKind : u8 { WEAPON_KIND_BALLISTIC = 0, WEAPON_KIND_MISSILE = 1 };
+// Ballistic fire modes (Phase D): AP shells kill ships; FLAK shells fly slow/short and
+// proximity-detonate against hostile ordnance (missiles + shells), never hulls.
+enum FireMode : u8 { MODE_AP = 0, MODE_FLAK = 1 };
 struct Weapon {
     const char*   name;           // display label
+    const char*   icon;           // ui-icons emblem sprite for the Arsenal tile ("ic-cannon")
+    u8            wkind;          // WeaponKind tag for kind-specific fire logic
     VesselFaction owner_faction;  // set at equip time (legacy binary faction; projectile visuals)
     i16           owner_faction_id; // unified faction stamped from the firing ship at each fire site
-    Weapon(const char* n) : name(n), owner_faction((VesselFaction)0), owner_faction_id(FACTION_PIRATE) {}
+    Weapon(const char* n) : name(n), icon("ic-cannon"), wkind(WEAPON_KIND_BALLISTIC), owner_faction((VesselFaction)0), owner_faction_id(FACTION_PIRATE) {}
     virtual ~Weapon() {}
     // fire at the given origin in the given direction (unit or non-unit).
     // `ship_velocity` is the owning ship's current world velocity (added to projectile).
@@ -26,6 +33,9 @@ struct Weapon {
     virtual f32 cooldown_progress() const = 0;
     // projectile speed for aim prediction (0 if not applicable)
     virtual f32 projectile_speed() const { return 0.0f; }
+    // capacitor cost per trigger pull (spent at the fire site via ship_try_spend_cap;
+    // 0 = free). See docs/POINT_DEFENSE_AND_MISSILES.md (Phase B).
+    virtual f32 cap_cost() const { return 0.0f; }
 };
 // ---------------------------------------------------------------------------
 // Ballistic weapon — fires physical projectiles.
@@ -37,6 +47,8 @@ struct BallisticWeapon : Weapon {
     f32 projectile_lifetime;// seconds before auto-cleanup
     f32 projectile_radius;  // visual radius (world units)
     f32 projectile_emission; // 0..1 radiation heat-source strength for the projectile
+    f32 cap_cost_value;     // capacitor cost per shot (member, editor-exposable)
+    u8  fire_mode;          // MODE_AP / MODE_FLAK (toggled per fire group via the T key)
     // runtime state
     f32 cooldown_remaining; // seconds until next shot
     f32 cooldown_duration;  // 1.0f / fire_rate (cached)
@@ -53,8 +65,44 @@ struct BallisticWeapon : Weapon {
     b8   ready() const override;
     f32  cooldown_progress() const override;
     f32  projectile_speed() const override { return projectile_speed_value; }
+    f32  cap_cost() const override { return cap_cost_value; }
+};
+// ---------------------------------------------------------------------------
+// Missile launcher — fires seeker missiles (PROJ_MISSILE). Fire-and-seek: the
+// launcher needs no target; the missile is spawned along the aim direction and
+// the combat-arena steering pass guides it onto hostile combat entities. Slow
+// launch + high projectile HP make it the point-defense counterplay threat.
+// ---------------------------------------------------------------------------
+struct MissileLauncher : Weapon {
+    // tuning
+    f32 reload_time;        // seconds per tube cycle
+    f32 missile_speed;      // launch speed added along the aim direction (world units/s)
+    f32 missile_lifetime;   // seconds before self-destruct
+    f32 missile_radius;     // visual/collision radius (world units)
+    f32 missile_emission;   // 0..1 radiation heat: hot engine = strongly sensor-visible
+    f32 missile_hp;         // point-defense must burn through this (shell = 1.0)
+    f32 cap_cost_value;     // capacitor cost per launch (member, editor-exposable)
+    // runtime state
+    f32 cooldown_remaining; // seconds until the next launch
+    MissileLauncher(const char* name,
+                    f32 reload,
+                    f32 speed,
+                    f32 lifetime,
+                    f32 radius,
+                    f32 emission,
+                    f32 hp);
+    void fire(bs_math::HierPos2 origin, bs_math::Vec2 direction,
+              bs_math::Vec2 ship_velocity,
+              ProjectileSystem* projectiles) override;
+    void update(f32 dt) override;
+    b8   ready() const override;
+    f32  cooldown_progress() const override;
+    f32  projectile_speed() const override { return missile_speed; }
+    f32  cap_cost() const override { return cap_cost_value; }
 };
 // ---------------------------------------------------------------------------
 // Helper: factory for creating the default ballistic cannon.
 // ---------------------------------------------------------------------------
 Weapon* weapon_create_ballistic_cannon(VesselFaction owner);
+// Factory for the standard guided-missile launcher.
+Weapon* weapon_create_missile_launcher(VesselFaction owner);
