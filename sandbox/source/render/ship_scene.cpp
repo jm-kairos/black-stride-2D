@@ -40,6 +40,10 @@ static void draw_ship_visual_ex(const Ship* ship, f32 alpha, bs_math::Vec3 light
             sp.blend         = blend;
             sp.layer         = LAYER_SHIP + vl.z;
             sp.custom        = custom;
+            // Ship hulls bake their own shading; custom.z >= 0.5 makes the sprite shader skip
+            // scene point-light shading so the map-look star light + bright ambient can't wash
+            // the hull out to white at galaxy zoom (mapped layers already ignore scene lights).
+            sp.custom.b      = 1.0f;
             sp.glow_override = &ship->glow;
             renderer_draw_sprite(&sp);
         } else if (vl.kind == VIS_LAYER_MAPPED) {
