@@ -9,6 +9,39 @@
 #include <math.h>
 #include <new>
 using namespace bs_math;
+// =====================================================================================
+// Size-class motion tuning. DRONE mirrors the legacy SHIP_* globals; larger classes get
+// progressively heavier: lower speed caps, weaker thrust, and much slower turning, so a
+// cruiser feels like a capital ship instead of a strike craft.
+// =====================================================================================
+static const ShipMotion g_class_motion[SHIP_CLASS_COUNT] = {
+    // max_speed  accel   decel  turn_accel max_turn
+    {   800.0f,  600.0f, 400.0f,  12.0f,    3.00f }, // DRONE
+    {   650.0f,  420.0f, 300.0f,   8.0f,    2.20f }, // CORVETTE
+    {   500.0f,  280.0f, 200.0f,   5.0f,    1.40f }, // FRIGATE
+    {   360.0f,  160.0f, 120.0f,   2.6f,    0.80f }, // DESTROYER
+    {   240.0f,   90.0f,  70.0f,   1.4f,    0.45f }, // CRUISER
+    {   150.0f,   50.0f,  40.0f,   0.7f,    0.25f }, // CAPITAL
+};
+static const char* g_class_names[SHIP_CLASS_COUNT] = {
+    "Drone", "Corvette", "Frigate", "Destroyer", "Cruiser", "Capital",
+};
+ShipSizeClass ship_size_class_from_length(f32 hull_length_world) {
+    if (hull_length_world <   60.0f) return SHIP_CLASS_DRONE;
+    if (hull_length_world <  150.0f) return SHIP_CLASS_CORVETTE;
+    if (hull_length_world <  350.0f) return SHIP_CLASS_FRIGATE;
+    if (hull_length_world <  700.0f) return SHIP_CLASS_DESTROYER;
+    if (hull_length_world < 1800.0f) return SHIP_CLASS_CRUISER;
+    return SHIP_CLASS_CAPITAL;
+}
+const ShipMotion& ship_motion_for_class(ShipSizeClass c) {
+    if ((i32)c < 0 || (i32)c >= SHIP_CLASS_COUNT) c = SHIP_CLASS_DRONE;
+    return g_class_motion[c];
+}
+const char* ship_size_class_name(ShipSizeClass c) {
+    if ((i32)c < 0 || (i32)c >= SHIP_CLASS_COUNT) return "Unknown";
+    return g_class_names[c];
+}
 static i32 rstrip(char* s) {
     i32 n = (i32)strlen(s);
     while (n > 0 && (s[n - 1] == '\n' || s[n - 1] == '\r' || s[n - 1] == ' ' || s[n - 1] == '\t'))
@@ -36,6 +69,8 @@ b8 ship_load(Ship* out_ship, const char* path) {
     out_ship->weapon_fire_offset_local = Vec2{ 0.0f, 0.0f };
     out_ship->sensors      = SensorSuite{};
     out_ship->point_defense = DefenseLaser{};
+    b8 class_authored = FALSE;
+    out_ship->size_class = SHIP_CLASS_DRONE;
     ship_visual_clear(&out_ship->visual);
     char line[512];
     while (fgets(line, sizeof(line), f)) {
@@ -62,6 +97,21 @@ b8 ship_load(Ship* out_ship, const char* path) {
         if (sscanf(line, "size %f %f", &sw, &sh) == 2) {
             out_ship->size_local = Vec2{ sw, sh };
             out_ship->visual.size_local = Vec2{ sw, sh };
+            continue;
+        }
+        char classbuf[16];
+        if (sscanf(line, "class %15s", classbuf) == 1) {
+            b8 matched = FALSE;
+            for (i32 c = 0; c < SHIP_CLASS_COUNT; ++c) {
+                if (_stricmp(classbuf, ship_size_class_name((ShipSizeClass)c)) == 0) {
+                    out_ship->size_class = (ShipSizeClass)c;
+                    class_authored = TRUE;
+                    matched = TRUE;
+                    break;
+                }
+            }
+            if (!matched)
+                BS_LOG_WARN("ship_load: unknown class '%s' in '%s' (deriving from size).", classbuf, path);
             continue;
         }
         char kindbuf[16];
@@ -125,8 +175,15 @@ b8 ship_load(Ship* out_ship, const char* path) {
         BS_LOG_ERROR("ship_load: no visual layers in '%s'.", path);
         return FALSE;
     }
-    BS_LOG_INFO("ship_load: '%s' -> %s, %d verts, %d layers.",
-                path, out_ship->vessel_name, out_ship->collider_count, out_ship->visual.layer_count);
+    // Resolve the size class (unless authored) from the WORLD hull length, then bake the
+    // class's motion tuning into the ship so piloting/autopilot read per-ship parameters.
+    f32 hull_length = out_ship->size_local.y * out_ship->world_scale;
+    if (!class_authored)
+        out_ship->size_class = ship_size_class_from_length(hull_length);
+    out_ship->motion = ship_motion_for_class(out_ship->size_class);
+    BS_LOG_INFO("ship_load: '%s' -> %s, %d verts, %d layers, %s-class (%.0f units).",
+                path, out_ship->vessel_name, out_ship->collider_count, out_ship->visual.layer_count,
+                ship_size_class_name(out_ship->size_class), hull_length);
     return TRUE;
 }
 const char* vessel_faction_name(VesselFaction f) {

@@ -1,10 +1,12 @@
 # Black Stride ship definition (.ship format).
 # Art: assets/ships/ships_cruisers_yellow/cruisers_r0_c0.png (394x1586, nose-up).
-# world_scale keeps the hull length ~41 world units (matches the previous ship).
+# At world_scale 1 the hull is 1586 world units long, which classifies it as a
+# CRUISER: slow, heavy inertial flight (see ship_size_class_from_length in sim/ship.cpp).
+# An explicit `class <drone|corvette|frigate|destroyer|cruiser|capital>` line can override.
 
 name "ship"
 faction 2
-world_scale 0.026
+world_scale 1.0
 size 394 1586
 
 layer sprite assets/ships/ships_cruisers_yellow/cruisers_r0_c0.png 0 0 1 0 0

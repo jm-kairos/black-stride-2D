@@ -20,7 +20,7 @@ void submit_frame_lighting(game_state* s) {
     f32 speed_ratio = 0.0f;
     if (s->view_arena_w > 0.0f) {
         f32 speed = vec2_length(s->player_flight().velocity);
-        speed_ratio = clampf(speed / SHIP_MAX_SPEED, 0.0f, 1.0f) * s->view_arena_w;
+        speed_ratio = clampf(speed / s->player_ship().motion.max_speed, 0.0f, 1.0f) * s->view_arena_w;
     }
     bs_glow_params render_glow = s->render.glow_params;
     f32 render_bloom_intensity = s->render.bloom_intensity;

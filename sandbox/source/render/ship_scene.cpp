@@ -13,8 +13,10 @@
 using namespace bs_math;
 
 // ---- Engine exhaust tuning -------------------------------------------------------------
-static const f32 EXHAUST_BASE_LENGTH = 16.0f;
-static const f32 EXHAUST_MAX_EXTRA   = 48.0f;
+// Jet length is proportional to the hull so a drone's plume and a cruiser's plume both read
+// correctly. Fractions match the legacy 16+48-unit jet on the original ~41-unit drone hull.
+static const f32 EXHAUST_BASE_FRAC   = 0.40f;  // idle jet length, x hull length
+static const f32 EXHAUST_EXTRA_FRAC  = 1.15f;  // extra length at full throttle, x hull length
 static const f32 EXHAUST_FLICKER_HZ1 = 30.0f;
 static const f32 EXHAUST_FLICKER_HZ2 = 47.3f;
 static const f32 EXHAUST_JITTER_AMP  = 0.06f;
@@ -112,9 +114,10 @@ static void draw_engine_exhaust(const Ship* ship, bs_texture exhaust_tex,
                 + sinf(time * EXHAUST_FLICKER_HZ2) * 0.25f;
     f32 jitter = 1.0f + flicker * EXHAUST_JITTER_AMP;
     Vec2 fwd = vec2_rotate(Vec2{ 0.0f, 1.0f }, ship->angle);
-    f32 rear_offset = ship->visual.size_local.y * 0.5f + 2.0f;
+    f32 hull_len = ship->visual.size_local.y;
+    f32 rear_offset = hull_len * 0.5f + 2.0f;
     Vec2 rear = vec2_sub(ship->render_pos, vec2_scale(fwd, rear_offset * jitter));
-    f32 base_h = EXHAUST_BASE_LENGTH + speed_ratio * EXHAUST_MAX_EXTRA;
+    f32 base_h = hull_len * (EXHAUST_BASE_FRAC + speed_ratio * EXHAUST_EXTRA_FRAC);
     f32 base_w = ship->visual.size_local.x * 0.35f;
     // Three layers: core (white, smallest, highest glow), body (orange), halo (red, largest).
     // The soft radial-gradient texture (exhaust_tex) provides natural tapered falloff.
@@ -201,7 +204,7 @@ void draw_ship_scene(game_state* s) {
         const FleetShip& fs = s->fleet_state.fleet.at(i);
         const Ship* ship = &fs.ship;
         f32 ship_speed = vec2_length(fs.flight.velocity);
-        f32 ship_speed_ratio = clampf(ship_speed / SHIP_MAX_SPEED, 0.0f, 1.0f);
+        f32 ship_speed_ratio = clampf(ship_speed / ship->motion.max_speed, 0.0f, 1.0f);
 
         bs_math::Vec2 ship_to_star = vec2_sub(s->star_pos, ship->render_pos);
         f32 dist = vec2_length(ship_to_star);
@@ -233,7 +236,7 @@ void draw_ship_scene(game_state* s) {
         if (sd > 0.001f) { bs_math::Vec2 d = vec2_scale(to_star, 1.0f / sd); ld = bs_math::Vec3{ d.x, d.y, 0.2f }; }
         draw_ship_visual_ex(&n.ship, 1.0f, ld, tint, BLEND_ALPHA, bs_color{ 1.0f, 0.0f, 0.0f, 0.0f });
         draw_engine_exhaust(&n.ship, s->render.exhaust_texture, &s->render.exhaust_glow,
-                            clampf(vec2_length(n.flight.velocity) / SHIP_MAX_SPEED, 0.0f, 1.0f),
+                            clampf(vec2_length(n.flight.velocity) / n.ship.motion.max_speed, 0.0f, 1.0f),
                             1.0f, s->elapsed_time);
     }
     // Enemy ship rendering based on the dedicated ship sensor range.

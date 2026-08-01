@@ -392,15 +392,17 @@ b8 game_init(Game* game_inst) {
 
         const VesselFaction player_faction = s->fleet_state.fleet.flagship().ship.faction;
 
+        // Cruiser hulls are ~1586 units long (~817-unit bounding radius), so keep the demo
+        // formation spread wide enough that no hulls overlap at spawn.
         const Vec2 escort_offsets[4] = {
 
-            Vec2{ 24000.0f,  1500.0f },
+            Vec2{ 24000.0f,  2500.0f },
 
-            Vec2{ 24000.0f, -1500.0f },
+            Vec2{ 24000.0f, -2500.0f },
 
-            Vec2{ 22500.0f,  1500.0f },
+            Vec2{ 21000.0f,  2500.0f },
 
-            Vec2{ 22500.0f, -1500.0f },
+            Vec2{ 21000.0f, -2500.0f },
 
         };
 

@@ -39,17 +39,18 @@ static CombatEntity* find_combat_entity_for_ship(game_state* s, Ship* ship) {
 void FleetShip::simulate(f32 dt, b8 turn_commanded) {
     Ship*       sh = &ship;
     ShipFlight* fl = &flight;
+    const ShipMotion& m = sh->motion; // per-ship tuning from the hull's size class
     // Auto-stabilize spin toward zero whenever no turn is commanded. Bleeds at the turn-accel
     // rate, mirroring the A/D ramp, so a released turn coasts down the same way it spun up.
     if (!turn_commanded) {
-        f32 drop = SHIP_TURN_ACCEL * dt;
+        f32 drop = m.turn_accel * dt;
         if (fl->angular_velocity > 0.0f)      fl->angular_velocity = (fl->angular_velocity > drop) ? fl->angular_velocity - drop : 0.0f;
         else if (fl->angular_velocity < 0.0f) fl->angular_velocity = (fl->angular_velocity < -drop) ? fl->angular_velocity + drop : 0.0f;
     }
     // Clamp linear + angular speed to their caps.
     f32 spd = vec2_length(fl->velocity);
-    if (spd > SHIP_MAX_SPEED) fl->velocity = vec2_scale(fl->velocity, SHIP_MAX_SPEED / spd);
-    fl->angular_velocity = clampf(fl->angular_velocity, -SHIP_MAX_TURN, SHIP_MAX_TURN);
+    if (spd > m.max_speed) fl->velocity = vec2_scale(fl->velocity, m.max_speed / spd);
+    fl->angular_velocity = clampf(fl->angular_velocity, -m.max_turn, m.max_turn);
     // Integrate the rigid-body pose.
     sh->origin = hierpos_add_vec2(&sh->origin, vec2_scale(fl->velocity, dt));
     sh->angle += fl->angular_velocity * dt;
@@ -59,6 +60,7 @@ void FleetShip::update_move(f32 dt) {
     if (!has_move_target) return;
     Ship*       sh = &ship;
     ShipFlight* fl = &flight;
+    const ShipMotion& m = sh->motion; // per-ship tuning from the hull's size class
     Vec2 to_target = hierpos_diff(&move_target, &sh->origin);
     f32 dist  = vec2_length(to_target);
     f32 speed = vec2_length(fl->velocity);
@@ -70,7 +72,7 @@ void FleetShip::update_move(f32 dt) {
     }
     // Desired velocity: toward the target, capped by the distance we can still brake from.
     Vec2 dir = (dist > 0.0001f) ? vec2_scale(to_target, 1.0f / dist) : Vec2{ 0.0f, 0.0f };
-    f32 desired_speed = (dist > 0.0001f) ? fminf(SHIP_MAX_SPEED, sqrtf(2.0f * SHIP_DECEL * dist)) : 0.0f;
+    f32 desired_speed = (dist > 0.0001f) ? fminf(m.max_speed, sqrtf(2.0f * m.decel * dist)) : 0.0f;
     Vec2 desired_vel = vec2_scale(dir, desired_speed);
     Vec2 vel_err = vec2_sub(desired_vel, fl->velocity);
     // Desired acceleration to correct velocity error, then project onto local thrusters.
@@ -79,13 +81,13 @@ void FleetShip::update_move(f32 dt) {
     Vec2 right = vec2_rotate(Vec2{ 1.0f, 0.0f }, sh->angle);
     f32 fwd_acc  = vec2_dot(desired_acc, fwd);
     f32 right_acc = vec2_dot(desired_acc, right);
-    if (fwd_acc > 0.0f) fwd_acc = fminf(fwd_acc, SHIP_ACCEL);
-    else                fwd_acc = fmaxf(fwd_acc, -SHIP_DECEL);
-    right_acc = clampf(right_acc, -SHIP_ACCEL, SHIP_ACCEL);
+    if (fwd_acc > 0.0f) fwd_acc = fminf(fwd_acc, m.accel);
+    else                fwd_acc = fmaxf(fwd_acc, -m.decel);
+    right_acc = clampf(right_acc, -m.accel, m.accel);
     Vec2 acc = vec2_add(vec2_scale(fwd, fwd_acc), vec2_scale(right, right_acc));
     fl->velocity = vec2_add(fl->velocity, vec2_scale(acc, dt));
     f32 cur_speed = vec2_length(fl->velocity);
-    if (cur_speed > SHIP_MAX_SPEED) fl->velocity = vec2_scale(fl->velocity, SHIP_MAX_SPEED / cur_speed);
+    if (cur_speed > m.max_speed) fl->velocity = vec2_scale(fl->velocity, m.max_speed / cur_speed);
 }
 // =====================================================================================
 void FleetShip::update_attack(game_state* s, f32 dt) {
@@ -95,6 +97,7 @@ void FleetShip::update_attack(game_state* s, f32 dt) {
     if (!ce || !ce->active || !ce->ship) { clear_attack_target(); return; }
     Ship*       sh = &ship;
     ShipFlight* fl = &flight;
+    const ShipMotion& m = sh->motion; // per-ship tuning from the hull's size class
     if (ce->faction == sh->faction) { clear_attack_target(); return; } // no longer hostile
     Ship* target   = ce->ship;
     f32 ship_r     = ship_bounding_radius(sh);
@@ -105,7 +108,7 @@ void FleetShip::update_attack(game_state* s, f32 dt) {
     // Rotate nose toward the target. Heading convention: ship angle 0 => nose +Y.
     f32 desired_angle = atan2f(-to_target.x, to_target.y);
     f32 angle_diff = normalize_angle(desired_angle - sh->angle);
-    f32 max_rot = SHIP_MAX_TURN * dt;
+    f32 max_rot = m.max_turn * dt;
     sh->angle += clampf(angle_diff, -max_rot, max_rot);
     fl->angular_velocity = 0.0f;
     // Only approach the target if we have no separate move order. When both orders are set,
@@ -113,18 +116,18 @@ void FleetShip::update_attack(game_state* s, f32 dt) {
     if (!has_move_target) {
         if (fabsf(angle_diff) < RTS_MOVE_FACE_ANGLE) {
             Vec2 heading = vec2_rotate(Vec2{ 0.0f, 1.0f }, sh->angle);
-            f32 brake_dist = (speed > 0.0f) ? (speed * speed) / (2.0f * SHIP_DECEL) : 0.0f;
+            f32 brake_dist = (speed > 0.0f) ? (speed * speed) / (2.0f * m.decel) : 0.0f;
             f32 desired_dist = RTS_ATTACK_RANGE;
             f32 min_standoff = RTS_ATTACK_STOP_DIST + target_r + ship_r;
             if (desired_dist < min_standoff) desired_dist = min_standoff;
             // Only close distance when too far; never actively back away from the target.
             if (dist > desired_dist + brake_dist) {
-                fl->velocity = vec2_add(fl->velocity, vec2_scale(heading, SHIP_ACCEL * dt));
+                fl->velocity = vec2_add(fl->velocity, vec2_scale(heading, m.accel * dt));
             } else if (speed > 0.0f) {
-                fl->velocity = vec2_add(fl->velocity, vec2_scale(fl->velocity, -SHIP_DECEL * dt / speed));
+                fl->velocity = vec2_add(fl->velocity, vec2_scale(fl->velocity, -m.decel * dt / speed));
             }
         } else if (speed > 0.0f) {
-            fl->velocity = vec2_add(fl->velocity, vec2_scale(fl->velocity, -SHIP_DECEL * 0.5f * dt / speed));
+            fl->velocity = vec2_add(fl->velocity, vec2_scale(fl->velocity, -m.decel * 0.5f * dt / speed));
         }
     }
     // Fire when facing the target, inside max range, and outside minimum range.
@@ -149,7 +152,7 @@ void FleetShip::update_attack(game_state* s, f32 dt) {
         }
     }
     f32 cur_speed = vec2_length(fl->velocity);
-    if (cur_speed > SHIP_MAX_SPEED) fl->velocity = vec2_scale(fl->velocity, SHIP_MAX_SPEED / cur_speed);
+    if (cur_speed > m.max_speed) fl->velocity = vec2_scale(fl->velocity, m.max_speed / cur_speed);
 }
 // =====================================================================================
 void FleetShip::clear_move_target() {

@@ -141,9 +141,68 @@ struct DefenseLaser {
 
 };
 
+// =====================================================================================
+// Ship size classes. Motion feel scales with hull size: a drone flits, a cruiser is a
+// slow-turning wall of metal. The class is derived automatically from the hull's WORLD
+// length (size_local.y * world_scale) at ship_load time, or authored explicitly in the
+// .ship file with `class <drone|corvette|frigate|destroyer|cruiser|capital>`.
+// =====================================================================================
+
+enum ShipSizeClass {
+
+    SHIP_CLASS_DRONE = 0,   // < 60 units   — nimble strike craft (legacy feel)
+
+    SHIP_CLASS_CORVETTE,    // < 150 units
+
+    SHIP_CLASS_FRIGATE,     // < 350 units
+
+    SHIP_CLASS_DESTROYER,   // < 700 units
+
+    SHIP_CLASS_CRUISER,     // < 1800 units — heavy line ship
+
+    SHIP_CLASS_CAPITAL,     // >= 1800 units
+
+    SHIP_CLASS_COUNT,
+
+};
+
+// Per-class inertial flight tuning consumed by ship_control (manual piloting) and the
+// fleet autopilot (move/attack orders). Same shape as the legacy SHIP_* globals, which
+// remain as the DRONE baseline.
+
+struct ShipMotion {
+
+    f32 max_speed;   // linear speed cap (units/s)
+
+    f32 accel;       // forward / strafe thrust (units/s^2)
+
+    f32 decel;       // reverse + brake thrust (units/s^2)
+
+    f32 turn_accel;  // angular ramp / auto-stabilize rate (rad/s^2)
+
+    f32 max_turn;    // angular speed cap (rad/s)
+
+};
+
+// Classify a hull by its WORLD length (size_local.y * world_scale).
+
+ShipSizeClass ship_size_class_from_length(f32 hull_length_world);
+
+// Motion tuning table lookup for a size class.
+
+const ShipMotion& ship_motion_for_class(ShipSizeClass c);
+
+// Display name ("Drone", "Cruiser", ...).
+
+const char* ship_size_class_name(ShipSizeClass c);
+
 struct Ship {
 
     f32           world_scale;    // exterior scale multiplier
+
+    ShipSizeClass size_class;     // hull size category (drives motion feel)
+
+    ShipMotion    motion;         // per-ship flight tuning, resolved at load from size_class
 
     bs_math::HierPos2 origin;    // world position (hierarchical grid cell + local offset)
 

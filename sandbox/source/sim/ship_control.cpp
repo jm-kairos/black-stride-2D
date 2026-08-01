@@ -23,11 +23,14 @@ b8 control_ship_global(game_state* s, FleetShip* pf, f32 dt) {
     // Heading basis: angle 0 => nose points +Y (up), matching the tilemap's nose-at-top.
     Vec2 fwd   = vec2_rotate(Vec2{ 0.0f, 1.0f }, ship->angle); // forward (nose)
     Vec2 right = vec2_rotate(Vec2{ 1.0f, 0.0f }, ship->angle); // starboard
-    f32 strafe = SHIP_ACCEL; // full strafe thrust
+    // Per-ship motion tuning (resolved from the hull's size class at load: a drone is
+    // nimble, a cruiser is a slow-turning wall of metal).
+    const ShipMotion& m = ship->motion;
+    f32 strafe = m.accel; // full strafe thrust
     // ---- Linear thrust (accumulate this frame's acceleration along the heading) ----
     Vec2 acc{ 0.0f, 0.0f };
-    if (input_is_key_down(KEY_W)) acc = vec2_add(acc, vec2_scale(fwd,   SHIP_ACCEL)); // forward
-    if (input_is_key_down(KEY_S)) acc = vec2_add(acc, vec2_scale(fwd,  -SHIP_DECEL)); // reverse
+    if (input_is_key_down(KEY_W)) acc = vec2_add(acc, vec2_scale(fwd,   m.accel)); // forward
+    if (input_is_key_down(KEY_S)) acc = vec2_add(acc, vec2_scale(fwd,  -m.decel)); // reverse
     if (input_is_key_down(KEY_E)) acc = vec2_add(acc, vec2_scale(right, strafe));     // strafe right
     if (input_is_key_down(KEY_Q)) acc = vec2_add(acc, vec2_scale(right,-strafe));     // strafe left
     fl->velocity = vec2_add(fl->velocity, vec2_scale(acc, dt));
@@ -35,7 +38,7 @@ b8 control_ship_global(game_state* s, FleetShip* pf, f32 dt) {
     if (input_is_key_down(KEY_C)) {
         f32 spd = vec2_length(fl->velocity);
         if (spd > 0.0001f) {
-            f32 ns = spd - SHIP_DECEL * dt;
+            f32 ns = spd - m.decel * dt;
             if (ns < 0.0f) ns = 0.0f;
             fl->velocity = vec2_scale(fl->velocity, ns / spd);
         }
@@ -67,7 +70,7 @@ b8 control_ship_global(game_state* s, FleetShip* pf, f32 dt) {
         if (input_is_key_down(KEY_D)) turn_in -= 1.0f; // turn right (CW)
     }
     if (turn_in != 0.0f) {
-        fl->angular_velocity += turn_in * SHIP_TURN_ACCEL * dt;
+        fl->angular_velocity += turn_in * m.turn_accel * dt;
         return TRUE;  // a turn is actively commanded this frame
     }
     return FALSE;     // no turn commanded -> simulate_ship will auto-stabilize the spin
