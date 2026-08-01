@@ -1,5 +1,6 @@
 #include "render/ship_render.h"
 #include "game.h"
+#include "sim/module.h"          // ModuleDef::type (sensor-dish mount art)
 #include "core/view_transform.h" // render_from_hierpos
 #include "render/text.h"
 #include "core/render_layers.h" // LAYER_UI
@@ -271,6 +272,137 @@ void draw_hardpoint_overlay(const Ship* ship, f32 thickness) {
                 Vec2 ew  = vec2_add(ship->render_pos, ship_local_dir(ship, el));
                 renderer_draw_line(c0, ew, thickness, arc_color, LAYER_DEBUG);
             }
+        }
+    }
+}
+
+void draw_hardpoint_highlight(const Ship* ship, i32 hp_index, f32 time) {
+    if (!ship || hp_index < 0 || hp_index >= ship->hardpoint_count) return;
+    const HardpointDef& hp = ship->hardpoints[hp_index];
+    f32 e     = hardpoint_half_extent(hp.size) * 1.35f;
+    f32 pulse = 0.60f + 0.40f * sinf(time * 6.0f);
+    bs_color c = bs_color{ 1.0f, 1.0f, 1.0f, pulse };
+    const Vec2 offsets[4] = { { -e, -e }, { e, -e }, { e, e }, { -e, e } };
+    Vec2 w[4];
+    for (i32 i = 0; i < 4; ++i) {
+        Vec2 lc = vec2_add(hp.pos_local, vec2_rotate(offsets[i], hp.facing));
+        w[i]    = vec2_add(ship->render_pos, ship_local_dir(ship, lc));
+    }
+    for (i32 i = 0; i < 4; ++i)
+        renderer_draw_line(w[i], w[(i + 1) % 4], 2.5f, c, LAYER_GIZMO);
+}
+
+void draw_hardpoint_drag_feedback(const Ship* ship, i32 hp_index, b8 fits, f32 time) {
+    if (!ship || hp_index < 0 || hp_index >= ship->hardpoint_count) return;
+    const HardpointDef& hp = ship->hardpoints[hp_index];
+    f32      e = hardpoint_half_extent(hp.size) * 1.25f; // sits just outside the base overlay box
+    f32      thickness;
+    bs_color c;
+    if (fits) {
+        f32 pulse = 0.55f + 0.45f * sinf(time * 5.0f);
+        c         = bs_color{ 0.25f, 1.00f, 0.40f, pulse };
+        thickness = 2.5f;
+    } else {
+        c         = bs_color{ 1.00f, 0.22f, 0.18f, 0.35f };
+        thickness = 1.5f;
+    }
+    const Vec2 offsets[4] = { { -e, -e }, { e, -e }, { e, e }, { -e, e } };
+    Vec2 w[4];
+    for (i32 i = 0; i < 4; ++i) {
+        Vec2 lc = vec2_add(hp.pos_local, vec2_rotate(offsets[i], hp.facing));
+        w[i]    = vec2_add(ship->render_pos, ship_local_dir(ship, lc));
+    }
+    for (i32 i = 0; i < 4; ++i)
+        renderer_draw_line(w[i], w[(i + 1) % 4], thickness, c, LAYER_GIZMO);
+}
+
+// ---- Procedural mount art (Phase 5) ------------------------------------------------------
+// No turret PNGs exist, so mounts are drawn as flat-shaded rectangles straight from the
+// sprite batch. All extents are WORLD units (they scale with the hull under zoom), unlike
+// renderer_draw_line's screen-pixel thickness.
+
+static const u32 LAYER_MOUNT_ART = LAYER_SHIP + 1; // just above the hull sprite
+
+// Solid rotated rectangle (white texture). custom.z >= 0.5 marks it self-emissive so the
+// galaxy-map star light can't wash the dark steel out to white (same fix as the hull).
+static void draw_solid_rect(Vec2 center, Vec2 size, f32 rotation, bs_color color) {
+    bs_sprite sp{};
+    sp.position = center;
+    sp.size     = size;
+    sp.origin   = Vec2{ 0.5f, 0.5f };
+    sp.rotation = rotation;
+    sp.uv       = bs_rect{ 0.0f, 0.0f, 1.0f, 1.0f };
+    sp.tint     = color;
+    sp.custom   = bs_color{ 0.0f, 0.0f, 1.0f, 0.0f };
+    sp.texture  = bs_texture{ BS_INVALID_HANDLE };
+    sp.blend    = BLEND_ALPHA;
+    sp.layer    = LAYER_MOUNT_ART;
+    renderer_draw_sprite(&sp);
+}
+
+// Gun turret: base ring fixed to the hull, housing + barrel(s) rotated by the live turret
+// aim (Ship.mount_aim). The point-defense variant is smaller with twin barrels.
+static void draw_turret(const Ship* ship, i32 hp_index, b8 is_pd, f32 alpha) {
+    const HardpointDef& hp = ship->hardpoints[hp_index];
+    f32  e   = hardpoint_half_extent(hp.size);
+    f32  sc  = ship->world_scale;
+    Vec2 c   = vec2_add(ship->render_pos, ship_local_dir(ship, hp.pos_local));
+    f32  aim = ship->angle + ship->mount_aim[hp_index]; // world aim angle
+    Vec2 fwd = vec2_rotate(Vec2{ 0.0f, 1.0f }, aim);    // aim forward
+    Vec2 rgt = vec2_rotate(Vec2{ 1.0f, 0.0f }, aim);    // aim right
+
+    bs_color base_c    = bs_color{ 0.12f, 0.13f, 0.15f, 0.95f * alpha };
+    bs_color housing_c = bs_color{ 0.24f, 0.26f, 0.30f, alpha };
+    bs_color barrel_c  = bs_color{ 0.34f, 0.37f, 0.42f, alpha };
+    bs_color muzzle_c  = bs_color{ 0.09f, 0.10f, 0.11f, alpha };
+
+    if (is_pd) {
+        // Base plate (hull-fixed), compact housing, twin barrels.
+        draw_solid_rect(c, Vec2{ 1.25f * e * sc, 1.25f * e * sc }, ship->angle, base_c);
+        draw_solid_rect(vec2_add(c, vec2_scale(fwd, 0.10f * e * sc)),
+                        Vec2{ 0.80f * e * sc, 0.90f * e * sc }, aim, housing_c);
+        for (i32 sgn = -1; sgn <= 1; sgn += 2) {
+            Vec2 bc = vec2_add(c, vec2_add(vec2_scale(fwd, 0.95f * e * sc),
+                                           vec2_scale(rgt, (f32)sgn * 0.22f * e * sc)));
+            draw_solid_rect(bc, Vec2{ 0.14f * e * sc, 1.10f * e * sc }, aim, barrel_c);
+        }
+        return;
+    }
+    // Main gun: base plate, housing, single heavy barrel with a dark muzzle block.
+    draw_solid_rect(c, Vec2{ 1.60f * e * sc, 1.60f * e * sc }, ship->angle, base_c);
+    draw_solid_rect(vec2_add(c, vec2_scale(fwd, 0.15f * e * sc)),
+                    Vec2{ 1.00f * e * sc, 1.30f * e * sc }, aim, housing_c);
+    draw_solid_rect(vec2_add(c, vec2_scale(fwd, 1.15f * e * sc)),
+                    Vec2{ 0.28f * e * sc, 1.90f * e * sc }, aim, barrel_c);
+    draw_solid_rect(vec2_add(c, vec2_scale(fwd, 2.00f * e * sc)),
+                    Vec2{ 0.38f * e * sc, 0.30f * e * sc }, aim, muzzle_c);
+}
+
+// Sensor module: hull-fixed base plate with a continuously spinning radar bar + hub.
+static void draw_radar_dish(const Ship* ship, i32 hp_index, f32 time, f32 alpha) {
+    const HardpointDef& hp = ship->hardpoints[hp_index];
+    f32  e    = hardpoint_half_extent(hp.size);
+    f32  sc   = ship->world_scale;
+    Vec2 c    = vec2_add(ship->render_pos, ship_local_dir(ship, hp.pos_local));
+    f32  spin = ship->angle + hp.facing + time * 1.8f;
+
+    draw_solid_rect(c, Vec2{ 1.40f * e * sc, 1.40f * e * sc }, ship->angle,
+                    bs_color{ 0.12f, 0.13f, 0.15f, 0.95f * alpha });
+    draw_solid_rect(c, Vec2{ 0.18f * e * sc, 2.40f * e * sc }, spin,
+                    bs_color{ 0.45f, 0.70f, 0.52f, alpha });
+    draw_solid_rect(c, Vec2{ 0.45f * e * sc, 0.45f * e * sc }, spin,
+                    bs_color{ 0.26f, 0.30f, 0.28f, alpha });
+}
+
+void draw_ship_mounts(const Ship* ship, f32 time, f32 alpha) {
+    if (!ship || alpha <= 0.001f) return;
+    for (i32 i = 0; i < ship->hardpoint_count; ++i) {
+        if (ship->mounts[i]) {
+            draw_turret(ship, i, FALSE, alpha);
+        } else if (ship->point_defense_mount == i) {
+            draw_turret(ship, i, TRUE, alpha);
+        } else if (ship->module_mounts[i] && (ship->module_mounts[i]->type & MODULE_TYPE_SENSOR)) {
+            draw_radar_dish(ship, i, time, alpha);
         }
     }
 }

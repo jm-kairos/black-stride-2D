@@ -67,6 +67,12 @@ void point_defense_update(game_state* s, f32 dt) {
         p.hp              -= L.damage_per_second * dt;
         L.dwell_remaining -= dt;
 
+        // Swing the PD turret art onto the locked projectile.
+        if (sh.point_defense_mount >= 0) {
+            Vec2 to_p = hierpos_diff(&p.position, &sh.origin, BS_HIERPOS_CELL_SIZE);
+            ship_turret_aim_at(&sh, sh.point_defense_mount, to_p);
+        }
+
         // Record the beam for the overlay (the PD's own hardpoint -> current target position;
         // unmounted PDs fall back to the legacy shared fire offset).
         if (s->defense_beam_count < MAX_DEFENSE_BEAMS) {

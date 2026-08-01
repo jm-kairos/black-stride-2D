@@ -19,3 +19,18 @@ void draw_collider_outline(const Ship* ship, bs_color color, f32 thickness);
 // its authored ship-local position, colour-coded by accepted module kind, with a tick
 // line showing the mount's rest facing and fainter rays marking its traverse-arc edges.
 void draw_hardpoint_overlay(const Ship* ship, f32 thickness);
+
+// Pulsing white outline around one hardpoint's box (LAYER_GIZMO). Used by the in-game
+// hardpoint editor to show which slot the gizmo is editing.
+void draw_hardpoint_highlight(const Ship* ship, i32 hp_index, f32 time);
+
+// Drag-and-drop feedback for one hardpoint's box (LAYER_GIZMO), drawn while an arsenal
+// drag is airborne: a pulsing green outline when the dragged item fits this slot, a dim
+// red one when the slot rejects it (wrong kind or too small).
+void draw_hardpoint_drag_feedback(const Ship* ship, i32 hp_index, b8 fits, f32 time);
+
+// Procedural mount art drawn on top of the hull (LAYER_SHIP + 1): a rotating gun turret per
+// mounted weapon (aimed by Ship.mount_aim), a smaller twin-barrel turret on the point-defense
+// mount, and a spinning radar dish on mounted sensor modules. `alpha` fades the art with the
+// hull (e.g. the enemy ship's sensor-visibility fade).
+void draw_ship_mounts(const Ship* ship, f32 time, f32 alpha);

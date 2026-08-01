@@ -111,6 +111,9 @@ void FleetShip::update_attack(game_state* s, f32 dt) {
     f32 max_rot = m.max_turn * dt;
     sh->angle += clampf(angle_diff, -max_rot, max_rot);
     fl->angular_velocity = 0.0f;
+    // Every mounted weapon turret tracks the target (visual traverse, arc-clamped).
+    for (i32 hpi = 0; hpi < sh->hardpoint_count; ++hpi)
+        if (sh->mounts[hpi]) ship_turret_aim_at(sh, hpi, to_target);
     // Only approach the target if we have no separate move order. When both orders are set,
     // movement is handled by update_move and we just track/fire here.
     if (!has_move_target) {

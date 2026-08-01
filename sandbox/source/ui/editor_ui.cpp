@@ -4,13 +4,36 @@
 #include "sim/action_log.h"       // action_log_push
 #include "sim/combat_arena.h"     // combat_arena_rebuild_player_entities (multi-ship toggle)
 #include "core/coord_diag.h"        // coord_diag_is_enabled / set_enabled / last_violations
+#include "core/cursor_world.h"     // mouse_true_hierpos (hardpoint cursor placement)
+#include "render/ship_render.h"    // draw_hardpoint_highlight (gizmo selection)
 #include <renderer/bs_ui.h>    // bs_ui_* panel/widget API
+#include <core/logger.h>       // BS_LOG_INFO (.ship hardpoint line dump)
 #include "core/view_transform.h" // g_zoom_out_speed_gain
 #include "render/sensor_overlay.h" // g_sensor_fade_distance
 #include <stdio.h>             // snprintf
 #include <math.h>             // sqrt
 
 using namespace bs_math;
+
+// Rebuild the '|'-joined accepts list ("weapon|defense") from a MODULE_TYPE_* mask —
+// the exact reverse of ship_load's parse_module_mask, for .ship line round-tripping.
+static void hardpoint_accepts_string(u32 mask, char* buf, i32 cap) {
+    static const struct { u32 bit; const char* name; } KINDS[] = {
+        { MODULE_TYPE_WEAPON,  "weapon"  },
+        { MODULE_TYPE_DEFENSE, "defense" },
+        { MODULE_TYPE_SENSOR,  "sensor"  },
+        { MODULE_TYPE_ENGINE,  "engine"  },
+        { MODULE_TYPE_UTILITY, "utility" },
+    };
+    i32 n = 0;
+    buf[0] = '\0';
+    for (i32 i = 0; i < 5; ++i) {
+        if (!(mask & KINDS[i].bit)) continue;
+        n += snprintf(buf + n, (size_t)(cap - n), "%s%s", (n > 0) ? "|" : "", KINDS[i].name);
+        if (n >= cap - 1) break;
+    }
+    if (buf[0] == '\0') snprintf(buf, (size_t)cap, "utility");
+}
 
 // Per-entity glow parameter editor. Rendered inline inside build_editor_panel for each glow
 // target; id_suffix keeps widget ids unique across the ship/exhaust/bullet/global blocks.
@@ -423,6 +446,77 @@ void build_editor_panel(game_state* s) {
                     d.retarget_cooldown = pd.retarget_cooldown;
                 }
             }
+        }
+        // ---- HARDPOINT EDITOR (live .ship authoring gizmo) -----------------------------------
+        // Edits the FLAGSHIP's hardpoint skeleton in place: nudge a slot's position/facing/arc
+        // with sliders (or drop it under the cursor), watch the overlay update live, then dump
+        // ready-to-paste `hardpoint` lines to the log for the .ship file.
+        bs_ui_separator();
+        const f32 HPC[4] = { 0.95f, 0.75f, 0.35f, 1.0f };
+        bs_ui_text_colored(HPC[0], HPC[1], HPC[2], HPC[3], "HARDPOINT EDITOR");
+        static bool hp_edit_on = false;
+        static i32  hp_sel     = 0;
+        static bool hp_snap    = false;
+        bs_ui_checkbox("Edit flagship hardpoints", &hp_edit_on);
+        if (hp_edit_on) {
+            Ship& fship = s->player_ship();
+            if (fship.hardpoint_count <= 0) {
+                bs_ui_text("This hull has no hardpoints.");
+            } else {
+                if (hp_sel >= fship.hardpoint_count) hp_sel = fship.hardpoint_count - 1;
+                if (hp_sel < 0) hp_sel = 0;
+                if (bs_ui_button("< Prev", TRUE))
+                    hp_sel = (hp_sel + fship.hardpoint_count - 1) % fship.hardpoint_count;
+                bs_ui_same_line();
+                if (bs_ui_button("Next >", TRUE))
+                    hp_sel = (hp_sel + 1) % fship.hardpoint_count;
+                HardpointDef& hp = fship.hardpoints[hp_sel];
+                char acc[64];
+                hardpoint_accepts_string(hp.accepts, acc, sizeof(acc));
+                char hdr[128];
+                snprintf(hdr, sizeof(hdr), "%d/%d  '%s'  %s  [%s]",
+                         hp_sel + 1, fship.hardpoint_count, hp.id,
+                         hardpoint_size_name(hp.size), acc);
+                bs_ui_text(hdr);
+                // Position sliders span the hull footprint (ship-local units == art pixels).
+                f32 hw = fship.size_local.x * 0.5f;
+                f32 hh = fship.size_local.y * 0.5f;
+                bs_ui_slider_float("Pos X (px)", &hp.pos_local.x, -hw, hw);
+                bs_ui_slider_float("Pos Y (px)", &hp.pos_local.y, -hh, hh);
+                f32 fac_deg = hp.facing * BS_RAD2DEG;
+                f32 arc_deg = hp.arc * BS_RAD2DEG;
+                if (bs_ui_slider_float("Facing (deg)", &fac_deg, -180.0f, 180.0f))
+                    hp.facing = fac_deg * BS_DEG2RAD;
+                if (bs_ui_slider_float("Arc (deg)", &arc_deg, 0.0f, 360.0f))
+                    hp.arc = arc_deg * BS_DEG2RAD;
+                // Cursor placement: the slot rides the mouse (inverse pose -> ship-local px)
+                // until the checkbox is turned off.
+                bs_ui_checkbox("Slot follows cursor", &hp_snap);
+                if (hp_snap) {
+                    Vec2 lp = ship_world_to_local(&fship, mouse_true_hierpos(s));
+                    hp.pos_local = Vec2{ clampf(lp.x, -hw, hw), clampf(lp.y, -hh, hh) };
+                }
+                draw_hardpoint_highlight(&fship, hp_sel, s->elapsed_time);
+                // The scene only draws the skeleton while the flagship inspector is open, so
+                // keep it visible here whenever hardpoint editing is on.
+                draw_hardpoint_overlay(&fship, 1.5f);
+                if (bs_ui_button("Log .ship hardpoint lines", TRUE)) {
+                    BS_LOG_INFO("---- flagship hardpoints (paste into the .ship file) ----");
+                    for (i32 i = 0; i < fship.hardpoint_count; ++i) {
+                        const HardpointDef& h = fship.hardpoints[i];
+                        char a[64];
+                        hardpoint_accepts_string(h.accepts, a, sizeof(a));
+                        BS_LOG_INFO("hardpoint %s %s %s %.1f %.1f %.1f %.1f",
+                                    h.id, a, hardpoint_size_name(h.size),
+                                    h.pos_local.x, h.pos_local.y,
+                                    h.facing * BS_RAD2DEG, h.arc * BS_RAD2DEG);
+                    }
+                    action_log_push(s, "Hardpoint lines written to the log.");
+                }
+                bs_ui_text("Edits are live on the flagship only.");
+            }
+        } else {
+            hp_snap = false;
         }
         bs_ui_text("Out-of-sensor FX:");
         bs_ui_slider_float("FX sweep speed", &s->out_sensor_fx.sweep_speed, 0.0f, 5.0f);

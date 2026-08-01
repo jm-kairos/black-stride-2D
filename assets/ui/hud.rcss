@@ -407,36 +407,28 @@ body {
     border-color: #5fd0ff;
 }
 
-/* --- Flagship inspector window (persistent, centred normal-size window) ------------ */
+/* --- Flagship inspector window (floating, right side; planet-inspector footprint) -- */
 /* pointer-events:auto makes the window a solid panel (clicks over it never reach the world).
    Weapon firing is additionally suppressed game-side while the window is open (see game.cpp),
-   so a left-click anywhere -- inside or outside the window -- never fires the active weapon. */
+   so a left-click anywhere -- inside or outside the window -- never fires the active weapon.
+   The world (and the cruiser) stays visible beside it; world-side drops land next phase. */
 #inspector {
     position: absolute;
-    left: 0;
-    top: 0;
-    width: 100%;
-    height: 100%;
-    box-sizing: border-box;      /* 100% includes padding + border so the window fills, not overflows */
-    margin: 0;
-    padding: 16px 18px;
-    border-radius: 0;            /* edge-to-edge fullscreen: square corners */
+    top: 96px;
+    right: 32px;
+    width: 380px;
+    max-height: 720px;
+    overflow-y: auto;
     pointer-events: auto;        /* solid window; does not pass clicks through to the world */
-    display: flex;
-    flex-direction: column;      /* stack header/tabs/rule; let the arsenal row fill the rest */
 }
 
-/* The inspector fills the whole window and is no longer draggable, so the title bar is a plain
-   header band. Bleed it to the window's top edges; the negative margins cancel the panel's 16/18px
-   padding and the padding restores the text position across a tall, readable strip. */
+/* Floating side window: chrome header band bleeding to the panel's rounded top edges. */
 #inspector .win-title {
-    margin: -16px -18px 10px -18px;
-    padding: 14px 18px 12px 18px;
-    /* A brighter glass "chrome" header band across the top of the window, capped by a hairline
-       rule; square corners follow the fullscreen frame. */
+    margin: -12px -14px 10px -14px;
+    padding: 12px 14px 10px 14px;
     decorator: vertical-gradient(#2d425f #1a2941) border-box;
     border-bottom: 1px #47688c;
-    border-radius: 0;
+    border-radius: 7px 7px 0 0;
 }
 
 .insp-tabs {
@@ -462,23 +454,7 @@ body {
     background-color: #16304a88;
 }
 
-/* Two-pane Arsenal body: left = stacked weapon sections, right = ship preview. */
-.arsenal-cols {
-    display: flex;
-    flex-direction: row;
-    flex: 1 1 auto;              /* fill the vertical space under the tabs down to the window bottom */
-}
-
-.arsenal-left {
-    flex: 1 1 0px;
-    margin-right: 12px;
-}
-
-.arsenal-right {
-    flex: 1 1 0px;
-    display: flex;
-    flex-direction: column;      /* let the ship preview stretch to the full pane height */
-}
+/* Vertically stacked Arsenal body: inventory sections, then the hardpoint slot strip. */
 
 .insp-section-hdr {
     display: block;
@@ -594,24 +570,12 @@ body {
 .weapon-symbol:hover  .weapon-tip { display: block; }   /* hover -> tooltip appears */
 .weapon-symbol:active .weapon-tip { display: none;  }   /* press-to-drag -> tooltip hides */
 
-/* Ship-preview placeholder (right pane; a live/rendered preview lands in a later phase). */
-.ship-preview {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    flex: 1 1 auto;              /* fill the right pane top-to-bottom (its whole side of the window) */
-    background-color: #101d2ccc;
-    decorator: vertical-gradient(#182a3ecc #0e1b2ae6) border-box;
-    border: 1px #45638a;
-    border-top-color: #5f88ad;   /* subtle inset-glass framing */
-    border-radius: 8px;
-}
-
+/* Inspector captions (hint line + ship name under the module sections). */
 .ship-preview-label {
     display: block;
     color: #5f7488;
-    font-size: 14px;
+    font-size: 13px;
+    margin-top: 6px;
 }
 
 .ship-preview-name {
@@ -619,67 +583,8 @@ body {
     color: #8fa6bd;
     font-size: 13px;
     margin-top: 4px;
-}
-
-/* Ship hardpoints (right pane): a row of discrete, type-agnostic drop-target slot boxes, one per
-   weapon slot. Dragging a weapon symbol from the left onto a slot assigns it (see game.cpp). Larger
-   than the source symbols so they read as the ship's mount points. :hover doubles as a drag-over cue
-   (RmlUi sets :hover on the element under the cursor even while a clone is being dragged). */
-.hardpoints {
-    display: flex;
-    flex-direction: row;
-    flex-wrap: wrap;
-    justify-content: center;
-    margin: 18px 0;
-}
-
-.weapon-slot {
-    display: block;
-    width: 56px;
-    height: 56px;
-    margin: 0 8px;
-    background-color: #1a3350;
-    decorator: vertical-gradient(#274263 #172a40) border-box;
-    border: 2px #47688c;
-    border-top-color: #789fc3;   /* bevel highlight */
-    border-radius: 8px;
-    transition: decorator color 0.12s quadratic-out;   /* ease hover; border-color owned by sel-flash */
     text-align: center;
-    color: #dce8f4;
-    position: relative;          /* anchor for the absolutely-positioned tooltip */
-    pointer-events: auto;        /* must be hit-testable to receive drops */
-    drag: clone;                 /* mounted slots are drag sources (rearrange / unmount) */
 }
-
-.weapon-slot:hover {
-    decorator: vertical-gradient(#315a83 #1e3f5f) border-box;
-    border-color: #5fd0ff;       /* drag-over highlight */
-}
-
-.weapon-slot.selected {
-    decorator: vertical-gradient(#3a6f9a #24506f) border-box;
-    border-color: #5fd0ff;
-    color: #ffffff;
-    animation: 0.4s cubic-out 1 sel-flash;   /* one-shot bloom on select */
-}
-
-.weapon-slot.empty {
-    color: #4a5a66;
-    decorator: none;             /* empty hardpoints sit flat/recessed */
-    border-color: #3f5f8455;
-    background-color: #101c2c88;
-    drag: none;                  /* empty hardpoints hold nothing to drag (still drop targets) */
-}
-
-.weapon-slot .weapon-glyph {
-    line-height: 56px;           /* vertically centre the glyph in the taller slot box */
-    font-size: 24px;
-}
-
-/* Hardpoint tooltip: same slab as the source symbols, lifted above the taller 56px slot box. */
-.weapon-slot .weapon-tip     { bottom: 64px; }
-.weapon-slot:hover  .weapon-tip { display: block; }
-.weapon-slot:active .weapon-tip { display: none;  }
 
 /* --- Space-station right-click context menu (cursor-anchored) ---------------------- */
 #station-menu {

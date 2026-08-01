@@ -88,63 +88,50 @@
     <div id="inspector-btn" data-if="inspector_btn_visible"
          data-event-click="hud_action('toggle_inspector')">Inspector</div>
 
-    <!-- Flagship inspector window (persistent; single, extensible Arsenal tab). Covers the whole
-         game window (fullscreen); the title bar is a plain header, no longer draggable. -->
-    <div id="inspector" class="panel" data-if="inspector_visible">
+    <!-- Flagship inspector window (floating, right side; planet-inspector footprint). Vertically
+         stacked loadout editor: inventory sections on top (draggable sources; also unmount drop
+         targets), the ship's hardpoint slots below (drop targets / drag sources). Drag sources
+         also emit 'dragend' so a release over the world can hit-test the cruiser's hardpoint
+         boxes and install directly on the ship (game.cpp). -->
+    <div id="inspector" class="panel" data-if="inspector_visible"
+         data-event-dragdrop="hud_action('uidrop')">
         <div class="win-title">FLAGSHIP INSPECTOR<span class="win-close" data-event-click="hud_action('close_inspector')">Collapse</span></div>
         <div class="insp-tabs">
             <div class="insp-tab active">Arsenal</div>
         </div>
         <div class="rule"></div>
-        <!-- Two-pane loadout editor: left = UNMOUNTED inventory (draggable sources; also an unmount
-             drop target), right = the ship's hardpoints as discrete, type-agnostic drop targets that
-             double as drag sources for rearranging -->
-        <div class="arsenal-cols">
-            <div class="arsenal-left">
-                <div class="insp-section-hdr">Offensive weapons</div>
-                <div class="weapon-queue inv-drop" data-event-dragdrop="hud_action('stash')">
-                    <div class="weapon-symbol" data-for="w : arsenal_inv"
-                         data-class-empty="w.empty"
-                         data-event-dragstart="hud_action(w.action)">
-                        <span class="weapon-glyph">{{ w.glyph }}</span>
-                        <div class="weapon-tip">{{ w.text }}</div>
-                    </div>
-                </div>
-                <div class="insp-section-hdr">Defensive weapons</div>
-                <div class="weapon-queue inv-drop" data-event-dragdrop="hud_action('defstash')">
-                    <div class="weapon-symbol def" data-for="w : arsenal_def"
-                         data-class-selected="w.selected" data-class-empty="w.empty"
-                         data-event-dragstart="hud_action('defdrag')">
-                        <span class="weapon-glyph">{{ w.glyph }}</span>
-                        <div class="weapon-tip">{{ w.text }}</div>
-                    </div>
-                </div>
-                <div class="insp-section-hdr">Ship modules</div>
-                <div class="weapon-queue inv-drop" data-event-dragdrop="hud_action('modstash')">
-                    <div class="weapon-symbol" data-for="w : arsenal_mod"
-                         data-class-empty="w.empty"
-                         data-event-dragstart="hud_action(w.action)">
-                        <span class="weapon-glyph">{{ w.glyph }}</span>
-                        <div class="weapon-tip">{{ w.text }}</div>
-                    </div>
-                </div>
-            </div>
-            <div class="arsenal-right">
-                <div class="ship-preview">
-                    <div class="ship-preview-label">Ship hardpoints — drop a weapon to mount it</div>
-                    <div class="hardpoints">
-                        <div class="weapon-slot" data-for="w : arsenal_hp"
-                             data-class-selected="w.selected" data-class-empty="w.empty"
-                             data-event-dragstart="hud_action(w.action)"
-                             data-event-dragdrop="hud_action(w.drop)">
-                            <span class="weapon-glyph">{{ w.glyph }}</span>
-                            <div class="weapon-tip">{{ w.text }}</div>
-                        </div>
-                    </div>
-                    <div class="ship-preview-name">{{ insp_ship_name }}</div>
-                </div>
+        <div class="insp-section-hdr">Offensive weapons</div>
+        <div class="weapon-queue inv-drop" data-event-dragdrop="hud_action('stash')">
+            <div class="weapon-symbol" data-for="w : arsenal_inv"
+                 data-class-empty="w.empty"
+                 data-event-dragstart="hud_action(w.action)"
+                 data-event-dragend="hud_action('dragend')">
+                <span class="weapon-glyph">{{ w.glyph }}</span>
+                <div class="weapon-tip">{{ w.text }}</div>
             </div>
         </div>
+        <div class="insp-section-hdr">Defensive weapons</div>
+        <div class="weapon-queue inv-drop" data-event-dragdrop="hud_action('defstash')">
+            <div class="weapon-symbol def" data-for="w : arsenal_def"
+                 data-class-selected="w.selected" data-class-empty="w.empty"
+                 data-event-dragstart="hud_action('defdrag')"
+                 data-event-dragend="hud_action('dragend')">
+                <span class="weapon-glyph">{{ w.glyph }}</span>
+                <div class="weapon-tip">{{ w.text }}</div>
+            </div>
+        </div>
+        <div class="insp-section-hdr">Ship modules</div>
+        <div class="weapon-queue inv-drop" data-event-dragdrop="hud_action('modstash')">
+            <div class="weapon-symbol" data-for="w : arsenal_mod"
+                 data-class-empty="w.empty"
+                 data-event-dragstart="hud_action(w.action)"
+                 data-event-dragend="hud_action('dragend')">
+                <span class="weapon-glyph">{{ w.glyph }}</span>
+                <div class="weapon-tip">{{ w.text }}</div>
+            </div>
+        </div>
+        <div class="ship-preview-label">Drag onto the ship to mount - drag a mounted item off the ship to unmount</div>
+        <div class="ship-preview-name">{{ insp_ship_name }}</div>
     </div>
 
     <!-- Galaxy-map hover tooltip (cursor-anchored; position set game-side via tip_left/tip_top) -->

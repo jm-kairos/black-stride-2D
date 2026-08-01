@@ -365,6 +365,18 @@ struct Ship {
 
     i32           point_defense_mount = -1;
 
+    // ---- Turret aim state (Phase 5; drives the procedural mount art) --------------------
+    // Per-hardpoint aim angle in SHIP-LOCAL radians (CCW from the nose), slewed toward
+    // mount_aim_goal by ship_update_turrets. Gameplay re-asserts the goal every frame via
+    // ship_turret_aim_at (cursor / attack target / locked projectile); when nobody does,
+    // the turret slews back to the hardpoint's rest facing.
+
+    f32           mount_aim[SHIP_MAX_HARDPOINTS];
+
+    f32           mount_aim_goal[SHIP_MAX_HARDPOINTS];
+
+    b8            mount_aim_engaged[SHIP_MAX_HARDPOINTS]; // goal asserted this frame
+
 };
 
 // ---- Hardpoint / mount queries ---------------------------------------------------------
@@ -403,6 +415,17 @@ b8 ship_hardpoint_can_aim(const Ship* ship, i32 hp_index, bs_math::Vec2 world_di
 // when it is ready and its arc covers the direction, else the first other ready mounted
 // weapon that bears. -1 when no weapon can engage.
 i32 ship_select_bearing_weapon(const Ship* ship, bs_math::Vec2 world_dir);
+
+// ---- Turret traverse (Phase 5) ----------------------------------------------------------
+
+// Point the hardpoint's turret at a world-space direction: converts to a ship-local goal
+// angle clamped inside the slot's traverse arc and flags the mount engaged for this frame.
+void ship_turret_aim_at(Ship* ship, i32 hp_index, bs_math::Vec2 world_dir);
+
+// Tick all turrets one sim step: each mount slews toward its engaged goal (or back to the
+// hardpoint's rest facing when idle) at a size-dependent traverse rate, then the engaged
+// flags are consumed. Call once per sim tick per ship that renders mount art.
+void ship_update_turrets(Ship* ship, f32 dt);
 
 // Load a ship from a `.ship` file (path relative to the working directory). Returns FALSE
 

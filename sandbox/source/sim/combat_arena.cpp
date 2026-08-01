@@ -160,6 +160,10 @@ void combat_arena_update_enemy_ai(game_state* s, f32 dt) {
     f32 max_rot = SHIP_MAX_TURN * dt;
     sh->angle += clampf(angle_diff, -max_rot, max_rot);
 
+    // Mounted weapon turrets track the flagship even while holding fire (visual traverse).
+    for (i32 hpi = 0; hpi < sh->hardpoint_count; ++hpi)
+        if (sh->mounts[hpi]) ship_turret_aim_at(sh, hpi, to_target);
+
     // Feature B: resolve hostility per-entity from this hull's own faction_id (folds transitive
     // diplomacy: an ally's enemies read hostile). Wild space / pirates always engage; the player's
     // own faction never does. Non-hostile patrols just track and watch - they hold fire.

@@ -138,6 +138,47 @@ i32 ship_select_bearing_weapon(const Ship* ship, Vec2 world_dir) {
     }
     return -1;
 }
+// ---- Turret traverse (Phase 5) ----------------------------------------------------------
+static f32 wrap_pi(f32 a) {
+    while (a >  BS_PI) a -= 2.0f * BS_PI;
+    while (a < -BS_PI) a += 2.0f * BS_PI;
+    return a;
+}
+// Traverse rate by slot size: big mounts swing slower (rad/s).
+static f32 turret_slew_rate(HardpointSize s) {
+    switch (s) {
+        case HARDPOINT_SMALL:  return 3.5f;
+        case HARDPOINT_MEDIUM: return 2.2f;
+        case HARDPOINT_LARGE:  return 1.4f;
+    }
+    return 2.2f;
+}
+void ship_turret_aim_at(Ship* ship, i32 hp_index, Vec2 world_dir) {
+    if (!ship || hp_index < 0 || hp_index >= ship->hardpoint_count) return;
+    if (world_dir.x == 0.0f && world_dir.y == 0.0f) return;
+    const HardpointDef& hp = ship->hardpoints[hp_index];
+    // Ship convention: angle 0 = nose = +Y, so a world direction's heading is atan2(-x, y).
+    f32 dir_angle = atan2f(-world_dir.x, world_dir.y);
+    f32 rel = wrap_pi(dir_angle - ship->angle - hp.facing); // offset from the rest facing
+    if (hp.arc < 2.0f * BS_PI - 1.0e-3f) {
+        f32 half = hp.arc * 0.5f;
+        rel = clampf(rel, -half, half); // pin at the traverse-arc edge, never through it
+    }
+    ship->mount_aim_goal[hp_index]    = hp.facing + rel; // ship-local goal angle
+    ship->mount_aim_engaged[hp_index] = TRUE;
+}
+void ship_update_turrets(Ship* ship, f32 dt) {
+    if (!ship || dt <= 0.0f) return;
+    for (i32 i = 0; i < ship->hardpoint_count; ++i) {
+        const HardpointDef& hp = ship->hardpoints[i];
+        // Idle turrets return to the hardpoint's rest facing.
+        f32 target = ship->mount_aim_engaged[i] ? ship->mount_aim_goal[i] : hp.facing;
+        f32 diff   = wrap_pi(target - ship->mount_aim[i]);
+        f32 step   = turret_slew_rate(hp.size) * dt;
+        ship->mount_aim[i]         = wrap_pi(ship->mount_aim[i] + clampf(diff, -step, step));
+        ship->mount_aim_engaged[i] = FALSE; // consumed; gameplay re-asserts every frame
+    }
+}
 // Parse a '|'-joined module-kind list ("weapon", "weapon|defense", ...) into a
 // MODULE_TYPE_* bitmask. Unknown kinds are skipped with a warning; returns 0 if
 // nothing matched.
@@ -348,6 +389,13 @@ b8 ship_load(Ship* out_ship, const char* path) {
         hp.facing    = 0.0f;
         hp.arc       = 2.0f * BS_PI;
         out_ship->hardpoint_count = 1;
+    }
+    // Turrets start parked at their rest facing (Phase 5 traverse state).
+    for (i32 i = 0; i < SHIP_MAX_HARDPOINTS; ++i) {
+        f32 rest = (i < out_ship->hardpoint_count) ? out_ship->hardpoints[i].facing : 0.0f;
+        out_ship->mount_aim[i]         = rest;
+        out_ship->mount_aim_goal[i]    = rest;
+        out_ship->mount_aim_engaged[i] = FALSE;
     }
     // Resolve the size class (unless authored) from the WORLD hull length, then bake the
     // class's motion tuning into the ship so piloting/autopilot read per-ship parameters.

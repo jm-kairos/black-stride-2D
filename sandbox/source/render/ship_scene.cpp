@@ -5,6 +5,7 @@
 #include "sim/celestial_parallax.h" // celestial_center_render
 #include "render/debug_overlay.h"   // g_debug_cell_grid, draw_hierpos_cell_grid
 #include "render/ship_render.h"     // draw_collider_outline, draw_fleet_emblems
+#include "core/cursor_world.h"      // mouse_true_hierpos (ship-side drag tether)
 #include "core/render_layers.h"   // LAYER_SHIP / LAYER_UI
 
 #include <renderer/renderer.h>
@@ -22,6 +23,22 @@ static const f32 EXHAUST_FLICKER_HZ2 = 47.3f;
 static const f32 EXHAUST_JITTER_AMP  = 0.06f;
 
 static const bs_color COLLIDER_COLOR = bs_color{ 1.00f, 0.18f, 0.85f, 1.0f };
+
+// Mirror of arsenal_drop_on_slot's type/size gates (game.cpp): can the armed arsenal drag
+// (kind/src, see game_state.pending_weapon_drag_kind) land on hardpoint dst? Drives the
+// green/red world-box feedback while a drag is airborne.
+static b8 arsenal_drag_fits(const Ship& fs, i32 kind, i32 src, i32 dst) {
+    const HardpointDef& dhp = fs.hardpoints[dst];
+    switch (kind) {
+        case 0: case 1: return hardpoint_accepts(&dhp, MODULE_TYPE_WEAPON);
+        case 2: case 3: return hardpoint_accepts(&dhp, MODULE_TYPE_DEFENSE);
+        case 4: return (src >= 0 && src < fs.module_stash_count)
+                           ? hardpoint_fits_module(&dhp, fs.module_stash[src]) : FALSE;
+        case 5: return (src >= 0 && src < fs.hardpoint_count && fs.module_mounts[src])
+                           ? hardpoint_fits_module(&dhp, fs.module_mounts[src]) : FALSE;
+        default: return FALSE;
+    }
+}
 
 static void draw_ship_visual_ex(const Ship* ship, f32 alpha, bs_math::Vec3 light_dir,
                                 bs_color tint, EBlendMode blend, bs_color custom) {
@@ -97,6 +114,7 @@ static void draw_enemy_ship_sensor(game_state* s) {
     // Real sprite, visible inside the sensor range.
     if (vis > 0.001f) {
         draw_ship_visual(enemy, vis, light_dir);
+        draw_ship_mounts(enemy, s->elapsed_time, vis);
     }
     // Interference effect is rendered by the dedicated subsystem.
     s->out_sensor_fx.render(s->elapsed_time, enemy, player, range, s->camera_state.camera.zoom);
@@ -215,11 +233,38 @@ void draw_ship_scene(game_state* s) {
         }
 
         draw_ship_visual(ship, 1.0f, light_dir);
+        draw_ship_mounts(ship, s->elapsed_time, 1.0f);
         draw_engine_exhaust(ship, s->render.exhaust_texture, &s->render.exhaust_glow,
                             ship_speed_ratio, 1.0f, s->elapsed_time);
-        // ---- DEBUG collider + hardpoint skeleton overlays.
+        // ---- DEBUG collider overlay.
         draw_collider_outline(ship, COLLIDER_COLOR, 1.5f);
-        draw_hardpoint_overlay(ship, 1.5f);
+        // Hardpoint skeleton: only on the flagship while its inspector is open (the loadout
+        // surface). During an airborne arsenal drag each box also gets fit feedback - pulsing
+        // green where the dragged item can land, dim red where the slot rejects it. The
+        // hardpoint editor draws its own overlay (editor_ui.cpp).
+        if (s->show_flagship_inspector && ship == &s->player_ship()) {
+            draw_hardpoint_overlay(ship, 1.5f);
+            if (s->pending_weapon_drag >= 0) {
+                for (i32 h = 0; h < ship->hardpoint_count; ++h)
+                    draw_hardpoint_drag_feedback(ship, h,
+                        arsenal_drag_fits(*ship, s->pending_weapon_drag_kind,
+                                          s->pending_weapon_drag, h),
+                        s->elapsed_time);
+            }
+            // Ship-side pick-up carry cue: pulse the source box white and tether it to the
+            // cursor so the lifted item visibly rides the mouse.
+            if (s->world_module_drag && s->pending_weapon_drag >= 0 &&
+                s->pending_weapon_drag < ship->hardpoint_count) {
+                i32 src = s->pending_weapon_drag;
+                draw_hardpoint_highlight(ship, src, s->elapsed_time);
+                Vec2 c0 = vec2_add(ship->render_pos,
+                                   ship_local_dir(ship, ship->hardpoints[src].pos_local));
+                bs_math::HierPos2 mw = mouse_true_hierpos(s);
+                Vec2 cur = render_from_hierpos(s, &mw);
+                renderer_draw_line(c0, cur, 1.5f, bs_color{ 1.0f, 1.0f, 1.0f, 0.65f },
+                                   LAYER_GIZMO);
+            }
+        }
     }
     // ---- NPC AI ships (General Ship AI): moving, civ-coloured hulls ---------------------
     for (i32 i = 0; i < NPC_SHIP_MAX; ++i) {
