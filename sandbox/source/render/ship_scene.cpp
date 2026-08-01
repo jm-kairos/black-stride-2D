@@ -41,12 +41,12 @@ static void draw_ship_visual_ex(const Ship* ship, f32 alpha, bs_math::Vec3 light
             sp.texture       = vl.texture;
             sp.blend         = blend;
             sp.layer         = LAYER_SHIP + vl.z;
-            sp.custom        = custom;
-            // Ship hulls bake their own shading; custom.z >= 0.5 makes the sprite shader skip
-            // scene point-light shading so the map-look star light + bright ambient can't wash
-            // the hull out to white at galaxy zoom (mapped layers already ignore scene lights).
-            sp.custom.b      = 1.0f;
-            sp.glow_override = &ship->glow;
+            // Hull art is plain sprite art. In sprite.frag.hlsl custom.x/custom.w gate the
+            // exhaust-style effects (heat distortion, tail->head temperature gradient, head
+            // bloom, radial glow), so zero them here or the SHIP GLOW parameters warp and
+            // tint the hull. custom.z >= 0.5 flags the sprite self-emissive so the map-look
+            // star light + bright ambient can't wash it out to white at galaxy zoom.
+            sp.custom        = bs_color{ 0.0f, custom.g, 1.0f, 0.0f };
             renderer_draw_sprite(&sp);
         } else if (vl.kind == VIS_LAYER_MAPPED) {
             if (!vl.texture.id || !vl.normal_map.id || !vl.depth_map.id || !vl.position_map.id) continue;
