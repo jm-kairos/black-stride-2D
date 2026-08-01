@@ -2,6 +2,7 @@
 // define _CRT_SECURE_NO_WARNINGS the way the engine build does).
 #define _CRT_SECURE_NO_WARNINGS
 #include "sim/ship.h"
+#include "sim/weapon.h"   // Weapon::ready (bearing-weapon selection)
 #include <core/logger.h>
 #include <renderer/renderer.h>
 #include <stdio.h>
@@ -76,6 +77,38 @@ void ship_select_weapon_slot(Ship* ship, i32 n) {
         if (seen == n) { ship->active_weapon_idx = i; return; }
         ++seen;
     }
+}
+HierPos2 ship_hardpoint_fire_origin(const Ship* ship, i32 hp_index) {
+    if (!ship) return HierPos2{};
+    if (hp_index < 0 || hp_index >= ship->hardpoint_count)
+        return ship_local_to_world(ship, ship->weapon_fire_offset_local);
+    return ship_local_to_world(ship, ship->hardpoints[hp_index].pos_local);
+}
+b8 ship_hardpoint_can_aim(const Ship* ship, i32 hp_index, Vec2 world_dir) {
+    if (!ship || hp_index < 0 || hp_index >= ship->hardpoint_count) return TRUE;
+    const HardpointDef& hp = ship->hardpoints[hp_index];
+    if (hp.arc >= 2.0f * BS_PI - 1.0e-3f) return TRUE;   // full-circle turret
+    if (world_dir.x == 0.0f && world_dir.y == 0.0f) return FALSE;
+    // Ship convention: angle 0 = nose = +Y, so a world direction's heading is atan2(-x, y).
+    f32 dir_angle = atan2f(-world_dir.x, world_dir.y);
+    f32 diff = dir_angle - (ship->angle + hp.facing);
+    while (diff >  BS_PI) diff -= 2.0f * BS_PI;
+    while (diff < -BS_PI) diff += 2.0f * BS_PI;
+    return (fabsf(diff) <= hp.arc * 0.5f) ? TRUE : FALSE;
+}
+i32 ship_select_bearing_weapon(const Ship* ship, Vec2 world_dir) {
+    if (!ship) return -1;
+    i32 a = ship->active_weapon_idx;
+    if (a >= 0 && a < ship->hardpoint_count && ship->mounts[a] &&
+        ship->mounts[a]->ready() && ship_hardpoint_can_aim(ship, a, world_dir))
+        return a;
+    for (i32 i = 0; i < ship->hardpoint_count; ++i) {
+        if (i == a) continue;
+        if (!ship->mounts[i] || !ship->mounts[i]->ready()) continue;
+        if (!ship_hardpoint_can_aim(ship, i, world_dir)) continue;
+        return i;
+    }
+    return -1;
 }
 // Parse a '|'-joined module-kind list ("weapon", "weapon|defense", ...) into a
 // MODULE_TYPE_* bitmask. Unknown kinds are skipped with a warning; returns 0 if

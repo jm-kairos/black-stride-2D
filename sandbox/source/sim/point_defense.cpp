@@ -67,10 +67,11 @@ void point_defense_update(game_state* s, f32 dt) {
         p.hp              -= L.damage_per_second * dt;
         L.dwell_remaining -= dt;
 
-        // Record the beam for the overlay (hardpoint -> current target position).
+        // Record the beam for the overlay (the PD's own hardpoint -> current target position;
+        // unmounted PDs fall back to the legacy shared fire offset).
         if (s->defense_beam_count < MAX_DEFENSE_BEAMS) {
             DefenseBeam& beam = s->defense_beams[s->defense_beam_count++];
-            beam.origin    = ship_local_to_world(&sh, sh.weapon_fire_offset_local);
+            beam.origin    = ship_hardpoint_fire_origin(&sh, sh.point_defense_mount);
             beam.target    = p.position;
             f32 frac       = (p.max_hp > 1.0e-4f) ? (1.0f - p.hp / p.max_hp) : 1.0f;
             beam.intensity = clampf(frac, 0.0f, 1.0f);

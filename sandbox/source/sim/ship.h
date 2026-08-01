@@ -307,7 +307,7 @@ struct Ship {
 
     i32            weapon_stash_count; // valid entries in weapon_stash[0..count-1]
 
-    // ---- Weapon hardpoint (ship-local, default center; authored in .ship later) ------
+    // ---- Legacy shared fire offset (ship-local; fallback when a mount index is -1) ----
 
     bs_math::Vec2  weapon_fire_offset_local;
 
@@ -346,6 +346,22 @@ struct Weapon* ship_active_weapon(const Ship* ship);
 // First hardpoint accepting `module_type` that has neither a weapon nor the point-defense
 // mounted, or -1 when none is free. Used for init-time auto-mounting.
 i32 ship_first_free_hardpoint(const Ship* ship, u32 module_type);
+
+// ---- Per-hardpoint fire origins + traverse arcs (Phase 3) -------------------------------
+
+// World-space fire origin for the given hardpoint: shots leave from the slot's authored
+// art-pixel position on the hull. Invalid indices (e.g. -1) fall back to the legacy shared
+// weapon_fire_offset_local.
+bs_math::HierPos2 ship_hardpoint_fire_origin(const Ship* ship, i32 hp_index);
+
+// TRUE when the world-space direction lies inside the hardpoint's traverse arc (centered
+// on its facing, rotating with the ship). Full-circle arcs and invalid indices always pass.
+b8 ship_hardpoint_can_aim(const Ship* ship, i32 hp_index, bs_math::Vec2 world_dir);
+
+// Hardpoint index of the best mounted weapon able to bear on world_dir: the active weapon
+// when it is ready and its arc covers the direction, else the first other ready mounted
+// weapon that bears. -1 when no weapon can engage.
+i32 ship_select_bearing_weapon(const Ship* ship, bs_math::Vec2 world_dir);
 
 // Load a ship from a `.ship` file (path relative to the working directory). Returns FALSE
 

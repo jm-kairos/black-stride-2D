@@ -168,10 +168,13 @@ void combat_arena_update_enemy_ai(game_state* s, f32 dt) {
     // Fire only when roughly aligned and the weapon is off cooldown.
     const f32 ENEMY_FIRE_FACE_ANGLE = 0.20f; // rad
     if (fabsf(angle_diff) > ENEMY_FIRE_FACE_ANGLE) return;
-    Weapon* w = ship_active_weapon(sh);
-    if (!w || !w->ready()) return;
+    // Fire whichever mounted weapon bears on the flagship (active weapon first): each shot
+    // leaves from its own hardpoint, honoring the slot's traverse arc.
+    i32 whp   = ship_select_bearing_weapon(sh, to_target);
+    Weapon* w = (whp >= 0) ? sh->mounts[whp] : nullptr;
+    if (!w) return;
 
-    HierPos2 fire_origin = ship_local_to_world(sh, sh->weapon_fire_offset_local);
+    HierPos2 fire_origin = ship_hardpoint_fire_origin(sh, whp);
     Vec2 aim_dir = to_target;
     // Lead the flagship using its velocity so shots can connect while it maneuvers.
     Vec2 target_vel = flag_fs.flight.velocity;

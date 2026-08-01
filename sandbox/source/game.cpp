@@ -2112,17 +2112,27 @@ b8 game_update(Game* game_inst, f32 dt) {
 
                     if (w) {
 
-                        Vec2 mw = mouse_true_world(s);
-
-                        (void)mw;
+                        i32 whp = psh->active_weapon_idx;
 
                         bs_math::HierPos2 mw_hp = mouse_true_hierpos(s);
 
-                        Vec2 dir = hierpos_diff(&mw_hp, &psh->origin, BS_HIERPOS_CELL_SIZE);
+                        // Shots leave from the weapon's own hardpoint; aim from there too.
+                        bs_math::HierPos2 fire_origin = ship_hardpoint_fire_origin(psh, whp);
 
-                        w->owner_faction_id = psh->faction_id;   // stamp attacker faction for hit attribution
+                        Vec2 dir = hierpos_diff(&mw_hp, &fire_origin, BS_HIERPOS_CELL_SIZE);
 
-                        w->fire(psh->origin, dir, pf->flight.velocity, &s->projectiles);
+                        if (!ship_hardpoint_can_aim(psh, whp, dir)) {
+
+                            // Target outside the mount's traverse arc: hold fire and tell the pilot.
+                            action_log_push(s, "'%s' can't bear on target.", psh->hardpoints[whp].id);
+
+                        } else {
+
+                            w->owner_faction_id = psh->faction_id;   // stamp attacker faction for hit attribution
+
+                            w->fire(fire_origin, dir, pf->flight.velocity, &s->projectiles);
+
+                        }
 
                     }
 

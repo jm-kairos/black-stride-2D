@@ -133,9 +133,12 @@ void FleetShip::update_attack(game_state* s, f32 dt) {
     // Fire when facing the target, inside max range, and outside minimum range.
     if (fabsf(angle_diff) < RTS_ATTACK_FACE_ANGLE && dist >= RTS_ATTACK_MIN_RANGE && dist <= RTS_ATTACK_RANGE * 1.5f) {
         {
-            Weapon* w = ship_active_weapon(sh);
+            // Fire whichever mounted weapon bears on the target (active weapon first): each
+            // shot leaves from its own hardpoint, honoring the slot's traverse arc.
+            i32 whp   = ship_select_bearing_weapon(sh, to_target);
+            Weapon* w = (whp >= 0) ? sh->mounts[whp] : nullptr;
             if (w) {
-                HierPos2 fire_origin = ship_local_to_world(sh, sh->weapon_fire_offset_local);
+                HierPos2 fire_origin = ship_hardpoint_fire_origin(sh, whp);
                 Vec2 aim_dir = to_target;
                 Vec2 target_vel = ce->velocity;
                 if ((target_vel.x != 0.0f || target_vel.y != 0.0f) && dist > 0.0001f) {

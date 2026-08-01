@@ -260,6 +260,18 @@ void draw_hardpoint_overlay(const Ship* ship, f32 thickness) {
         Vec2 c0  = vec2_add(ship->render_pos, ship_local_dir(ship, hp.pos_local));
         Vec2 tip = vec2_add(ship->render_pos, ship_local_dir(ship, tip_local));
         renderer_draw_line(c0, tip, thickness, color, LAYER_DEBUG);
+        // Traverse arc: boundary rays at facing +/- arc/2 (skipped for full-circle turrets
+        // and fixed zero-arc slots).
+        if (hp.arc > 0.001f && hp.arc < 2.0f * BS_PI - 0.001f) {
+            bs_color arc_color = color;
+            arc_color.a *= 0.55f;
+            for (i32 sgn = -1; sgn <= 1; sgn += 2) {
+                f32 edge = hp.facing + (f32)sgn * hp.arc * 0.5f;
+                Vec2 el  = vec2_add(hp.pos_local, vec2_rotate(Vec2{ 0.0f, e * 2.6f }, edge));
+                Vec2 ew  = vec2_add(ship->render_pos, ship_local_dir(ship, el));
+                renderer_draw_line(c0, ew, thickness, arc_color, LAYER_DEBUG);
+            }
+        }
     }
 }
 
