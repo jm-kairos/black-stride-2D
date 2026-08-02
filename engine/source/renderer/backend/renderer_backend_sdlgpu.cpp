@@ -3209,6 +3209,14 @@ struct bs_rml_state
 
     // Input state.
     b8                       wants_mouse;      // last mouse-move landed on an interactive element
+
+    // CAS-lite sharpening (see rml.frag.hlsl). File-loaded textures (the 2x skin/icon
+    // atlases) are tagged here by LoadTexture with their texel size; RenderGeometry pushes
+    // (inv_w, inv_h, amount) for tagged draws and zeros otherwise, so font glyphs and
+    // generated gradients are never sharpened. amount is set via bs_rml_set_sharpen.
+    struct { SDL_GPUTexture* tex; f32 inv_w, inv_h; } sharpen_tex[16];
+    i32                      sharpen_tex_count;
+    f32                      sharpen_amount;   // 0 = off; default 0.4
 };
 
 bs_rml_state g_rml;
@@ -3469,6 +3477,22 @@ void BsRmlRenderInterface::RenderGeometry(Rml::CompiledGeometryHandle geometry, 
     tsb.texture = tex; tsb.sampler = g_sdl.sampler_linear;
     SDL_BindGPUFragmentSamplers(g_sdl.pass, 0, &tsb, 1);
 
+    // Fragment uniform: CAS-lite sharpen params. Tagged (file-loaded atlas) textures get their
+    // texel size + the live amount; everything else (fonts, gradients, white) gets zeros and
+    // takes the shader's single-sample fast path.
+    struct { f32 inv_w, inv_h, amount, pad; } fubo = { 0.0f, 0.0f, 0.0f, 0.0f };
+    if (g_rml.sharpen_amount > 0.0f) {
+        for (i32 i = 0; i < g_rml.sharpen_tex_count; ++i) {
+            if (g_rml.sharpen_tex[i].tex == tex) {
+                fubo.inv_w  = g_rml.sharpen_tex[i].inv_w;
+                fubo.inv_h  = g_rml.sharpen_tex[i].inv_h;
+                fubo.amount = g_rml.sharpen_amount;
+                break;
+            }
+        }
+    }
+    SDL_PushGPUFragmentUniformData(g_sdl.cmd, 0, &fubo, sizeof(fubo));
+
     // Vertex uniform: mvp = project * transform, plus the per-draw pixel translation. project is a
     // top-left-origin orthographic matrix sized to the current swapchain (RmlUi submits geometry in
     // pixels from the top-left). Column-major throughout, matching the HLSL mul(mvp, ...).
@@ -3544,6 +3568,18 @@ Rml::TextureHandle BsRmlRenderInterface::LoadTexture(Rml::Vector2i& texture_dime
     stbi_image_free(pixels);
     if (!tex) return 0;
 
+    // Tag file-loaded textures (skin/icon atlases) for the CAS-lite sharpen pass; fonts and
+    // gradients arrive through GenerateTexture and stay untagged (never sharpened).
+    // The atlases are authored at 2x resolution, so ONE DISPLAY PIXEL = TWO TEXELS: the
+    // neighbor taps must step a full display pixel (2/tex) — a 1-texel step lands half a
+    // pixel away, where bilinear neighbors are nearly identical and the sharpen term vanishes.
+    if (g_rml.sharpen_tex_count < (i32)(sizeof(g_rml.sharpen_tex) / sizeof(g_rml.sharpen_tex[0]))) {
+        auto& t = g_rml.sharpen_tex[g_rml.sharpen_tex_count++];
+        t.tex   = tex;
+        t.inv_w = 2.0f / (f32)w;
+        t.inv_h = 2.0f / (f32)h;
+    }
+
     texture_dimensions.x = w;
     texture_dimensions.y = h;
     return (Rml::TextureHandle)tex;
@@ -3561,6 +3597,13 @@ Rml::TextureHandle BsRmlRenderInterface::GenerateTexture(Rml::Span<const Rml::by
 void BsRmlRenderInterface::ReleaseTexture(Rml::TextureHandle texture)
 {
     if (!texture) return;
+    // Untag from the sharpen table (no-op for generated textures).
+    for (i32 i = 0; i < g_rml.sharpen_tex_count; ++i) {
+        if (g_rml.sharpen_tex[i].tex == (SDL_GPUTexture*)texture) {
+            g_rml.sharpen_tex[i] = g_rml.sharpen_tex[--g_rml.sharpen_tex_count];
+            break;
+        }
+    }
     // SDL defers the actual destruction until the GPU is finished with the texture, so this is
     // safe to call even mid-frame without a manual SDL_WaitForGPUIdle.
     SDL_ReleaseGPUTexture(g_sdl.device, (SDL_GPUTexture*)texture);
@@ -3761,7 +3804,7 @@ private:
 static b8 bs_rml_create_pipeline(void)
 {
     SDL_GPUShader* vs = load_shader(g_sdl.device, "rml", "vert", SDL_GPU_SHADERSTAGE_VERTEX,   0, 1);
-    SDL_GPUShader* fs = load_shader(g_sdl.device, "rml", "frag", SDL_GPU_SHADERSTAGE_FRAGMENT, 1, 0);
+    SDL_GPUShader* fs = load_shader(g_sdl.device, "rml", "frag", SDL_GPU_SHADERSTAGE_FRAGMENT, 1, 1);   // 1 uniform: SharpenParams
     if (!vs || !fs)
     {
         if (vs) SDL_ReleaseGPUShader(g_sdl.device, vs);
@@ -3977,6 +4020,9 @@ b8 bs_rml_initialize(void)
         BS_LOG_ERROR("bs_rml_initialize: GPU device/window not ready (call after backend init).");
         return FALSE;
     }
+
+    g_rml.sharpen_amount    = 0.4f;   // CAS-lite default; live-tunable via bs_rml_set_sharpen
+    g_rml.sharpen_tex_count = 0;
 
     // Resolve the shared 1x1 white texture used for untextured geometry.
     gpu_texture* wt = pool_resolve_texture(g_sdl.white_texture);
@@ -4234,6 +4280,13 @@ void bs_rml_debugger_toggle(void)
     bool vis = !Rml::Debugger::IsVisible();
     Rml::Debugger::SetVisible(vis);
     BS_LOG_INFO("bs_rml_debugger_toggle: RmlUi debugger %s.", vis ? "shown" : "hidden");
+}
+
+void bs_rml_set_sharpen(f32 amount)
+{
+    if (amount < 0.0f) amount = 0.0f;
+    if (amount > 1.0f) amount = 1.0f;
+    g_rml.sharpen_amount = amount;
 }
 
 // -------------------------------------------------------------------------------------

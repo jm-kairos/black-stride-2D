@@ -55,7 +55,7 @@
         <div class="fleet-stat">Heading: {{ fleet_heading }}</div>
         <div class="fleet-stat">Health: {{ fleet_health }}</div>
         <div class="fleet-stat">{{ fleet_cap_label }}</div>
-        <div class="cap-gauge"><div class="cap-gauge-fill" data-style-width="fleet_cap_w"></div></div>
+        <div class="cap-gauge"><div class="cap-gauge-fill" data-style-width="fleet_cap_w"><div class="cap-gauge-core"></div></div></div>
         <div class="fleet-pd" data-class-warn="fleet_pd_warn">{{ fleet_pd_label }}</div>
         <div class="rule"></div>
         <div class="fleet-hdr">FIRE GROUPS</div>

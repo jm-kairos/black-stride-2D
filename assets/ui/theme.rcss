@@ -48,26 +48,30 @@ body {
 @spritesheet ui-skin {
     src: skin/plates.png;
     resolution: 2x;   /* sheet is authored at 2x texels -> 2x supersampled on screen */
-    plate:             0px   0px   128px 128px;   /* gunmetal armor plate, hex corner bolts */
-    plate-inner:       32px  32px  64px  64px;
-    plate-amber:       132px 0px   128px 128px;   /* amber-painted alert frame              */
-    plate-amber-inner: 164px 32px  64px  64px;
-    rail:              264px 0px   128px 64px;    /* stamped window-header band             */
-    rail-inner:        280px 16px  96px  32px;
-    btn:               0px   132px 64px  64px;    /* raised machined cap (rest)             */
-    btn-inner:         16px  148px 32px  32px;
-    btn-hi:            68px  132px 64px  64px;    /* hover: one step lighter                */
-    btn-hi-inner:      84px  148px 32px  32px;
-    btn-amber:         136px 132px 64px  64px;    /* active/selected: amber edge            */
-    btn-amber-inner:   152px 148px 32px  32px;
-    well:              204px 132px 64px  64px;    /* recessed drop tray                     */
-    well-inner:        220px 148px 32px  32px;
-    socket:            272px 132px 64px  64px;    /* recessed empty socket                  */
-    socket-inner:      288px 148px 32px  32px;
-    copper-btn:        340px 132px 64px  64px;    /* oxidized copper destructive control    */
-    copper-btn-inner:  356px 148px 32px  32px;
-    plate-sm:          408px 132px 64px  64px;    /* light plate: HUD readouts, tooltips    */
-    plate-sm-inner:    424px 148px 32px  32px;
+    /* Panel plates carry a 12-texel baked drop-shadow margin (6 display px): the visible
+       plate edge sits 6px inside the element box, so panel padding compensates (+6px). */
+    plate:             0px   0px   152px 152px;   /* gunmetal armor plate, bolts, shadow */
+    plate-inner:       44px  44px  64px  64px;
+    plate-amber:       156px 0px   152px 152px;   /* amber-painted alert frame, shadow   */
+    plate-amber-inner: 200px 44px  64px  64px;
+    rail:              312px 0px   128px 64px;    /* stamped window-header band          */
+    rail-inner:        328px 16px  96px  32px;
+    btn:               0px   156px 64px  64px;    /* raised machined cap (rest)          */
+    btn-inner:         16px  172px 32px  32px;
+    btn-hi:            68px  156px 64px  64px;    /* hover: one step lighter             */
+    btn-hi-inner:      84px  172px 32px  32px;
+    btn-amber:         136px 156px 64px  64px;    /* active/selected: amber edge         */
+    btn-amber-inner:   152px 172px 32px  32px;
+    well:              204px 156px 64px  64px;    /* recessed drop tray                  */
+    well-inner:        220px 172px 32px  32px;
+    socket:            272px 156px 64px  64px;    /* recessed empty socket               */
+    socket-inner:      288px 172px 32px  32px;
+    copper-btn:        340px 156px 64px  64px;    /* oxidized copper destructive control */
+    copper-btn-inner:  356px 172px 32px  32px;
+    plate-sm:          408px 156px 88px  88px;    /* light plate + shadow: HUD readouts  */
+    plate-sm-inner:    436px 184px 32px  32px;
+    chan:              0px   248px 32px  16px;    /* recessed gauge channel (capacitor)  */
+    chan-inner:        8px   252px 16px  8px;
 }
 
 /* Emblem stencils (tools\ui_icon_gen.py): WHITE-on-transparent military insignias for the
@@ -84,12 +88,11 @@ body {
 
 /* --- Card / panel container ------------------------------------------------------- */
 /* PLATE: a fabricated armor plate cut from the ui-skin sheet — true chamfered corners,
-   corner bolts, machined bevels. The 16px texture ring motivates the 16px padding (keeps
-   content off the bolt zone). The Phase-1 frosted backdrop is dropped: a square frost
-   rect would poke past the chamfer silhouette; near-full opacity is baked into the art. */
+   corner bolts, machined bevels, baked ambient occlusion and a soft baked drop shadow
+   (the plate floats over the scene; the 22px padding = 6px shadow margin + 16px ring). */
 .panel {
     decorator: ninepatch(plate, plate-inner);
-    padding: 16px;
+    padding: 22px;               /* 6px baked shadow margin + 16px plate ring */
 }
 
 .panel.accent {

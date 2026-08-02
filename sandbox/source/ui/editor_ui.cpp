@@ -7,6 +7,7 @@
 #include "core/cursor_world.h"     // mouse_true_hierpos (hardpoint cursor placement)
 #include "render/ship_render.h"    // draw_hardpoint_highlight (gizmo selection)
 #include <renderer/bs_ui.h>    // bs_ui_* panel/widget API
+#include <renderer/bs_rml.h>   // bs_rml_set_sharpen (UI sharpen slider)
 #include <core/logger.h>       // BS_LOG_INFO (.ship hardpoint line dump)
 #include "core/view_transform.h" // g_zoom_out_speed_gain
 #include "render/sensor_overlay.h" // g_sensor_fade_distance
@@ -118,6 +119,9 @@ void build_editor_panel(game_state* s) {
         const f32 UK[4] = { 0.70f, 0.80f, 0.95f, 1.0f };
         bs_ui_text_colored(UK[0], UK[1], UK[2], UK[3], "UI FONT KIT");
         bs_ui_combo("Font kit", &s->ui_font_kit, "Neon\0Clean\0Minimal\0Frontier\0");
+        // CAS-lite sharpening of the UI skin/icon atlases (fonts are never sharpened).
+        if (bs_ui_slider_float("UI sharpen", &s->ui_sharpen, 0.0f, 1.0f))
+            bs_rml_set_sharpen(s->ui_sharpen);
         // ---- MISSILES --------------------------------------------------------------------------
         // Live flight-model tuning for guided missiles (Phase A; docs/POINT_DEFENSE_AND_MISSILES.md).
         bs_ui_separator();

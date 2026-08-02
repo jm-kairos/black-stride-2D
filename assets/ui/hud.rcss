@@ -14,11 +14,11 @@ body {
     pointer-events: none;
 }
 
-/* --- Shared HUD readout panel (small fabricated plate, chamfered) ------------------ */
+/* --- Shared HUD readout panel (small fabricated plate, chamfered, baked shadow) ---- */
 .hud-panel {
     display: block;
     decorator: ninepatch(plate-sm, plate-sm-inner);
-    padding: 8px 10px;
+    padding: 14px 16px;          /* 6px shadow margin + plate ring */
 }
 
 .hud-row {
@@ -45,15 +45,15 @@ body {
     position: absolute;
     top: 16px;
     right: 16px;
-    width: 210px;
+    width: 236px;
 }
 
 /* --- Ship readout (top-right, stacked below nav) ---------------------------------- */
 #ship {
     position: absolute;
-    top: 118px;
+    top: 124px;
     right: 16px;
-    width: 210px;
+    width: 236px;
 }
 
 /* --- Time control (top-center): pause + speed tiers on the shared calendar -------- */
@@ -136,7 +136,8 @@ body {
     margin-bottom: 6px;
     text-transform: uppercase;
     letter-spacing: 3px;
-    font-effect: shadow(1px 1px #000000a0);   /* stamped into the plate */
+    /* Engraved: dark bite above, faint light lip below -- stamped INTO the plate. */
+    font-effect: shadow(0px -1px #000000b0), shadow(0px 1px #6a707840);
 }
 
 .win-close {
@@ -241,9 +242,9 @@ body {
 /* --- Fleet ship panel (top-right, stacked below the nav/ship readouts) ------------ */
 #fleet {
     position: absolute;
-    top: 160px;
+    top: 182px;
     right: 16px;
-    width: 210px;
+    width: 236px;
 }
 
 .fleet-name {
@@ -276,13 +277,14 @@ body {
 }
 
 /* --- Capacitor gauge + PD doctrine line (fleet panel; Phase E feedback) ------------ */
+/* Channel = baked-inner-shadow sprite; fill = energized hot gradient with a bright core
+   line (the one place metal glows: energy is literally flowing here). */
 .cap-gauge {
     display: block;
     width: 100%;
-    height: 6px;
-    background-color: #0c0d11;   /* recessed channel */
-    border: 1px #060708;
-    border-bottom-color: #454b53;
+    height: 8px;
+    decorator: ninepatch(chan, chan-inner);
+    padding: 1px;
     overflow: hidden;
     margin: 2px 0 4px 0;
 }
@@ -291,7 +293,14 @@ body {
     display: block;
     width: 0%;                   /* driven per-frame by data-style-width */
     height: 100%;
-    decorator: horizontal-gradient(#6a7439 #8f9a4f);   /* brass-olive = power good */
+    decorator: horizontal-gradient(#77833f #a8b45c);   /* energized brass-olive */
+}
+
+.cap-gauge-core {
+    display: block;
+    height: 2px;
+    margin-top: 2px;
+    decorator: horizontal-gradient(#c3d075 #e4f0a0);   /* hot core line */
 }
 
 .fleet-pd {
@@ -305,6 +314,7 @@ body {
 
 .fleet-pd.warn {
     color: #e8b45a;              /* amber: stance is not STANDARD (HOLD / OVERDRIVE) */
+    font-effect: glow(1px 3px #e8b45a44);   /* diegetic: energy committed */
 }
 
 /* Fire-group assignment matrix (inspector): columns = mounted weapons, rows = keys 1-5.
@@ -441,7 +451,8 @@ body {
     font-size: 22px;
     text-transform: uppercase;
     letter-spacing: 4px;
-    font-effect: shadow(1px 2px #000000c0);
+    /* Earned glow exception: an active FTL field announcement, not decoration. */
+    font-effect: shadow(1px 2px #000000c0), glow(2px 5px #c9963f50);
 }
 
 /* --- HierPos2 debug readout (top-left, dev toggle) -------------------------------- */
@@ -459,8 +470,8 @@ body {
     position: absolute;          /* left/top set per-frame via data-style-left/top */
     display: block;
     max-width: 460px;
-    decorator: ninepatch(plate-sm, plate-sm-inner);   /* small plate, no bolt zone */
-    padding: 8px 10px;
+    decorator: ninepatch(plate-sm, plate-sm-inner);   /* small plate, baked shadow */
+    padding: 14px 16px;
     color: #ddd6c4;
     font-size: 13px;
     white-space: pre;            /* honour the '\n' breaks + column alignment in tip_text */
@@ -641,19 +652,17 @@ body {
 .weapon-symbol.selected .weapon-icon { image-color: #e8b45a; }   /* amber = selected */
 .weapon-symbol.empty .weapon-icon    { image-color: #6e6555; }   /* dim open socket  */
 
-/* Structured stat card: plate slab above the tile (shown on hover, hidden the instant the
-   symbol is pressed to begin a drag -- the :active rule below wins by source order).
-   Anchored to the tile's LEFT edge so cards from the leftmost column never clip the panel. */
+/* Structured stat card: fabricated plate slab above the tile (shown on hover, hidden the
+   instant the symbol is pressed to begin a drag -- the :active rule below wins by source
+   order). Anchored to the tile's LEFT edge so cards from the leftmost column never clip. */
 .stat-card {
     display: none;
     position: absolute;
     bottom: 40px;
     left: -8px;
     width: 300px;
-    padding: 8px 10px;
-    background-color: #141518f8;
-    border: 1px #0b0c0e;
-    border-top-color: #33383f;
+    decorator: ninepatch(plate-sm, plate-sm-inner);   /* same plate material as the panels */
+    padding: 14px 16px;
     color: #ddd6c4;
     font-size: 12px;
     text-align: left;
@@ -799,8 +808,8 @@ body {
 #station-menu {
     position: absolute;          /* left/top set per-frame via data-style-left/top */
     display: block;
-    decorator: ninepatch(plate-sm, plate-sm-inner);   /* small plate, tighter than .panel */
-    padding: 8px;
+    decorator: ninepatch(plate-sm, plate-sm-inner);   /* small plate, baked shadow */
+    padding: 14px;
     min-width: 120px;
     pointer-events: auto;        /* solid, clickable menu */
 }

@@ -3455,6 +3455,8 @@ struct game_state {
 
     i32              ui_font_kit;              // Active in-game UI font kit: 0=Neon, 1=Clean, 2=Minimal, 3=Frontier (editor panel)
 
+    f32              ui_sharpen;               // CAS-lite UI atlas sharpening amount (0..1; editor panel -> bs_rml_set_sharpen)
+
 
 
 };

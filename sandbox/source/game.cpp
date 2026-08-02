@@ -338,6 +338,7 @@ b8 game_init(Game* game_inst) {
     s->pending_weapon_drag_kind = 0;
     s->world_module_drag = FALSE;   // no ship-side loadout drag in flight
     s->ui_font_kit = 3;             // default to the "Frontier" kit (Barlow Condensed / Barlow / B612 Mono)
+    s->ui_sharpen  = 0.5f;          // UI atlas unsharp-mask amount (editor-tunable)
 
     // ---- Missile flight model (Phase A; see docs/POINT_DEFENSE_AND_MISSILES.md) -----------
     s->missile_tuning.turn_rate       = 1.6f;      // ~90 deg/s: corvettes can out-turn it
@@ -754,6 +755,7 @@ b8 game_init(Game* game_inst) {
     bs_rml_load_fonts("assets/ui/fonts");
     if (!bs_rml_hud_init("assets/ui/hud.rml"))
         BS_LOG_WARN("game_init: RmlUi HUD failed to initialize.");
+    bs_rml_set_sharpen(s->ui_sharpen);   // apply the game default (editor slider tunes it live)
 
     return TRUE;
 
@@ -1233,8 +1235,10 @@ static void game_push_hud(game_state* s, f32 dt) {
     // ---- Fleet ship panel (top-right; piloted-ship combat readout + controls) -----------
     // fleet_cap_w must ALWAYS hold a valid CSS length (same rule as tip_left/tip_top below):
     // the gauge's data-style-width binding evaluates even while the panel is hidden.
+    // Hidden while the flagship inspector is open: the inspector overlaps the fleet panel's
+    // screen region (the capacitor bar peeked out beside the window) and shows the same data.
     snprintf(hud.fleet_cap_w, sizeof(hud.fleet_cap_w), "0%%");
-    if (!s->editor.edit_mode_active) {
+    if (!s->editor.edit_mode_active && !s->show_flagship_inspector) {
         FleetShip* piloted = s->fleet_state.fleet.piloted();
         if (!piloted) piloted = &s->fleet_state.fleet.at(0);
         if (piloted) {
@@ -1278,7 +1282,9 @@ static void game_push_hud(game_state* s, f32 dt) {
             snprintf(hud.fleet_cap_label, sizeof(hud.fleet_cap_label), "Capacitor %.0f / %.0f",
                      ship->cap_current, ship->cap_max);
             static const char* PD_ST[3] = { "HOLD", "STANDARD", "OVERDRIVE" };
-            static const char* PD_PR[3] = { "impact time", "missiles first", "nearest" };
+            // Short priority names for the one-line panel label (the doctrine chips carry the
+            // full names); gate as a bare percentage.
+            static const char* PD_PR[3] = { "IMPACT", "MISSILES", "NEAREST" };
             static const char* PD_GT[3] = { "60%", "80%", "100%" };
             const DefenseLaser& pdl = ship->point_defense;
             snprintf(hud.fleet_pd_label, sizeof(hud.fleet_pd_label), "PD: %s - %s - %s",

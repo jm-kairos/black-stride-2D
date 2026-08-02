@@ -74,6 +74,11 @@ bs__api__ void bs_rml_on_resize(u16 width, u16 height);
 // visibility. No-op if RmlUi is inactive.
 bs__api__ void bs_rml_debugger_toggle(void);
 
+// Set the CAS-lite sharpening amount for FILE-LOADED UI textures (the 2x skin/icon atlases,
+// minified at display). 0 disables; clamped to [0, 1]; default 0.4. Font glyphs and generated
+// gradients are never sharpened (see rml.frag.hlsl).
+bs__api__ void bs_rml_set_sharpen(f32 amount);
+
 // =====================================================================================
 // In-game HUD data model (Phase 4).
 //
