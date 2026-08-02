@@ -936,14 +936,19 @@ static void arsenal_drop_on_slot(game_state* s, i32 dst) {
         b8 dst_takes_defense = hardpoint_accepts(&dhp, MODULE_TYPE_DEFENSE);
         if (kind == 1 && src >= 0 && src < fs.weapon_stash_count) {
             // Mount an unmounted offensive weapon onto hardpoint dst; evict any occupant.
+            // Size-gated like modules: a weapon mounts on slots of its own size or LARGER.
+            Weapon* mounting = fs.weapon_stash[src];
             if (!dst_takes_weapon) {
                 action_log_push(s, "'%s' is a %s slot - weapons don't fit.",
                                 dhp.id, hardpoint_kind_label(dhp.accepts));
+            } else if (mounting && mounting->size > (u8)dhp.size) {
+                action_log_push(s, "'%s' is too small for the %s (needs %s).",
+                                dhp.id, mounting->name ? mounting->name : "weapon",
+                                hardpoint_size_name((HardpointSize)mounting->size));
             } else if (!ship_evict_module(fs, dst)) {
                 action_log_push(s, "Module rack full - can't displace '%s'.",
                                 fs.module_mounts[dst]->name);
             } else {
-                Weapon* mounting = fs.weapon_stash[src];
                 if (fs.mounts[dst]) {
                     ship_stash_append(fs, fs.mounts[dst]);        // occupant weapon -> offensive stash
                 } else if (fs.point_defense_mount == dst) {
@@ -963,6 +968,14 @@ static void arsenal_drop_on_slot(game_state* s, i32 dst) {
             if (!dst_takes_weapon) {
                 action_log_push(s, "'%s' is a %s slot - weapons don't fit.",
                                 dhp.id, hardpoint_kind_label(dhp.accepts));
+            } else if (fs.mounts[src]->size > (u8)dhp.size) {
+                action_log_push(s, "'%s' is too small for the %s (needs %s).",
+                                dhp.id, fs.mounts[src]->name ? fs.mounts[src]->name : "weapon",
+                                hardpoint_size_name((HardpointSize)fs.mounts[src]->size));
+            } else if (fs.mounts[dst] && fs.mounts[dst]->size > (u8)fs.hardpoints[src].size) {
+                action_log_push(s, "Can't swap: '%s' is too small for the %s.",
+                                fs.hardpoints[src].id,
+                                fs.mounts[dst]->name ? fs.mounts[dst]->name : "occupant");
             } else if (fs.mounts[dst]) {
                 Weapon* tmp    = fs.mounts[src];                  // dst holds a weapon -> swap
                 fs.mounts[src] = fs.mounts[dst];
@@ -1309,27 +1322,73 @@ static void game_push_hud(game_state* s, f32 dt) {
     // unmount drop target ("baydrop", routed game-side by dragged kind). An item lives in
     // EITHER the bay OR on a hardpoint, never both. Each tile carries a structured hover STAT
     // CARD (TYPE/SIZE/INTEGRITY rows + per-mode stat blocks + keybind footer) built from the
-    // instance's def-driven stats; card_rows uses '\n' (the RCSS is pre-line).
-    auto fill_card_weapon = [](bs_rml_bay_line& row, const Weapon* w) {
+    // instance's def-driven stats; card_rows uses '\n' (the RCSS is pre-line). The stat sheet
+    // is COMPLETE and NUMERIC: every def property appears as its actual value (derived numbers
+    // like DPS/range shown alongside their inputs, parentheticals explain but never replace).
+    // SIZE lives in its own card_size element so the RCSS can paint it green (fits a flagship
+    // hardpoint) or red (no hardpoint big enough / of the right kind).
+    // Any hardpoint of matching kind and sufficient size counts, occupied or not: the player
+    // can always evict/swap, so "fits" answers "COULD this ever mount here", not "is a slot free".
+    auto ship_has_weapon_slot = [](const Ship& fs, u8 wsize) -> b8 {
+        for (i32 h = 0; h < fs.hardpoint_count; ++h)
+            if (hardpoint_accepts(&fs.hardpoints[h], MODULE_TYPE_WEAPON)
+                && (u8)fs.hardpoints[h].size >= wsize) return TRUE;
+        return FALSE;
+    };
+    auto fill_card_weapon = [s, &ship_has_weapon_slot](bs_rml_bay_line& row, const Ship& fs,
+                                                       const Weapon* w) {
         const char* name = w->name ? w->name : "?";
-        // Mount-size row text (a weapon mounts on slots of its own size or LARGER).
+        // Mount-size element (a weapon mounts on slots of its own size or LARGER).
         static const char* SIZE_ROW[3] = { "Small - fits S/M/L mounts", "Medium - fits M/L mounts",
                                            "Large - fits L mounts" };
-        const char* size_txt = SIZE_ROW[(w->size < 3) ? w->size : 1];
         snprintf(row.card_title, sizeof(row.card_title), "%s", name);
+        snprintf(row.card_size, sizeof(row.card_size), "SIZE       %s",
+                 SIZE_ROW[(w->size < 3) ? w->size : 1]);
+        row.card_size_ok = ship_has_weapon_slot(fs, w->size);
+        snprintf(row.card_desc, sizeof(row.card_desc), "%s", w->def ? w->def->desc : "");
         if (w->wkind == WEAPON_KIND_MISSILE) {
             const MissileLauncher* ml = (const MissileLauncher*)w;
-            snprintf(row.card_rows, sizeof(row.card_rows),
-                     "TYPE       Weapon - Missile\nSIZE       %s\nINTEGRITY  100%%", size_txt);
+            i32 n = snprintf(row.card_rows, sizeof(row.card_rows),
+                     "TYPE       Weapon - Missile (guided)\n"
+                     "INTEGRITY  100%%\n"
+                     "DAMAGE     %.0f per missile\n"
+                     "RELOAD     %.1fs per tube\n"
+                     "RANGE      %.0fk  (%.0f u/s x %.0fs)\n"
+                     "SEEKER     %.0f deg cone  %.0fk lock range\n"
+                     "ENERGY     %.1f per launch\n"
+                     "SIGNATURE  %.1f  (sensor emission, 0-1)\n"
+                     "MISSILE HP %.1f  (vs point-defense)",
+                     w->damage, ml->reload_time,
+                     ml->missile_speed * ml->missile_lifetime / 1000.0f,
+                     ml->missile_speed, ml->missile_lifetime,
+                     s->missile_tuning.seeker_cone_deg, s->missile_tuning.seeker_range / 1000.0f,
+                     ml->cap_cost_value, ml->missile_emission, ml->missile_hp);
+            if (w->def && n > 0 && n < (i32)sizeof(row.card_rows))
+                snprintf(row.card_rows + n, sizeof(row.card_rows) - n,
+                         "\nVALUE      %d cr  -  tier %d", w->def->price, w->def->tier);
             snprintf(row.card_mode_a, sizeof(row.card_mode_a), "> GUIDED - anti-ship");
             snprintf(row.card_mode_a_stats, sizeof(row.card_mode_a_stats),
                      "DMG %.0f  RELOAD %.1fs  PWR %.0f", w->damage, ml->reload_time, ml->cap_cost_value);
             row.card_mode_b[0] = row.card_mode_b_stats[0] = row.card_foot[0] = '\0';
         } else {
             const BallisticWeapon* bw = (const BallisticWeapon*)w;
-            snprintf(row.card_rows, sizeof(row.card_rows),
-                     "TYPE       Weapon - Ballistic (dual role)\nSIZE       %s\nINTEGRITY  100%%",
-                     size_txt);
+            i32 n = snprintf(row.card_rows, sizeof(row.card_rows),
+                     "TYPE       Weapon - Ballistic (dual role)\n"
+                     "INTEGRITY  100%%\n"
+                     "DAMAGE     %.0f per shell\n"
+                     "RATE       %.1f/s  (%.0f dmg/s)\n"
+                     "RANGE      %.0fk  (%.0f u/s x %.0fs)\n"
+                     "ENERGY     %.1f per shot  (%.1f/s sustained)\n"
+                     "SIGNATURE  %.1f  (sensor emission, 0-1)\n"
+                     "SHELL HP   %.1f  (vs enemy point-defense)",
+                     w->damage, bw->fire_rate, w->damage * bw->fire_rate,
+                     bw->projectile_speed_value * bw->projectile_lifetime / 1000.0f,
+                     bw->projectile_speed_value, bw->projectile_lifetime,
+                     bw->cap_cost_value, bw->cap_cost_value * bw->fire_rate,
+                     bw->projectile_emission, bw->proj_hp_value);
+            if (w->def && n > 0 && n < (i32)sizeof(row.card_rows))
+                snprintf(row.card_rows + n, sizeof(row.card_rows) - n,
+                         "\nVALUE      %d cr  -  tier %d", w->def->price, w->def->tier);
             const b8 flak = (bw->fire_mode == MODE_FLAK);
             // The LIVE mode leads (amber block, "> " chevron); the other follows dimmed.
             if (!flak) {
@@ -1368,7 +1427,7 @@ static void game_push_hud(game_state* s, f32 dt) {
                 snprintf(row.action, sizeof(row.action), "inv:%d", k);
                 row.empty    = FALSE;
                 row.selected = FALSE;
-                fill_card_weapon(row, w);
+                fill_card_weapon(row, fs, w);
             }
             // 2) Point-defense, ONLY while unmounted (mounted PD lives on its hardpoint).
             if (fs.point_defense_mount < 0 && nb < BS_RML_BAY_MAX) {
@@ -1379,8 +1438,32 @@ static void game_push_hud(game_state* s, f32 dt) {
                 row.empty    = FALSE;
                 row.selected = FALSE;
                 snprintf(row.card_title, sizeof(row.card_title), "Point Defense Laser");
-                snprintf(row.card_rows, sizeof(row.card_rows),
-                         "TYPE       Defense - Point defense\nINTEGRITY  100%%");
+                {
+                    // Live engagement radius: Layer 1 sensors (or override) narrowed by the gate.
+                    static const f32 GATE_FRAC[3] = { 0.6f, 0.8f, 1.0f };
+                    const DefenseLaser& pdl = fs.point_defense;
+                    const f32 gate = GATE_FRAC[(pdl.gate_tier < 3) ? pdl.gate_tier : 2];
+                    const f32 pd_range =
+                        ((pdl.range > 0.0f) ? pdl.range : fs.sensors.layer1_radius) * gate;
+                    snprintf(row.card_rows, sizeof(row.card_rows),
+                             "TYPE       Defense - Point defense\n"
+                             "INTEGRITY  100%%\n"
+                             "DPS        %.0f  (burns ordnance HP)\n"
+                             "DRAIN      %.0f/s while firing\n"
+                             "RANGE      %.1fk  (Layer 1 x %.0f%% gate)",
+                             pdl.damage_per_second, pdl.cap_drain_per_s,
+                             pd_range / 1000.0f, gate * 100.0f);
+                }
+                snprintf(row.card_size, sizeof(row.card_size), "SIZE       Small - defense mounts");
+                {
+                    b8 ok = FALSE;
+                    for (i32 h = 0; h < fs.hardpoint_count; ++h)
+                        if (hardpoint_accepts(&fs.hardpoints[h], MODULE_TYPE_DEFENSE)) { ok = TRUE; break; }
+                    row.card_size_ok = ok;
+                }
+                snprintf(row.card_desc, sizeof(row.card_desc),
+                         "An automated last line: the beam picks its own targets and burns "
+                         "incoming ordnance while the capacitor holds.");
                 snprintf(row.card_mode_a, sizeof(row.card_mode_a), "AUTO BEAM - anti-ordnance");
                 snprintf(row.card_mode_a_stats, sizeof(row.card_mode_a_stats),
                          "DPS %.0f  DRAIN %.0f/s", fs.point_defense.damage_per_second,
@@ -1400,8 +1483,25 @@ static void game_push_hud(game_state* s, f32 dt) {
                 row.selected = FALSE;
                 snprintf(row.card_title, sizeof(row.card_title), "%s", m->name);
                 snprintf(row.card_rows, sizeof(row.card_rows),
-                         "TYPE       Module - %s\nSIZE       %s\nINTEGRITY  100%%",
-                         hardpoint_kind_label(m->type), hardpoint_size_name(m->size));
+                         "TYPE       Module - %s\n"
+                         "INTEGRITY  100%%\n"
+                         "LAYER 0    x%.2f  (proximity radius)\n"
+                         "LAYER 1    x%.2f  (identification radius)\n"
+                         "LAYER 2    x%.2f  (detection radius)",
+                         hardpoint_kind_label(m->type),
+                         m->sensor_mult[0], m->sensor_mult[1], m->sensor_mult[2]);
+                {
+                    static const char* MSIZE[3] = { "Small - fits S/M/L mounts",
+                                                    "Medium - fits M/L mounts",
+                                                    "Large - fits L mounts" };
+                    snprintf(row.card_size, sizeof(row.card_size), "SIZE       %s",
+                             MSIZE[(m->size < 3) ? m->size : 1]);
+                    b8 ok = FALSE;
+                    for (i32 h = 0; h < fs.hardpoint_count; ++h)
+                        if (hardpoint_fits_module(&fs.hardpoints[h], m)) { ok = TRUE; break; }
+                    row.card_size_ok = ok;
+                }
+                snprintf(row.card_desc, sizeof(row.card_desc), "%s", m->desc);
                 if (m->type == MODULE_TYPE_SENSOR) {
                     snprintf(row.card_mode_a, sizeof(row.card_mode_a), "PASSIVE - sensor array");
                     snprintf(row.card_mode_a_stats, sizeof(row.card_mode_a_stats),
@@ -1421,6 +1521,8 @@ static void game_push_hud(game_state* s, f32 dt) {
                 row.empty     = TRUE;
                 row.selected  = FALSE;
                 row.card_title[0] = row.card_rows[0] = '\0';
+                row.card_size[0] = row.card_desc[0] = '\0';
+                row.card_size_ok = TRUE;
                 row.card_mode_a[0] = row.card_mode_a_stats[0] = '\0';
                 row.card_mode_b[0] = row.card_mode_b_stats[0] = row.card_foot[0] = '\0';
             }

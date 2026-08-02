@@ -151,7 +151,7 @@ body {
     font-family: "Chakra Petch";
 }
 .value, .hud-val, .weapon-row, .ship-preview-name, #debug, #tooltip,
-.planet-insp-line, .market-colhead, .card-rows, .card-stats, .card-mode {
+.planet-insp-line, .market-colhead, .card-rows, .card-size, .card-stats, .card-mode {
     font-family: "JetBrains Mono";
 }
 
@@ -165,8 +165,8 @@ body.kit-neon #jumpmode {
 body.kit-neon .value, body.kit-neon .hud-val, body.kit-neon .weapon-row,
 body.kit-neon .ship-preview-name,
 body.kit-neon #debug, body.kit-neon #tooltip, body.kit-neon .planet-insp-line,
-body.kit-neon .market-colhead, body.kit-neon .card-rows, body.kit-neon .card-stats,
-body.kit-neon .card-mode {
+body.kit-neon .market-colhead, body.kit-neon .card-rows, body.kit-neon .card-size,
+body.kit-neon .card-stats, body.kit-neon .card-mode {
     font-family: "Share Tech Mono";
 }
 
@@ -180,8 +180,8 @@ body.kit-minimal #jumpmode {
 body.kit-minimal .value, body.kit-minimal .hud-val, body.kit-minimal .weapon-row,
 body.kit-minimal .ship-preview-name,
 body.kit-minimal #debug, body.kit-minimal #tooltip, body.kit-minimal .planet-insp-line,
-body.kit-minimal .market-colhead, body.kit-minimal .card-rows, body.kit-minimal .card-stats,
-body.kit-minimal .card-mode {
+body.kit-minimal .market-colhead, body.kit-minimal .card-rows, body.kit-minimal .card-size,
+body.kit-minimal .card-stats, body.kit-minimal .card-mode {
     font-family: "JetBrains Mono";
 }
 
@@ -199,7 +199,7 @@ body.kit-frontier #jumpmode {
 body.kit-frontier .value, body.kit-frontier .hud-val, body.kit-frontier .weapon-row,
 body.kit-frontier .ship-preview-name,
 body.kit-frontier #debug, body.kit-frontier #tooltip, body.kit-frontier .planet-insp-line,
-body.kit-frontier .market-colhead, body.kit-frontier .card-rows, body.kit-frontier .card-stats,
-body.kit-frontier .card-mode {
+body.kit-frontier .market-colhead, body.kit-frontier .card-rows, body.kit-frontier .card-size,
+body.kit-frontier .card-stats, body.kit-frontier .card-mode {
     font-family: "B612 Mono";
 }

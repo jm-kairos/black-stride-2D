@@ -38,6 +38,7 @@ struct ModuleDef {
     char          name[48];       // display name ("Surveyor Array Mk I")
     char          glyph[8];       // fallback Arsenal-box text symbol ("S1")
     char          icon[16];       // ui-icons emblem sprite ("ic-sensor"; defaulted by type)
+    char          desc[192];      // player-facing role description (stat-card paragraph)
     u32           type;           // single MODULE_TYPE_* kind bit
     HardpointSize size;           // physical size; mounts on slots of this size or larger
     f32           sensor_mult[3]; // sensor modules: layer 0/1/2 radius multipliers (else 1.0)

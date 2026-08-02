@@ -41,6 +41,7 @@ struct WeaponDef {
     char          id[32];        // registry key ("gauss_mk1")
     char          name[48];      // display name
     char          icon[16];      // ui-icons emblem sprite name
+    char          desc[192];     // player-facing role description (stat-card paragraph)
     u8            kind;          // WEAPON_KIND_BALLISTIC / WEAPON_KIND_MISSILE
     HardpointSize size;          // physical size; mounts on slots of this size or larger
     f32           damage;        // hull damage per hit

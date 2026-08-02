@@ -1,6 +1,7 @@
 #include "render/ship_scene.h"
 #include "game.h"
 #include "sim/ship.h"                 // ship_local_dir
+#include "sim/weapon.h"             // Weapon::size (arsenal drag size gating)
 #include "core/view_transform.h"    // render_from_hierpos
 #include "sim/celestial_parallax.h" // celestial_center_render
 #include "render/debug_overlay.h"   // g_debug_cell_grid, draw_hierpos_cell_grid
@@ -32,7 +33,14 @@ static const bs_color COLLIDER_COLOR = bs_color{ 1.00f, 0.18f, 0.85f, 1.0f };
 static b8 arsenal_drag_fits(const Ship& fs, i32 kind, i32 src, i32 dst) {
     const HardpointDef& dhp = fs.hardpoints[dst];
     switch (kind) {
-        case 0: case 1: return hardpoint_accepts(&dhp, MODULE_TYPE_WEAPON);
+        // Weapons: slot must take weapons AND be at least the weapon's size (mirror of the
+        // arsenal_drop_on_slot gates).
+        case 0: return hardpoint_accepts(&dhp, MODULE_TYPE_WEAPON)
+                       && src >= 0 && src < fs.hardpoint_count && fs.mounts[src]
+                       && fs.mounts[src]->size <= (u8)dhp.size;
+        case 1: return hardpoint_accepts(&dhp, MODULE_TYPE_WEAPON)
+                       && src >= 0 && src < fs.weapon_stash_count && fs.weapon_stash[src]
+                       && fs.weapon_stash[src]->size <= (u8)dhp.size;
         case 2: case 3: return hardpoint_accepts(&dhp, MODULE_TYPE_DEFENSE);
         case 4: return (src >= 0 && src < fs.module_stash_count)
                            ? hardpoint_fits_module(&dhp, fs.module_stash[src]) : FALSE;

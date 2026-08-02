@@ -4334,6 +4334,9 @@ struct BsRmlHudBay
     bool        empty    = false;
     Rml::String card_title;
     Rml::String card_rows;
+    Rml::String card_size;
+    bool        card_size_ok = true;
+    Rml::String card_desc;
     Rml::String card_mode_a;
     Rml::String card_mode_a_stats;
     Rml::String card_mode_b;
@@ -4503,6 +4506,9 @@ b8 bs_rml_hud_init(const char* rml_path)
         h.RegisterMember("empty",             &BsRmlHudBay::empty);
         h.RegisterMember("card_title",        &BsRmlHudBay::card_title);
         h.RegisterMember("card_rows",         &BsRmlHudBay::card_rows);
+        h.RegisterMember("card_size",         &BsRmlHudBay::card_size);
+        h.RegisterMember("card_size_ok",      &BsRmlHudBay::card_size_ok);
+        h.RegisterMember("card_desc",         &BsRmlHudBay::card_desc);
         h.RegisterMember("card_mode_a",       &BsRmlHudBay::card_mode_a);
         h.RegisterMember("card_mode_a_stats", &BsRmlHudBay::card_mode_a_stats);
         h.RegisterMember("card_mode_b",       &BsRmlHudBay::card_mode_b);
@@ -4768,6 +4774,9 @@ void bs_rml_hud_update(const bs_rml_hud_state* s)
             dst.empty    = src.empty ? true : false;
             bs_rml_assign(dst.card_title,        src.card_title,        sizeof(src.card_title));
             bs_rml_assign(dst.card_rows,         src.card_rows,         sizeof(src.card_rows));
+            bs_rml_assign(dst.card_size,         src.card_size,         sizeof(src.card_size));
+            dst.card_size_ok = src.card_size_ok ? true : false;
+            bs_rml_assign(dst.card_desc,         src.card_desc,         sizeof(src.card_desc));
             bs_rml_assign(dst.card_mode_a,       src.card_mode_a,       sizeof(src.card_mode_a));
             bs_rml_assign(dst.card_mode_a_stats, src.card_mode_a_stats, sizeof(src.card_mode_a_stats));
             bs_rml_assign(dst.card_mode_b,       src.card_mode_b,       sizeof(src.card_mode_b));

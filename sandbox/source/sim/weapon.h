@@ -11,15 +11,17 @@ enum WeaponKind : u8 { WEAPON_KIND_BALLISTIC = 0, WEAPON_KIND_MISSILE = 1 };
 // Ballistic fire modes (Phase D): AP shells kill ships; FLAK shells fly slow/short and
 // proximity-detonate against hostile ordnance (missiles + shells), never hulls.
 enum FireMode : u8 { MODE_AP = 0, MODE_FLAK = 1 };
+struct WeaponDef;   // sim/weapon_def.h (full stat block; instances keep a pointer)
 struct Weapon {
     const char*   name;           // display label
     const char*   icon;           // ui-icons emblem sprite for the Arsenal tile ("ic-cannon")
+    const WeaponDef* def;         // originating stat block (nullptr only for legacy paths)
     u8            wkind;          // WeaponKind tag for kind-specific fire logic
     u8            size;           // HardpointSize: mounts on slots of this size or larger
     f32           damage;         // hull damage per hit (stamped into spawned projectiles)
     VesselFaction owner_faction;  // set at equip time (legacy binary faction; projectile visuals)
     i16           owner_faction_id; // unified faction stamped from the firing ship at each fire site
-    Weapon(const char* n) : name(n), icon("ic-cannon"), wkind(WEAPON_KIND_BALLISTIC), size(HARDPOINT_MEDIUM), damage(15.0f), owner_faction((VesselFaction)0), owner_faction_id(FACTION_PIRATE) {}
+    Weapon(const char* n) : name(n), icon("ic-cannon"), def(nullptr), wkind(WEAPON_KIND_BALLISTIC), size(HARDPOINT_MEDIUM), damage(15.0f), owner_faction((VesselFaction)0), owner_faction_id(FACTION_PIRATE) {}
     virtual ~Weapon() {}
     // fire at the given origin in the given direction (unit or non-unit).
     // `ship_velocity` is the owning ship's current world velocity (added to projectile).

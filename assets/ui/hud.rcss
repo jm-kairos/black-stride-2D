@@ -655,12 +655,18 @@ body {
 /* Structured stat card: fabricated plate slab above the tile (shown on hover, hidden the
    instant the symbol is pressed to begin a drag -- the :active rule below wins by source
    order). Anchored to the tile's LEFT edge so cards from the leftmost column never clip. */
+/* Hover stat card: hidden by default, shown on tile hover (and re-hidden the
+   instant the symbol is pressed to begin a drag -- the :active rule below wins by source
+   order). Anchored to the tile's LEFT edge so cards from the leftmost column never clip.
+   Drops BELOW the tile: the bay well sits near the top of the screen, so the full-height
+   stat sheet has room downward but clips at the viewport when raised above the tile. */
 .stat-card {
     display: none;
     position: absolute;
-    bottom: 40px;
+    top: 44px;
     left: -8px;
     width: 300px;
+    z-index: 100;                                     /* paint above ALL sibling sections (PD doctrine etc) */
     decorator: ninepatch(plate-sm, plate-sm-inner);   /* same plate material as the panels */
     padding: 14px 16px;
     color: #ddd6c4;
@@ -688,6 +694,26 @@ body {
     font-size: 11px;
     white-space: pre;            /* preserve '\n' rows AND the key-column space padding */
     margin-bottom: 2px;
+}
+
+/* Mount-compatibility line: green when a flagship hardpoint can take the item's size/kind,
+   red when nothing on the hull ever will (mono column-aligned, same grid as .card-rows). */
+.card-size {
+    display: block;
+    font-size: 11px;
+    white-space: pre;
+    margin-bottom: 2px;
+}
+.card-size.ok  { color: #8fae52; }
+.card-size.bad { color: #d05c4a; }
+
+/* Role paragraph from the item's def (`desc`): body face, normal wrapping. */
+.card-desc {
+    display: block;
+    color: #a89a7e;
+    font-size: 11px;
+    white-space: normal;
+    margin-top: 4px;
 }
 
 .card-mode {

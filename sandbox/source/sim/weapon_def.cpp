@@ -70,6 +70,18 @@ static b8 weapon_def_load(WeaponDef* out, const char* path) {
             out->name[sizeof(out->name) - 1] = '\0';
             continue;
         }
+        if (strncmp(line, "desc", 4) == 0) {
+            const char* start = line + 4;
+            while (*start == ' ' || *start == '\t') ++start;
+            if (*start == '"') {
+                ++start;
+                char* end = (char*)strchr(start, '"');
+                if (end) *end = '\0';
+            }
+            strncpy(out->desc, start, sizeof(out->desc) - 1);
+            out->desc[sizeof(out->desc) - 1] = '\0';
+            continue;
+        }
         if (sscanf(line, "kind %31s", tok) == 1) {
             if (!weapon_kind_from_token(tok, &out->kind))
                 BS_LOG_WARN("weapon_def_load: unknown kind '%s' in '%s'.", tok, path);
@@ -157,7 +169,9 @@ Weapon* weapon_instantiate(const WeaponDef* def, VesselFaction owner) {
         bw->cap_cost_value = def->cap_cost;
         w = bw;
     }
-    // name/icon point INTO the def's fixed-pool storage (never reallocated).
+    // name/icon point INTO the def's fixed-pool storage (never reallocated); `def` gives
+    // consumers (stat cards) access to the full stat block incl. desc/price/tier.
+    w->def           = def;
     w->icon          = def->icon;
     w->size          = (u8)def->size;
     w->damage        = def->damage;

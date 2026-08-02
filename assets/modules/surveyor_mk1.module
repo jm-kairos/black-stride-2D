@@ -6,3 +6,4 @@ type sensor
 size S
 glyph S1
 sensor_mult 1.15 1.35 1.60
+desc "A basic phased array that stretches every sensor layer. The difference between finding a claim and flying past it."

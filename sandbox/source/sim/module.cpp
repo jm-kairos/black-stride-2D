@@ -75,6 +75,18 @@ static b8 module_def_load(ModuleDef* out, const char* path) {
         }
         if (sscanf(line, "glyph %7s", out->glyph) == 1) continue;
         if (sscanf(line, "icon %15s", out->icon) == 1) continue;
+        if (strncmp(line, "desc", 4) == 0) {
+            const char* start = line + 4;
+            while (*start == ' ' || *start == '\t') ++start;
+            if (*start == '"') {
+                ++start;
+                char* end = (char*)strchr(start, '"');
+                if (end) *end = '\0';
+            }
+            strncpy(out->desc, start, sizeof(out->desc) - 1);
+            out->desc[sizeof(out->desc) - 1] = '\0';
+            continue;
+        }
         f32 m0, m1, m2;
         if (sscanf(line, "sensor_mult %f %f %f", &m0, &m1, &m2) == 3) {
             out->sensor_mult[0] = m0;

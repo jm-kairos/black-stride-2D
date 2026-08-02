@@ -116,6 +116,9 @@
                 <div class="stat-card" data-if="w.card_title != ''">
                     <div class="card-title">{{ w.card_title }}</div>
                     <div class="card-rows">{{ w.card_rows }}</div>
+                    <div class="card-size" data-if="w.card_size != ''"
+                         data-class-ok="w.card_size_ok" data-class-bad="!w.card_size_ok">{{ w.card_size }}</div>
+                    <div class="card-desc" data-if="w.card_desc != ''">{{ w.card_desc }}</div>
                     <div class="rule"></div>
                     <div class="card-mode on">{{ w.card_mode_a }}</div>
                     <div class="card-stats on" data-if="w.card_mode_a_stats != ''">{{ w.card_mode_a_stats }}</div>

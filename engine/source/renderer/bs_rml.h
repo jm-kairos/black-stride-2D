@@ -136,8 +136,11 @@ typedef struct bs_rml_bay_line
     b8   selected;              // highlighted tile (active weapon selection)
     b8   empty;                 // empty socket (recessed style, not draggable)
     char card_title[48];        // "AUTOCANNON MK I"
-    char card_rows[160];        // "TYPE  Weapon...\nSIZE  Small...\nINTEGRITY  100%" (pre-line)
-    char card_mode_a[64];       // active/primary mode line ("AP SHELLS - anti-ship")
+    char card_rows[384];        // full mono stat sheet, '\n'-separated rows (pre)
+    char card_size[64];         // "SIZE  Small - fits S/M/L mounts" (own element: colored)
+    b8   card_size_ok;          // TRUE = fits a flagship hardpoint (green) / FALSE = red
+    char card_desc[192];        // role description paragraph ("" hides)
+    char card_mode_a[64];       // active/primary mode line ("> AP SHELLS - anti-ship")
     char card_mode_a_stats[64]; // its stat line ("DMG 6  RATE 12.0/s  PWR 1.5")
     char card_mode_b[64];       // secondary mode ("FLAK SCREEN - anti-ordnance"; "" = single-role)
     char card_mode_b_stats[64]; // its stat line
