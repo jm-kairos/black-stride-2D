@@ -74,8 +74,9 @@ static i32 station_count_target(const game_state* s, i32 node_idx, i32 geo) {
 // lightweight GalaxyNode summary (seed + sorted orbit radii + star radius), so the macro mission
 // layer can query any system's stations without materialising it. Stations are placed statically
 // around the star in concentric orbital zones (outside-in), with counts decreasing inward:
-// Zone 0 = 3, Zone 1 = 2, Zone 2 = 1 (6 total habited). The full geometry is always generated, then
-// truncated to station_count_target() so habited/uninhabited share a deterministic station PREFIX.
+// Zone 0 = 4, Zone 1 = 3, Zone 2 = 3, Zone 3 = 2 (12 total habited). The full geometry is always
+// generated, then truncated to station_count_target() so habited/uninhabited share a deterministic
+// station PREFIX.
 i32 galaxy_node_station_layout(const game_state* s, i32 node_idx, StationLayoutEntry* out, i32 max_out) {
     if (node_idx < 0 || node_idx >= s->galaxy.node_count || max_out <= 0) return 0;
     const GalaxyNode& nd = s->galaxy.nodes[node_idx];
@@ -83,7 +84,12 @@ i32 galaxy_node_station_layout(const game_state* s, i32 node_idx, StationLayoutE
     i32 oc = nd.orbit_count;
     if (oc <= 0) return 0;
 
-    const i32 ZONE_COUNTS[4] = { 3, 2, 1, 0 };
+    // Phase 9 (populate): denser installations so an inhabited system reads as settled rather than
+    // sparse. 4+3+3+2 = 12 geometric slots (SYSTEM_STATION_MAX is 24, so there is headroom), then
+    // truncated by station_count_target: habited systems keep the full set, uninhabited ones keep
+    // half on a 10-20% spawn roll. Ordering is a deterministic PREFIX, so raising these counts
+    // ADDS stations without moving the existing ones -- macro mission ids stay stable.
+    const i32 ZONE_COUNTS[4] = { 4, 3, 3, 2 };
     const f32 star_clear = nd.star_radius * 2.0f; // keep stations off the star surface
     u64 rng = station_mix(nd.seed ^ 0x57A7104Eull);
     auto frand = [&]() -> f32 { rng = station_mix(rng); return (f32)(rng & 0xFFFFFF) / (f32)0xFFFFFF; };
@@ -558,7 +564,14 @@ void galaxy_map_worldgen(game_state* s) {
         s->galaxy.market_deltas[i].station_id = -1;
     for (i32 i = 0; i < STATION_REVENUE_MAX; ++i)
         s->galaxy.station_revenues[i].station_id = -1;
+    // Phase 6: node-risk table starts empty (node 0 is a valid node index, so free == -1).
+    for (i32 i = 0; i < NODE_RISK_MAX; ++i) {
+        s->galaxy.node_risks[i].node = -1;
+        s->galaxy.node_risks[i].risk = 0.0f;
+    }
+    s->galaxy.economy_tick_hours = 0.0f;
     s->galaxy.map_draw_lanes        = TRUE;
+    s->galaxy.map_war_room          = FALSE;
     s->galaxy.map_draw_habitability = FALSE;
     s->galaxy.map_draw_civs         = FALSE;
     s->galaxy.show_legends          = FALSE;

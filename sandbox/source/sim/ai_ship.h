@@ -65,6 +65,7 @@ const AiProfile& ai_profile(u8 archetype);
 
 // Lifecycle / per-frame.
 void ai_ships_init(game_state* s);                 // load the hull template, clear the pool
+void ai_ships_shutdown(game_state* s);             // release the shared per-archetype weapons
 void ai_ships_update(game_state* s, f32 dt);        // population manager + perceive/think/steer/fire
 void ai_ships_register_combat(game_state* s);       // rebuild the NPC window in combat_entities[]
 
@@ -72,3 +73,9 @@ void ai_ships_register_combat(game_state* s);       // rebuild the NPC window in
 // `attacker_faction` is the projectile's unified faction id: only FACTION_PLAYER kills raid the
 // victim's civilization (rep hit); NPC-vs-NPC kills only shrink the garrison / retire the mission.
 void ai_ship_damage(game_state* s, i32 npc_index, f32 dmg, i16 attacker_faction);
+
+// DEBUG / test harness: materialise a hostile strike group of `count` warships near the player,
+// tagged to a faction that the LOCAL system owner is hostile to (a civ at war if one exists, else
+// FACTION_PIRATE which everyone fights). Forces an NPC-vs-NPC engagement on demand instead of
+// waiting for a raid mission to happen to arrive. Returns how many hulls actually spawned.
+i32 ai_ships_debug_spawn_strike(game_state* s, i32 count);

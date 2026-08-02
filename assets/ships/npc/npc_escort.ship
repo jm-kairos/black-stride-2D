@@ -1,0 +1,16 @@
+# Black Stride ship definition (.ship format).
+# Light, fast NPC hull: system patrols, interceptors and scouts. Small silhouette so a
+# picket reads as nimble next to a line warship at the same zoom.
+
+name "Lance-class Escort"
+faction 0
+world_scale 0.17
+size 2336 4832
+
+layer sprite assets/textures/ship.png 0 0 1 0 0
+
+# Box collider (ship-local space)
+collider -1168 -2416
+collider  1168 -2416
+collider  1168  2416
+collider -1168  2416

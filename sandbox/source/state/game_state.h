@@ -701,7 +701,7 @@ struct SystemStation {
 
 // the StarSystem) and the materialised stations always agree on which ones issue contracts.
 
-#define MISSION_HUBS_PER_SYSTEM 3
+#define MISSION_HUBS_PER_SYSTEM 5
 
 
 
@@ -784,6 +784,22 @@ struct StationRevenue {
 };
 
 #define STATION_REVENUE_MAX 256
+
+
+
+// Phase 6: per-node danger rating built from observed raider activity (pirate sorties launched at
+// a node, ambushes resolved there). Bounded pool: node < 0 = free slot, weakest entry is evicted
+// when the table is full, and every entry decays toward 0 so old scares are forgotten.
+
+struct NodeRisk {
+
+    i32 node;
+
+    f32 risk;
+
+};
+
+#define NODE_RISK_MAX 128
 
 
 
@@ -1321,6 +1337,12 @@ struct ShipMission {
 
     b8   escorted;             // Phase 5: high-value contract carries a warship escort (abstract defense)
 
+    b8   awaiting_hull;        // Phase 6: contract was destroyed -- it cannot re-issue until the owning
+                               // civ's shipyard delivers a replacement hull (see Civilization::hull_pool)
+
+    b8   raid_engaged;         // Phase 5/7: raid reached its target WHILE THE PLAYER IS THERE -- abstract
+                               // resolution is suspended so the live hulls fight it out on screen
+
 
 
     i32  ship_slot;       // bound live NpcShip pool index while docked in the player's system (-1 = none)
@@ -1466,6 +1488,26 @@ struct Civilization {
     i16      culture_id;     // Dynastic Houses: index of this lineage's founding House (root civ). A
 
                              // root has culture_id == its own civ index; successors inherit the parent's.
+
+
+
+    // ---- Phase 6: the economic loop (trade -> wealth -> power -> fleets) --------------------
+
+    // Trade delivered inside this civ's territory credits `treasury`. The economy tick spends it:
+
+    // part becomes `power` drift (prosperity really grows a polity), part is earmarked as
+
+    // `mil_budget` which pays for reinforcement/patrol/raid missions and rebuilds lost hulls.
+
+    // Strangle a civ's lanes and all three sink together.
+
+    f32      treasury;       // unsettled trade credits earned since the last economy tick
+
+    f32      mil_budget;     // credits earmarked for military missions + hull replacement
+
+    f32      hull_progress;  // partial credits banked toward the next replacement hull
+
+    i16      hull_pool;      // replacement hulls ready to re-crew a destroyed contract
 
 };
 
@@ -1625,7 +1667,7 @@ struct MapEntity {
 
 
 
-#define MAX_COMBAT_ENTITIES 96
+#define MAX_COMBAT_ENTITIES 288
 
 
 
@@ -1721,7 +1763,7 @@ struct CombatEntity {
 
 // =====================================================================================
 
-#define NPC_SHIP_MAX 96
+#define NPC_SHIP_MAX 256
 
 
 
@@ -1746,6 +1788,24 @@ struct NpcShip {
 
 
     u8            state;        // AiState (behavior FSM)
+
+
+
+    // Phase 7: contact memory so a lost target is INVESTIGATEd rather than instantly forgotten.
+
+    bs_math::HierPos2 last_contact;   // last known position of the most recent hostile
+
+    f32           contact_timer;  // seconds of memory left (0 = trail cold)
+
+    i16           sense_countdown; // Phase 8: frames until this agent re-scans for targets (staggered)
+
+    // Phase 10: combat wings. A wing is one leader plus two wingmen flying a triangle on its
+    // flanks. `wing_leader` is the leader's npc_ships[] index (-1 = leader or independent);
+    // `wing_slot` selects the formation offset (0 = leader/apex, 1 = rear-left, 2 = rear-right).
+    // Formation is held while cruising and BROKEN while fighting, then reformed.
+    i16           wing_leader;
+
+    u8            wing_slot;
 
 
 
@@ -2858,11 +2918,23 @@ struct game_state {
 
 
 
+    // Phase 6: bounded "hot" pirate-risk table. Only nodes that have actually seen raider activity
+    // occupy a slot, so the galaxy pays no per-node storage. Risk decays each economy tick and is
+    // read by trade_pick_market to steer contracts away from bleeding corridors.
+
+    NodeRisk        node_risks[NODE_RISK_MAX];
+
+
+
     i32           mission_count;        // high-water mark of used slots in missions[]
 
 
 
     i32           mission_capacity;     // allocated slots in missions[] (== MISSION_MAX)
+
+
+
+    f32           economy_tick_hours;   // Phase 6: hours since the last civ economy settlement
 
 
 
@@ -3039,6 +3111,11 @@ struct game_state {
     // Delaunay lane connections between star systems (galaxy map)
 
     bool map_draw_lanes;
+
+    // War room (debug): differentiates mission glyphs by objective, reddens lanes across borders
+    // whose owners are at war, and prints garrison / lane-risk readouts at contested nodes. Off
+    // during normal play -- toggled with G or from the editor panel.
+    bool map_war_room;
 
 
 
@@ -3352,6 +3429,16 @@ struct game_state {
 
 
     Ship         npc_template;             // shared hull template (loaded once; struct-copied on spawn)
+
+
+
+    // Phase 7: per-archetype hull templates (data-driven; see archetype_hull_path). Slots whose
+
+    // asset is missing fall back to npc_template, so art is optional.
+
+    Ship         npc_hulls[7];             // indexed by ShipArchetype (ARCHETYPE_COUNT)
+
+    b8           npc_hull_ready[7];
 
 
 

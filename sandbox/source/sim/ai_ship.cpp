@@ -16,6 +16,8 @@
 
 #include "sim/discovery.h"        // discovery_npc_is_known (single-ship discovery system)
 
+#include "sim/weapon_def.h"       // weapon_registry_find / weapon_instantiate (Phase 7 NPC guns)
+
 #include <core/logger.h>          // BS_LOG_ERROR
 
 #include <math.h>
@@ -32,11 +34,17 @@ using GalaxyState = game_state::GalaxyState;   // nested alias for the mission-h
 
 // Per-archetype tuning. Distances scaled to the LOCAL combat scale (player SHIP_MAX_SPEED == 800
 
-// units/s), not the galaxy scale. Phase A only exercises ARCHETYPE_PATROL; the others are seeded
-
-// with sensible defaults and come alive in Phase C.
+// units/s), not the galaxy scale.
 
 // =====================================================================================
+
+// Phase 7: how long (seconds) an agent remembers a lost contact and keeps sweeping toward it.
+static const f32 AI_INVESTIGATE_HOLD = 8.0f;
+
+// Phase 8: frames between target re-scans for a given agent. Sensing is O(agents x entities), so
+// at a 256-hull pool an every-frame scan is ~65k distance tests per frame. Targets do not change
+// meaningfully between frames, so results are cached and refreshed on this staggered cadence.
+static const i32 AI_SENSE_INTERVAL = 4;
 
 static const AiProfile g_profiles[ARCHETYPE_COUNT] = {
 
@@ -102,6 +110,70 @@ static bs_color faction_tint(const game_state* s, i16 faction) {
 
 
 
+// ---- Phase 7: per-archetype hulls + weapons ------------------------------------------------
+
+// Hulls are DATA: each archetype names a .ship file, so a new ship kind is a new asset plus one
+
+// row here -- no new code. Missing files fall back to the shared raider hull, so the sim never
+
+// depends on art existing.
+
+static const char* archetype_hull_path(u8 archetype) {
+
+    switch (archetype) {
+
+        case ARCHETYPE_WARSHIP:     return "assets/ships/npc/npc_warship.ship";
+
+        case ARCHETYPE_PATROL:      return "assets/ships/npc/npc_escort.ship";
+
+        case ARCHETYPE_INTERCEPTOR: return "assets/ships/npc/npc_escort.ship";
+
+        case ARCHETYPE_SCOUT:       return "assets/ships/npc/npc_escort.ship";
+
+        case ARCHETYPE_TRADER:      return "assets/ships/npc/npc_hauler.ship";
+
+        case ARCHETYPE_MINER:       return "assets/ships/npc/npc_hauler.ship";
+
+        default:                    return "assets/enemy_ship.ship";   // PIRATE keeps the raider hull
+
+    }
+
+}
+
+
+
+// Armament is data too: one registry weapon id per archetype (nullptr = unarmed civilian).
+
+static const char* archetype_weapon_id(u8 archetype) {
+
+    switch (archetype) {
+
+        case ARCHETYPE_WARSHIP:     return "gauss_mk1";        // heavy alpha line gun
+
+        case ARCHETYPE_PATROL:      return "autocannon_mk1";   // cheap volume fire
+
+        case ARCHETYPE_INTERCEPTOR: return "autocannon_mk1";
+
+        case ARCHETYPE_PIRATE:      return "autocannon_mk1";
+
+        default:                    return nullptr;            // traders, miners and scouts fly unarmed
+
+    }
+
+}
+
+
+
+// ONE shared weapon instance per archetype (never per agent -- the pool stays allocation-free).
+
+// Rate limiting is the agent's own AiProfile::fire_period via NpcShip::fire_cd, so the shared
+
+// instance's internal cooldown is cleared before each shot.
+
+static Weapon* g_npc_weapons[ARCHETYPE_COUNT] = { nullptr };
+
+
+
 // =====================================================================================
 
 void ai_ships_init(game_state* s) {
@@ -120,9 +192,9 @@ void ai_ships_init(game_state* s) {
 
     // Shared hull template: loaded once, struct-copied on each spawn (visual texture handles are
 
-    // shared -- safe for rendering, never freed per-agent). Agents fire via direct projectile spawn,
+    // shared -- safe for rendering, never freed per-agent). This is the FALLBACK hull; Phase 7
 
-    // so the template needs no Weapon objects.
+    // loads a per-archetype template on top of it below.
 
     if (ship_load(&s->npc_template, "assets/enemy_ship.ship")) {
 
@@ -145,6 +217,103 @@ void ai_ships_init(game_state* s) {
     } else {
 
         BS_LOG_ERROR("ai_ships_init: failed to load NPC hull template.");
+
+    }
+
+
+
+    // ---- Phase 7: per-archetype hulls -------------------------------------------------------
+
+    // One template per archetype so a miner, a freighter and a line warship are told apart at a
+
+    // glance. Any archetype whose asset is missing simply keeps the fallback hull.
+
+    i32 hulls_loaded = 0;
+
+    for (i32 a = 0; a < ARCHETYPE_COUNT; ++a) {
+
+        Ship& t = s->npc_hulls[a];
+
+        s->npc_hull_ready[a] = FALSE;
+
+        if (!s->npc_template_ready) continue;
+
+        const char* path = archetype_hull_path((u8)a);
+
+        if (!ship_load(&t, path)) {
+
+            BS_LOG_WARN("ai_ships_init: archetype %d hull '%s' missing; using the fallback hull.", a, path);
+
+            continue;
+
+        }
+
+        ship_visual_resolve_textures(&t.visual);
+
+        t.faction           = VESSEL_PIRATE;      // binary friendly-fire enum; stance uses faction_id
+
+        t.faction_id        = FACTION_PIRATE;
+
+        t.active_weapon_idx = -1;
+
+        for (i32 w = 0; w < SHIP_MAX_HARDPOINTS; ++w) t.mounts[w] = nullptr;
+
+        t.glow               = s->render.glow_params;
+
+        t.radiation_emission = 0.05f;
+
+        s->npc_hull_ready[a] = TRUE;
+
+        ++hulls_loaded;
+
+    }
+
+
+
+    // ---- Phase 7: NPCs fire through the real Weapon system ----------------------------------
+
+    // Shared instances built from the same .weapon registry the player draws from, so NPC shells
+
+    // carry real damage/speed/HP values and interact with point-defense and flak.
+
+    i32 guns_loaded = 0;
+
+    for (i32 a = 0; a < ARCHETYPE_COUNT; ++a) {
+
+        if (g_npc_weapons[a]) { delete g_npc_weapons[a]; g_npc_weapons[a] = nullptr; }
+
+        const char* wid = archetype_weapon_id((u8)a);
+
+        if (!wid) continue;
+
+        const WeaponDef* def = weapon_registry_find(&s->weapon_registry, wid);
+
+        if (!def) { BS_LOG_WARN("ai_ships_init: weapon '%s' not in the registry.", wid); continue; }
+
+        g_npc_weapons[a] = weapon_instantiate(def, VESSEL_PIRATE);
+
+        if (g_npc_weapons[a]) ++guns_loaded;
+
+    }
+
+
+
+    BS_LOG_INFO("ShipAI hulls: %d/%d archetype hull(s) loaded, %d archetype weapon(s) armed from the registry",
+
+                hulls_loaded, (i32)ARCHETYPE_COUNT, guns_loaded);
+
+}
+
+
+
+void ai_ships_shutdown(game_state* s) {
+    (void)s;
+
+    for (i32 a = 0; a < ARCHETYPE_COUNT; ++a) {
+
+        delete g_npc_weapons[a];
+
+        g_npc_weapons[a] = nullptr;
 
     }
 
@@ -174,7 +343,11 @@ static i32 spawn_npc(game_state* s, i16 faction, HierPos2 pos, i32 home_node, u8
 
     NpcShip& n = s->npc_ships[slot];
 
-    n.ship = s->npc_template;                 // struct copy (shares visual texture handles)
+    n.ship = (archetype < ARCHETYPE_COUNT && s->npc_hull_ready[archetype])
+
+                 ? s->npc_hulls[archetype]        // Phase 7: archetype hull (struct copy)
+
+                 : s->npc_template;               // fallback: shared raider hull
 
     n.ship.faction = VESSEL_PIRATE;           // binary friendly-fire enum (stance uses faction_id)
 
@@ -197,8 +370,18 @@ static i32 spawn_npc(game_state* s, i16 faction, HierPos2 pos, i32 home_node, u8
     n.archetype = archetype;
 
     n.state     = AI_PATROL;
-
     n.hp = n.max_hp = (archetype == ARCHETYPE_MINER) ? 25.0f : (archetype == ARCHETYPE_TRADER ? 30.0f : 40.0f);
+
+    // Phase 7: hull toughness now tracks the archetype's role, not just civilian/combatant.
+    if (archetype == ARCHETYPE_WARSHIP)          n.hp = n.max_hp = 70.0f;   // line combatant
+    else if (archetype == ARCHETYPE_INTERCEPTOR) n.hp = n.max_hp = 32.0f;   // fast, fragile
+    else if (archetype == ARCHETYPE_SCOUT)       n.hp = n.max_hp = 22.0f;   // eyes only
+
+    n.last_contact  = pos;
+    n.contact_timer = 0.0f;
+    n.sense_countdown = (i16)(slot % AI_SENSE_INTERVAL);   // stagger the first scan across the pool
+    n.wing_leader   = -1;                                  // independent until a wing is assigned
+    n.wing_slot     = 0;
 
     n.home      = pos;                        // loiter / return anchor = local spawn point
 
@@ -296,6 +479,64 @@ static HierPos2 system_anchor(game_state* s, i32 node, u8 role, i32 index, u64 s
 
 
 
+// ---- Phase 10: combat wings (triangular formation) ------------------------------------------
+
+// A wing is one leader plus two wingmen holding a triangle: leader at the apex, wingmen off each
+
+// rear quarter. Offsets are LEADER-LOCAL (ship convention: angle 0 => nose +Y, so -Y is astern)
+
+// and get rotated by the leader's heading, so the triangle turns with the formation.
+
+static const f32 WING_SPACING = 2600.0f;   // ~3 hull widths: reads as a formation at gameplay zoom
+
+static Vec2 wing_slot_offset(u8 slot) {
+
+    switch (slot) {
+
+        case 1:  return Vec2{ -WING_SPACING,  -WING_SPACING };   // rear-left
+
+        case 2:  return Vec2{  WING_SPACING,  -WING_SPACING };   // rear-right
+
+        default: return Vec2{  0.0f, 0.0f };                     // leader / apex
+
+    }
+
+}
+
+
+
+// Group a just-spawned set of combat hulls into wings of three.
+
+static void assign_wings(game_state* s, const i32* slots, i32 count) {
+
+    for (i32 i = 0; i < count; i += 3) {
+
+        i32 lead = slots[i];
+
+        if (lead < 0) continue;
+
+        s->npc_ships[lead].wing_leader = -1;
+
+        s->npc_ships[lead].wing_slot   = 0;
+
+        for (i32 k = 1; k < 3 && (i + k) < count; ++k) {
+
+            i32 w = slots[i + k];
+
+            if (w < 0) continue;
+
+            s->npc_ships[w].wing_leader = (i16)lead;
+
+            s->npc_ships[w].wing_slot   = (u8)k;
+
+        }
+
+    }
+
+}
+
+
+
 // Materialize the FULL population of an owned system at its anchors (patrols at star/planets, miners at
 
 // the belt, traders on planet lanes). Deterministic per node; all civ-tagged. Debug: everything is spawned
@@ -312,19 +553,100 @@ static void materialize_system(game_state* s, i32 node, i16 owner) {
 
 
 
-    i32 patrols = galaxy_history_garrison_at(s, node);   if (patrols > 12) patrols = 12; if (patrols < 2) patrols = 2;
+    // Phase 9 (populate): a settled system should look settled. Counts scale with what the system
+    // actually has -- garrison strength, orbital real estate, station count and civ power -- so
+    // core worlds bustle while frontier systems stay thin.
+    i32 station_ct = 0;
 
-    i32 miners  = 6 + oc * 2 + (i32)(seed % 4ull);       if (miners  > 16) miners  = 16;
+    {   // station count drives how much civilian traffic the system can support
+        StationLayoutEntry layout[SYSTEM_STATION_MAX];
 
-    i32 traders = 2 + (i32)(power * 0.3f) + (i32)((seed >> 8) % 3ull); if (traders > 8) traders = 8;
+        station_ct = galaxy_node_station_layout(s, node, layout, SYSTEM_STATION_MAX);
+
+    }
+
+    i32 patrols = galaxy_history_garrison_at(s, node);   if (patrols > 20) patrols = 20; if (patrols < 3) patrols = 3;
+
+    i32 miners  = 10 + oc * 2 + (i32)(seed % 6ull);      if (miners  > 24) miners  = 24;
+
+    i32 traders = 4 + station_ct + (i32)(power * 0.3f) + (i32)((seed >> 8) % 4ull); if (traders > 14) traders = 14;
+
+
+
+    // ---- Phase 7: SCOUT + INTERCEPTOR come alive --------------------------------------------
+
+    // Interceptors are pirate hunters: a civ posts them where its lanes are actually bleeding, so
+
+    // the Phase 6 node-risk table drives who shows up -- risk at this node OR at any node it feeds.
+
+    // Scouts are recon: they watch any border, whether that is a rival at war or the lawless dark.
+
+    f32 risk = ship_mission_node_risk(s, node);
+
+    b8  war_border = FALSE, wild_border = FALSE;
+
+    {
+
+        const GalaxyLaneGraph& lg = s->galaxy.lanes;
+
+        if (lg.adj_start && lg.adj_neighbor) {
+
+            i32 a0 = lg.adj_start[node], a1 = lg.adj_start[node + 1];
+
+            for (i32 a = a0; a < a1; ++a) {
+
+                i32 nb = lg.adj_neighbor[a];
+
+                i16 no = s->galaxy.node_owner[nb];
+
+                f32 nr = ship_mission_node_risk(s, nb);
+
+                if (nr > risk) risk = nr;                       // a neighbour under attack is our problem too
+
+                if (no < 0)                                             wild_border = TRUE;
+
+                else if (no != owner && galaxy_history_civ_at_war(s, (i32)owner, (i32)no)) war_border = TRUE;
+
+            }
+
+        }
+
+    }
+
+    i32 interceptors = (risk > 0.05f) ? 1 + (i32)(risk * 1.5f) : 0;
+
+    if (interceptors > 4) interceptors = 4;
+
+    i32 scouts = war_border ? 2 : (wild_border ? 1 : 0);
 
 
 
     i32 idx = 0;
 
-    for (i32 k = 0; k < patrols; ++k, ++idx)
+    // Combat hulls are collected as they spawn so they can be grouped into wings of three.
+    i32 wing_slots[64]; i32 wing_n = 0;
 
-        spawn_npc(s, owner, system_anchor(s, node, ARCHETYPE_PATROL, idx, seed), node, ARCHETYPE_PATROL, seed + (u64)idx);
+    for (i32 k = 0; k < patrols; ++k, ++idx) {
+
+        i32 sl = spawn_npc(s, owner, system_anchor(s, node, ARCHETYPE_PATROL, idx, seed), node, ARCHETYPE_PATROL, seed + (u64)idx);
+
+        if (sl >= 0 && wing_n < 64) wing_slots[wing_n++] = sl;
+
+    }
+
+    for (i32 k = 0; k < interceptors; ++k, ++idx) {
+
+        i32 sl = spawn_npc(s, owner, system_anchor(s, node, ARCHETYPE_INTERCEPTOR, idx, seed), node, ARCHETYPE_INTERCEPTOR, seed + (u64)idx);
+
+        if (sl >= 0 && wing_n < 64) wing_slots[wing_n++] = sl;
+
+    }
+
+    assign_wings(s, wing_slots, wing_n);
+
+    for (i32 k = 0; k < scouts; ++k, ++idx)
+
+        spawn_npc(s, owner, system_anchor(s, node, ARCHETYPE_SCOUT, idx, seed), node, ARCHETYPE_SCOUT, seed + (u64)idx);
 
     for (i32 k = 0; k < miners; ++k, ++idx)
 
@@ -334,22 +656,55 @@ static void materialize_system(game_state* s, i32 node, i16 owner) {
 
         spawn_npc(s, owner, system_anchor(s, node, ARCHETYPE_TRADER, idx, seed), node, ARCHETYPE_TRADER, seed + (u64)idx);
 
+
+
+    // Raiders do not stay politely in the dark: where a civ's lanes are actually bleeding (Phase 6
+    // risk, or a lawless system next door) a pirate band works the system itself. This is what puts
+    // piracy in front of the player inside civ space, and gives the local patrols something to hunt.
+    i32 lurkers = 0;
+
+    if (risk > 0.05f)      lurkers = 1 + (i32)(risk * 2.0f);
+
+    else if (wild_border)  lurkers = 1 + (i32)((seed >> 16) % 2ull);
+
+    if (lurkers > 5) lurkers = 5;
+
+    for (i32 k = 0; k < lurkers; ++k, ++idx)
+
+        spawn_npc(s, FACTION_PIRATE, system_anchor(s, node, ARCHETYPE_PIRATE, idx, seed), node, ARCHETYPE_PIRATE, seed + (u64)idx);
+
+
+
+    if (interceptors > 0 || scouts > 0 || lurkers > 0)
+
+        BS_LOG_INFO("ShipAI garrison: node %d fielded %d interceptor(s) (lane risk %.2f), %d scout(s) (%s border), %d pirate lurker(s)",
+
+                    node, interceptors, risk, scouts, war_border ? "war" : (wild_border ? "lawless" : "quiet"), lurkers);
+
 }
 
 
 
-// Wild / unclaimed space is not empty: a deterministic handful of pirate raiders (FACTION_PIRATE)
-// camp the star ring of a lawless system and engage anyone on sight (pairwise stance: pirates are
-// hostile to all factions). Roughly 1 in 6 wild systems rolls empty so lawless space stays uneven.
+// Wild / unclaimed space is not empty: a deterministic band of pirate raiders (FACTION_PIRATE)
+// camps the star ring of a lawless system and engages anyone on sight (pairwise stance: pirates are
+// hostile to all factions). Every wild system carries a crew -- lawless space should feel lawless.
 static void materialize_wild_system(game_state* s, i32 node) {
 
     u64 st = (u64)(node + 1) * 0x9E3779B97F4A7C15ull ^ 0xBADC0FFEEull;
 
-    i32 pirates = (i32)(sm64(st) % 6ull);   // 0..5 raiders
+    i32 pirates = 3 + (i32)(sm64(st) % 6ull);   // 3..8 raiders
 
-    for (i32 k = 0; k < pirates; ++k)
+    i32 wing_slots[16]; i32 wing_n = 0;
 
-        spawn_npc(s, FACTION_PIRATE, system_anchor(s, node, ARCHETYPE_PIRATE, k, st), node, ARCHETYPE_PIRATE, st + (u64)(k + 1));
+    for (i32 k = 0; k < pirates; ++k) {
+
+        i32 sl = spawn_npc(s, FACTION_PIRATE, system_anchor(s, node, ARCHETYPE_PIRATE, k, st), node, ARCHETYPE_PIRATE, st + (u64)(k + 1));
+
+        if (sl >= 0 && wing_n < 16) wing_slots[wing_n++] = sl;
+
+    }
+
+    assign_wings(s, wing_slots, wing_n);   // raiders hunt in packs of three
 
     if (pirates > 0)
 
@@ -470,8 +825,19 @@ static void ai_ships_sync_missions(game_state* s) {
 
 
     // Stale-link hygiene (Phase 2): a linked agent whose contract is gone, jumped out, or disagrees
-    // on the binding is resolved here. NATIVE traders (home in this system) return to ambient duty;
-    // travelers that jumped out or belong to another system despawn — they left with the ship.
+    // on the binding is resolved here. A hull that JUMPED OUT is legitimately gone -- it left with
+    // the ship. Everything else STAYS as a local agent rather than blinking out of existence in
+    // front of the player: freighters fall back to ambient intra-system hauling, raiders keep
+    // hunting the system they just hit, warships hold station. Pool headroom guards the fallback so
+    // a busy hub can never starve the agent pool (beyond the limit, foreign hulls are culled as
+    // before). Ships popping out of existence at a dock is exactly the "decorative" behaviour the
+    // autonomous-universe work exists to remove.
+
+    i32 live_count = 0;
+
+    for (i32 i = 0; i < NPC_SHIP_MAX; ++i) if (s->npc_ships[i].active) ++live_count;
+
+    const i32 KEEP_LIMIT = (NPC_SHIP_MAX * 3) / 4;
 
     for (i32 i = 0; i < NPC_SHIP_MAX; ++i) {
 
@@ -491,15 +857,67 @@ static void ai_ships_sync_missions(game_state* s) {
 
         n.mission_id = -1;
 
-        if (jumped_out || !native) {
+        if (jumped_out) {
 
-            n.active = FALSE;   // the traveler departed (or is foreign): the hull leaves with it
+            n.active = FALSE;   // the traveler departed: the hull leaves with it
 
-            if (jumped_out) BS_LOG_INFO("ShipAI travel: mission %d jumped out (live agent %d released)", (i32)(m - g.missions), i);
+            --live_count;
 
-        } else if (n.state == AI_TRADE_DOCK || n.state == AI_TRADE_DOCKED || n.state == AI_TRAVEL_LEG) {
+            BS_LOG_INFO("ShipAI travel: mission %d jumped out (live agent %d released)", (i32)(m - g.missions), i);
 
-            n.state = AI_PATROL; n.state_timer = 0.0f;   // native trader returns to ambient duty
+            continue;
+
+        }
+
+        if (native) {
+
+            if (n.state == AI_TRADE_DOCK || n.state == AI_TRADE_DOCKED || n.state == AI_TRAVEL_LEG) {
+
+                n.state = AI_PATROL; n.state_timer = 0.0f;   // native hull returns to ambient duty
+
+            }
+
+            continue;
+
+        }
+
+        if (node_here >= 0 && live_count <= KEEP_LIMIT) {
+
+            // Foreign hull, mission over, room in the pool: it settles in as a local. Re-anchor its
+            // loiter/leash here so it behaves like a resident instead of trying to fly home.
+            n.home        = n.ship.origin;
+
+            n.home_node   = node_here;
+
+            n.state       = AI_PATROL;
+
+            n.state_timer = 0.0f;
+
+            static i32 s_settle_n = 0;
+
+            if ((++s_settle_n % 8) == 1) {
+
+                BS_LOG_INFO("ShipAI travel: agent %d (archetype %u, faction %d) finished its run and settled at node %d as a local (settle #%d)",
+
+                            i, (u32)n.archetype, (i32)n.faction, node_here, s_settle_n);
+
+            }
+
+            continue;
+
+        }
+
+        n.active = FALSE;   // pool pressure: cull the foreign hull as before
+
+        --live_count;
+
+        static i32 s_foreign_n = 0;
+
+        if ((++s_foreign_n % 8) == 1) {
+
+            BS_LOG_INFO("ShipAI travel: agent %d (archetype %u) culled at node %d for pool pressure (%d live) -- cull #%d",
+
+                        i, (u32)n.archetype, node_here, live_count, s_foreign_n);
 
         }
 
@@ -538,7 +956,9 @@ static void ai_ships_sync_missions(game_state* s) {
 
         ShipMission& m = g.missions[mi];
 
-        if ((m.archetype != ARCHETYPE_TRADER && m.archetype != ARCHETYPE_WARSHIP) || m.ship_slot >= 0) continue;
+        if ((m.archetype != ARCHETYPE_TRADER && m.archetype != ARCHETYPE_WARSHIP &&
+
+             m.archetype != ARCHETYPE_PIRATE) || m.ship_slot >= 0) continue;
 
         if (!mission_live_here(m, node_here)) continue;
 
@@ -563,6 +983,32 @@ static void ai_ships_sync_missions(game_state* s) {
             t.state_timer = 0.0f;
 
             m.ship_slot   = slot;
+
+            // Phase 10: a military column of strength N arrives as a WING, not a lone hull. The
+            // mission-bound leader keeps the macro binding; its escorts fly the triangle as
+            // ordinary wingmen (no mission of their own), so the abstract strength number finally
+            // shows up on screen as ships.
+            if (m.objective == OBJ_RAID || m.objective == OBJ_REINFORCE || m.objective == OBJ_PATROL) {
+
+                i32 wings = (i32)m.cargo_units - 1;
+
+                if (wings > 2) wings = 2;
+
+                for (i32 w = 0; w < wings; ++w) {
+
+                    HierPos2 wp = hierpos_add_vec2(&pos, wing_slot_offset((u8)(w + 1)));
+
+                    i32 ws = spawn_npc(s, owner, wp, m.home_node, m.archetype, m.seed + (u64)(w + 17));
+
+                    if (ws < 0) break;
+
+                    s->npc_ships[ws].wing_leader = (i16)slot;
+
+                    s->npc_ships[ws].wing_slot   = (u8)(w + 1);
+
+                }
+
+            }
 
             BS_LOG_INFO("ShipAI travel: mission %d materialized in-system (stage %u, node %d, agent %d)",
                         mi, (u32)m.stage, node_here, slot);
@@ -619,22 +1065,57 @@ static void ai_ships_sync_missions(game_state* s) {
 // warring civs and pirates, not just the player. `self` is this agent's npc_ships[] index, used to
 // skip its own (one-frame-stale) registration in combat_entities[]. Sets target_ce (-1 if none)
 // and remembers last_seen.
+// Perception. Sensing is O(agents x entities), so at a 256-hull pool a naive every-frame scan is
+// ~65k distance tests per frame. Two cheap guards keep it affordable: results are CACHED and
+// refreshed on the staggered AI_SENSE_INTERVAL cadence, and the hostility lookup -- the expensive
+// part -- runs only after a squared-distance reject.
 static void ai_sense(game_state* s, NpcShip& n, i32 self) {
+
     const AiProfile& p = ai_profile(n.archetype);
-    n.target_ce = -1;
-    f32 best_d2 = p.sensor_range * p.sensor_range;
-    i32 best = -1;
-    for (i32 i = 0; i < s->combat_entity_count; ++i) {
-        CombatEntity& ce = s->combat_entities[i];
-        if (!ce.active) continue;
-        if (ce.is_npc && ce.npc_index == self) continue;               // never target yourself
-        if (!galaxy_history_factions_hostile(s, n.faction, ce.faction_id)) continue;
-        Vec2 to = hierpos_diff(&ce.position, &n.ship.origin, BS_HIERPOS_CELL_SIZE);
-        f32 d2 = to.x * to.x + to.y * to.y;
-        if (d2 < best_d2) { best_d2 = d2; best = i; }
+
+    // Staggered by slot so the cost spreads evenly instead of spiking on one frame.
+    if (n.sense_countdown > 0) {
+
+        --n.sense_countdown;
+
+        // Validate the cached target cheaply; a stale/destroyed one falls through to a full scan.
+        if (n.target_ce >= 0 && n.target_ce < s->combat_entity_count &&
+            s->combat_entities[n.target_ce].active) return;
+
     }
+
+    n.sense_countdown = (i16)(AI_SENSE_INTERVAL + (self % AI_SENSE_INTERVAL));
+
+    n.target_ce = -1;
+
+    f32 best_d2 = p.sensor_range * p.sensor_range;
+
+    i32 best = -1;
+
+    for (i32 i = 0; i < s->combat_entity_count; ++i) {
+
+        CombatEntity& ce = s->combat_entities[i];
+
+        if (!ce.active) continue;
+
+        if (ce.is_npc && ce.npc_index == self) continue;               // never target yourself
+
+        Vec2 to = hierpos_diff(&ce.position, &n.ship.origin, BS_HIERPOS_CELL_SIZE);
+
+        f32 d2 = to.x * to.x + to.y * to.y;
+
+        if (d2 >= best_d2) continue;                                   // cheap reject before the
+
+        if (!galaxy_history_factions_hostile(s, n.faction, ce.faction_id)) continue;  // stance lookup
+
+        best_d2 = d2; best = i;
+
+    }
+
     n.target_ce = best;
+
     if (best >= 0) n.last_seen = s->combat_entities[best].position;
+
 }
 
 
@@ -839,6 +1320,50 @@ static void ai_miner_deliver(game_state* s, NpcShip& n, f32 dt) {
 
 // then flags the mission's local_ready so the macro stage machine advances (depart / retire).
 
+// ---- Shared mission-leg locomotion ---------------------------------------------------------
+
+// EVERY mission-bound hull -- freighter, reinforcement column, patrol, raid party -- flies its
+
+// macro leg exactly the same way: out to the jump ring, freely across the system, in to the
+
+// target, at macro speed so a materialised ship stays schedule-coherent with the unobserved ones.
+
+// Mirrors the hull into m.pos (the galaxy-map pip tracks the real ship) and hands arrival back
+
+// through local_ready. One locomotion policy, no per-archetype special cases.
+
+static void ai_fly_mission_leg(game_state* s, NpcShip& n, ShipMission& m, f32 dt) {
+
+    const GalaxyState& g = s->galaxy;
+
+    const AiProfile& p = ai_profile(n.archetype);
+
+    Ship* sh = &n.ship; ShipFlight* fl = &n.flight;
+
+    if (n.state != AI_TRAVEL_LEG) { n.state = AI_TRAVEL_LEG; n.state_timer = 0.0f; }
+
+    f32 spd = (g.ai_speed_in_system > 0.0f) ? g.ai_speed_in_system : 50000.0f;
+
+    Vec2 leg = hierpos_diff(&m.leg_target, &sh->origin, BS_HIERPOS_CELL_SIZE);
+
+    steering::apply(sh, fl, steering::arrive(leg, spd, spd * 2.0f), spd, spd, p.turn_rate * 2.0f, dt);
+
+    m.pos = sh->origin;   // macro mirrors the live hull
+
+    // The arrival band has to cover a full frame of travel at macro speed, or a fast hull steps
+
+    // straight over it and the stage never completes.
+
+    f32 band = vec2_length(fl->velocity) * dt * 3.0f;
+
+    if (band < 1500.0f) band = 1500.0f;
+
+    if (vec2_length(leg) <= band && !m.local_ready) m.local_ready = TRUE;
+
+}
+
+
+
 static void ai_trader_tick(game_state* s, NpcShip& n, f32 dt) {
 
     GalaxyState& g = s->galaxy;
@@ -863,17 +1388,7 @@ static void ai_trader_tick(game_state* s, NpcShip& n, f32 dt) {
 
         m.stage == MISSION_STAGE_CROSS   || m.stage == MISSION_STAGE_FINAL_APPROACH) {
 
-        if (n.state != AI_TRAVEL_LEG) { n.state = AI_TRAVEL_LEG; n.state_timer = 0.0f; }
-
-        f32 spd = (g.ai_speed_in_system > 0.0f) ? g.ai_speed_in_system : 50000.0f;
-
-        Vec2 leg = hierpos_diff(&m.leg_target, &sh->origin, BS_HIERPOS_CELL_SIZE);
-
-        steering::apply(sh, fl, steering::arrive(leg, spd, spd * 2.0f), spd, spd, p.turn_rate * 2.0f, dt);
-
-        m.pos = sh->origin;   // macro mirrors the live hull
-
-        if (vec2_length(leg) <= 1500.0f && !m.local_ready) m.local_ready = TRUE;
+        ai_fly_mission_leg(s, n, m, dt);
 
         return;
 
@@ -1239,25 +1754,23 @@ static b8 ai_mission_warship_tick(game_state* s, NpcShip& n, i32 self, f32 dt) {
 
     ai_sense(s, n, self);
 
-    if (n.target_ce >= 0) return FALSE;   // hostiles in sensor range: fight first
+    if (n.target_ce >= 0) {
+
+        m.pos = n.ship.origin;   // keep the map pip on the hull while it fights
+
+        return FALSE;            // hostiles in sensor range: fight first
+
+    }
 
     const AiProfile& p = ai_profile(n.archetype);
 
-    Ship* sh = &n.ship; ShipFlight* fl = &n.flight;
+    (void)p;
 
     n.state_timer += dt;
 
-    if (n.state != AI_TRAVEL_LEG) { n.state = AI_TRAVEL_LEG; n.state_timer = 0.0f; }
-
-    f32 spd = (g.ai_speed_in_system > 0.0f) ? g.ai_speed_in_system : 50000.0f;
-
-    Vec2 leg = hierpos_diff(&m.leg_target, &sh->origin, BS_HIERPOS_CELL_SIZE);
-
-    steering::apply(sh, fl, steering::arrive(leg, spd, spd * 2.0f), spd, spd, p.turn_rate * 2.0f, dt);
-
-    m.pos = sh->origin;   // macro mirrors the live hull
-
-    if (vec2_length(leg) <= 1500.0f && !m.local_ready) m.local_ready = TRUE;
+    // Same locomotion as every other mission hull: jump ring out, free flight across the system,
+    // approach in. A warship is a freighter with guns as far as movement is concerned.
+    ai_fly_mission_leg(s, n, m, dt);
 
     return TRUE;
 
@@ -1291,9 +1804,11 @@ static void ai_ship_tick(game_state* s, NpcShip& n, i32 self, f32 dt) {
 
     if (n.archetype == ARCHETYPE_TRADER && ai_ambient_trader_tick(s, n, dt)) return;
 
-    // Mission-bound warships (Phase 4) fly their column's leg unless there is something to fight.
+    // Mission-bound combatants (Phase 4/5) fly their leg unless there is something to fight.
 
-    if (n.archetype == ARCHETYPE_WARSHIP && n.mission_id >= 0 && ai_mission_warship_tick(s, n, self, dt)) return;
+    if ((n.archetype == ARCHETYPE_WARSHIP || n.archetype == ARCHETYPE_PIRATE) &&
+
+        n.mission_id >= 0 && ai_mission_warship_tick(s, n, self, dt)) return;
 
 
 
@@ -1337,25 +1852,58 @@ static void ai_ship_tick(game_state* s, NpcShip& n, i32 self, f32 dt) {
 
     // ---- State transitions ----
 
+    // Phase 7: the whole FSM is live. EVADE (badly hurt agents break off), INVESTIGATE (chase the
+
+    // last known contact instead of forgetting instantly) and SCOUT shadowing are all reachable;
+
+    // before this only PATROL/PURSUE/ATTACK/RETURN ever ran.
+
     u8 st = n.state;
 
-    if (home_dist > p.leash_range) {
+    f32 hp_frac = (n.max_hp > 0.0f) ? (n.hp / n.max_hp) : 1.0f;
+
+    b8 shadower = (n.archetype == ARCHETYPE_SCOUT);   // observes, never opens fire (unarmed)
+
+    // A mission-bound hull is anchored to its MISSION, not to the point it materialised at. A
+    // column crossing a system is legitimately 100k+ units from that point, so the loiter leash
+    // would drag it backwards -- and because the leash is tested before everything else, it would
+    // refuse to fight at all (the ship yo-yos: retreat while a hostile is in range, resume the leg
+    // when it drops out, retreat again). Garrison and ambient agents keep their leash.
+    b8 leashed = (n.mission_id < 0) && (n.wing_leader < 0) && (home_dist > p.leash_range);
+
+    if (have_target) { n.last_contact = s->combat_entities[n.target_ce].position; n.contact_timer = AI_INVESTIGATE_HOLD; }
+
+    else if (n.contact_timer > 0.0f) n.contact_timer -= dt;
+
+    if (leashed) {
 
         st = AI_RETURN;                                  // leashed: break off and go home
+
+    } else if (have_target && hp_frac < p.flee_hp_frac && st != AI_EVADE) {
+
+        st = AI_EVADE;                                   // badly hurt: run, do not trade shots
 
     } else {
 
         switch (st) {
 
-            case AI_PATROL:  if (have_target && p.aggression >= 0.5f) st = AI_PURSUE; break;
+            case AI_PATROL:  if (have_target && (p.aggression >= 0.5f || shadower)) st = AI_PURSUE;
 
-            case AI_PURSUE:  if (!have_target) st = AI_PATROL;
+                             else if (n.contact_timer > 0.0f && p.aggression >= 0.5f) st = AI_INVESTIGATE; break;
+
+            case AI_INVESTIGATE: if (have_target) st = AI_PURSUE;
+
+                             else if (n.contact_timer <= 0.0f) st = AI_PATROL; break;
+
+            case AI_PURSUE:  if (!have_target) st = (n.contact_timer > 0.0f) ? AI_INVESTIGATE : AI_PATROL;
 
                              else if (tdist <= p.engage_range) st = AI_ATTACK; break;
 
-            case AI_ATTACK:  if (!have_target) st = AI_PATROL;
+            case AI_ATTACK:  if (!have_target) st = (n.contact_timer > 0.0f) ? AI_INVESTIGATE : AI_PATROL;
 
                              else if (tdist > p.engage_range * 1.2f) st = AI_PURSUE; break;
+
+            case AI_EVADE:   if (!have_target || tdist > p.sensor_range || hp_frac >= p.flee_hp_frac) st = AI_RETURN; break;
 
             case AI_RETURN:  if (home_dist <= p.patrol_radius) st = AI_PATROL; break;
 
@@ -1365,7 +1913,27 @@ static void ai_ship_tick(game_state* s, NpcShip& n, i32 self, f32 dt) {
 
     }
 
-    if (st != n.state) { n.state = st; n.state_timer = 0.0f; }
+    if (st != n.state) {
+
+        // Throttled engagement evidence: proves NPC-vs-NPC combat is actually starting (and who
+        // with) without spamming a line per frame per agent.
+        if (st == AI_ATTACK && have_target) {
+
+            static i32 s_engage_n = 0;
+
+            if ((++s_engage_n % 4) == 1)
+
+                BS_LOG_INFO("ShipAI combat: npc %d (archetype %u, faction %d) opens fire on faction %d at %.0f units (engagement #%d)",
+
+                            self, (u32)n.archetype, (i32)n.faction,
+
+                            (i32)s->combat_entities[n.target_ce].faction_id, tdist, s_engage_n);
+
+        }
+
+        n.state = st; n.state_timer = 0.0f;
+
+    }
 
 
 
@@ -1374,6 +1942,40 @@ static void ai_ship_tick(game_state* s, NpcShip& n, i32 self, f32 dt) {
     switch (n.state) {
 
         case AI_PATROL: {
+
+            // Phase 10: a wingman holds its slot on the leader instead of running its own loiter.
+            // Formation is a CRUISE behaviour only -- PURSUE/ATTACK/EVADE are separate states, so
+            // engaging automatically breaks the wing and disengaging reforms it.
+            if (n.wing_leader >= 0 && n.wing_leader < NPC_SHIP_MAX) {
+
+                const NpcShip& L = s->npc_ships[n.wing_leader];
+
+                if (L.active) {
+
+                    Vec2     off      = vec2_rotate(wing_slot_offset(n.wing_slot), L.ship.angle);
+
+                    HierPos2 slot_pos = hierpos_add_vec2(&L.ship.origin, off);
+
+                    Vec2     to_slot  = hierpos_diff(&slot_pos, &sh->origin, BS_HIERPOS_CELL_SIZE);
+
+                    // The leader may be flying a macro leg at ai_speed_in_system, far above a
+                    // combat profile's max_speed. Wingmen inherit enough speed/thrust headroom to
+                    // stay with it, otherwise the formation strings out and breaks on every transit.
+                    f32 lead_spd = vec2_length(L.flight.velocity);
+
+                    f32 wspd     = lead_spd * 1.35f + p.max_speed;
+
+                    f32 wacc     = (p.accel > 0.0f ? p.accel : 500.0f) * (1.0f + lead_spd / (p.max_speed > 1.0f ? p.max_speed : 1.0f));
+
+                    steering::apply(sh, fl, steering::arrive(to_slot, wspd, WING_SPACING * 1.5f),
+
+                                    wacc, wspd, p.turn_rate, dt);
+
+                    break;
+
+                }
+
+            }
 
             f32 orad  = (n.orbit_radius > 1.0f) ? n.orbit_radius : p.patrol_radius;
 
@@ -1411,7 +2013,30 @@ static void ai_ship_tick(game_state* s, NpcShip& n, i32 self, f32 dt) {
 
             if (tdist >= p.min_range && tdist <= p.engage_range && n.fire_cd <= 0.0f) {
 
-                f32 desired_angle = atan2f(-to_target.x, to_target.y);
+                Weapon* w = (n.archetype < ARCHETYPE_COUNT) ? g_npc_weapons[n.archetype] : nullptr;
+
+                // Lead the target. At these ranges a shell is in flight for SECONDS (47km at
+                // 12k u/s = 3.9s) while both hulls move at up to 820 u/s -- roughly 3200 units of
+                // drift, several ship-widths. Firing at where the target IS therefore misses every
+                // time. Solve the intercept iteratively; the shell inherits our velocity, so the
+                // lead is driven by the RELATIVE velocity.
+                f32 pspd = (w && w->projectile_speed() > 1.0f) ? w->projectile_speed() : 12000.0f;
+
+                Vec2 tvel = s->combat_entities[n.target_ce].velocity;
+
+                Vec2 rvel = vec2_sub(tvel, fl->velocity);
+
+                Vec2 aim  = to_target;
+
+                for (i32 it = 0; it < 2; ++it) {
+
+                    f32 tof = vec2_length(aim) / pspd;
+
+                    aim = vec2_add(to_target, vec2_scale(rvel, tof));
+
+                }
+
+                f32 desired_angle = atan2f(-aim.x, aim.y);
 
                 f32 ad = desired_angle - sh->angle;
 
@@ -1421,14 +2046,40 @@ static void ai_ship_tick(game_state* s, NpcShip& n, i32 self, f32 dt) {
 
                 if (fabsf(ad) < 0.30f) {
 
-                    Vec2 v = vec2_scale(to_target, 12000.0f / (tdist > 1.0f ? tdist : 1.0f));
+                    // Phase 7: fire through the real Weapon system so NPC shells carry registry
+                    // damage/speed/HP and interact with point-defense and flak like the player's.
+                    // The shared instance is rate-limited by this agent's own fire_cd, so its
+                    // internal cooldown is cleared first (update with a large dt).
+                    Weapon* w2 = w;
 
-                    s->projectiles.spawn(sh->origin, v, 8.0f, 4.0f,
+                    if (w2) {
 
-                                         bs_color{ 1.0f, 0.5f, 0.3f, 1.0f }, VESSEL_PIRATE, n.faction, 0.4f, 1.0f);
+                        w2->owner_faction    = VESSEL_PIRATE;
 
-                    n.fire_cd = p.fire_period;
+                        w2->owner_faction_id = n.faction;
 
+                        w2->update(1.0e6f);
+
+                        w2->fire(sh->origin, aim, fl->velocity, &s->projectiles);
+
+                        n.fire_cd = p.fire_period;
+
+                    } else if (archetype_weapon_id(n.archetype)) {
+
+                        // Archetype is meant to be armed but its registry weapon failed to load.
+                        f32 al = vec2_length(aim);
+
+                        Vec2 v = vec2_add(fl->velocity, vec2_scale(aim, pspd / (al > 1.0f ? al : 1.0f)));
+
+                        s->projectiles.spawn(sh->origin, v, 8.0f, 4.0f,
+
+                                             bs_color{ 1.0f, 0.5f, 0.3f, 1.0f }, VESSEL_PIRATE, n.faction, 0.4f, 1.0f);
+
+                        n.fire_cd = p.fire_period;
+
+                    }
+
+                    // Unarmed archetypes (scouts, traders, miners) hold station and observe.
                 }
 
             }
@@ -1440,6 +2091,32 @@ static void ai_ship_tick(game_state* s, NpcShip& n, i32 self, f32 dt) {
             f32 slow = (n.orbit_radius > 1.0f) ? n.orbit_radius : p.patrol_radius;
 
             steering::apply(sh, fl, steering::arrive(to_home, p.max_speed, slow),
+
+                            p.accel, p.max_speed, p.turn_rate, dt);
+
+        } break;
+
+        case AI_EVADE: {
+
+            // Run directly away from the threat at full burn, nose leading the escape vector.
+
+            Vec2 away = vec2_scale(to_target, -1.0f);
+
+            steering::apply(sh, fl, steering::seek(away, p.max_speed),
+
+                            p.accel, p.max_speed, p.turn_rate, dt);
+
+        } break;
+
+        case AI_INVESTIGATE: {
+
+            // Sweep toward the last known contact position; the transition table drops back to
+
+            // PATROL when the trail goes cold.
+
+            Vec2 to_contact = hierpos_diff(&n.last_contact, &sh->origin, BS_HIERPOS_CELL_SIZE);
+
+            steering::apply(sh, fl, steering::arrive(to_contact, p.patrol_speed, p.patrol_radius),
 
                             p.accel, p.max_speed, p.turn_rate, dt);
 
@@ -1540,7 +2217,6 @@ void ai_ships_register_combat(game_state* s) {
 
 
 void ai_ship_damage(game_state* s, i32 npc_index, f32 dmg, i16 attacker_faction) {
-
     if (!s || npc_index < 0 || npc_index >= NPC_SHIP_MAX) return;
 
     NpcShip& n = s->npc_ships[npc_index];
@@ -1549,9 +2225,43 @@ void ai_ship_damage(game_state* s, i32 npc_index, f32 dmg, i16 attacker_faction)
 
     n.hp -= dmg;
 
+    // Throttled hit evidence: distinguishes "ships are shooting and missing" from "ships are
+    // landing hits", which is the difference between a ballistics bug and a balance question.
+    if (n.hp > 0.0f && attacker_faction != n.faction) {
+
+        static i32 s_hit_n = 0;
+
+        if ((++s_hit_n % 8) == 1)
+
+            BS_LOG_INFO("ShipAI combat: npc %d (faction %d) HIT by faction %d for %.0f (hp %.0f/%.0f, hit #%d)",
+
+                        npc_index, (i32)n.faction, (i32)attacker_faction, dmg, n.hp, n.max_hp, s_hit_n);
+
+    }
+
     if (n.hp <= 0.0f) {
 
         n.active = FALSE;
+
+        // Phase 10: a dead leader does not strand its wing. Promote the first surviving wingman
+        // and re-slot the rest onto it, so the formation closes up instead of scattering.
+        {
+
+            i32 new_lead = -1;
+
+            for (i32 i = 0; i < NPC_SHIP_MAX; ++i) {
+
+                NpcShip& w = s->npc_ships[i];
+
+                if (!w.active || w.wing_leader != (i16)npc_index) continue;
+
+                if (new_lead < 0) { new_lead = i; w.wing_leader = -1; w.wing_slot = 0; }
+
+                else              { w.wing_leader = (i16)new_lead; w.wing_slot = 1; }
+
+            }
+
+        }
 
         BS_LOG_INFO("ShipAI combat: npc %d (archetype %u, faction %d) destroyed by faction %d",
                     npc_index, (u32)n.archetype, (i32)n.faction, (i32)attacker_faction);
@@ -1579,6 +2289,76 @@ void ai_ship_damage(game_state* s, i32 npc_index, f32 dmg, i16 attacker_faction)
         }
 
     }
+
+}
+
+
+
+// ---- DEBUG / test harness: force an NPC-vs-NPC engagement ----------------------------------
+
+// Raids only reach the player's system occasionally, which makes combat almost impossible to test
+
+// or observe on demand. This drops a hostile strike group right next to the player: warships of a
+
+// faction the local garrison is guaranteed to fight (a civ at war with the owner if one exists,
+
+// otherwise FACTION_PIRATE, which everyone engages). Spawned just outside weapons range so the
+
+// approach and the opening exchange are both visible.
+
+i32 ai_ships_debug_spawn_strike(game_state* s, i32 count) {
+
+    if (!s || count <= 0) return 0;
+
+    GalaxyState& g = s->galaxy;
+
+    HierPos2 flag = s->fleet_state.fleet.flagship().ship.origin;
+
+    i32 node  = galaxy_nearest_node(s, &flag);
+
+    i32 owner = (node >= 0) ? galaxy_history_owner_at_node(s, node) : -1;
+
+
+
+    // Pick an aggressor the local garrison will actually shoot at.
+
+    i16 aggressor = FACTION_PIRATE;
+
+    if (owner >= 0) {
+
+        for (i32 c = 0; c < g.civ_count; ++c) {
+
+            if (c == owner || g.civs[c].status != 0) continue;
+
+            if (galaxy_history_civ_at_war(s, owner, c)) { aggressor = (i16)c; break; }
+
+        }
+
+    }
+
+
+
+    u64 st = (u64)(s->elapsed_time * 1000.0f) ^ 0xA11CE5DEADBEEF01ull;
+
+    i32 spawned = 0;
+
+    for (i32 k = 0; k < count; ++k) {
+
+        f32 ang = rrange(st, 0.0f, 2.0f * BS_PI);
+
+        f32 rad = rrange(st, 20000.0f, 32000.0f);   // just outside engage range: watch them close
+
+        HierPos2 pos = hierpos_add_vec2(&flag, vec2_rotate(Vec2{ rad, 0.0f }, ang));
+
+        if (spawn_npc(s, aggressor, pos, node, ARCHETYPE_WARSHIP, st + (u64)(k + 1)) >= 0) ++spawned;
+
+    }
+
+    BS_LOG_INFO("ShipAI TEST: spawned %d hostile warship(s) of faction %d at node %d (local owner %d) -- expect engagement",
+
+                spawned, (i32)aggressor, node, owner);
+
+    return spawned;
 
 }
 

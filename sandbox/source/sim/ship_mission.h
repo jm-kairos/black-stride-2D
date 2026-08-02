@@ -31,6 +31,11 @@ void ship_missions_seed(game_state* s);
 // history tick. No-op when paused (sim_dt_hours <= 0).
 void ship_missions_update(game_state* s, f32 sim_dt_hours);
 
+// Phase 6/7: how dangerous a node currently reads (raider sorties + successful ambushes, decayed
+// each economy settlement). 0 = quiet. Read by trade routing and by the live AI, which posts
+// interceptors where a civ's lanes are actually bleeding.
+f32 ship_mission_node_risk(const game_state* s, i32 node);
+
 // World position of a mission right now: the relevant station anchor during dock/cooldown stages,
 // else the continuously-integrated ShipMission::pos. Pure read; used by rendering and (later)
 // live-agent materialisation.

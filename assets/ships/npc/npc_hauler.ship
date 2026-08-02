@@ -1,0 +1,16 @@
+# Black Stride ship definition (.ship format).
+# Civilian bulk hull: contract traders and belt miners. Broad and slow-looking -- the
+# freighter silhouette that makes an unescorted convoy read as a target.
+
+name "Ostrel-class Bulk Hauler"
+faction 0
+world_scale 0.28
+size 2336 4832
+
+layer sprite assets/textures/ship.png 0 0 1 0 0
+
+# Box collider (ship-local space)
+collider -1168 -2416
+collider  1168 -2416
+collider  1168  2416
+collider -1168  2416

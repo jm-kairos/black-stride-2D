@@ -70,9 +70,244 @@ static const f32 TRADE_DWELL_HOURS = 18.0f;
 
 static const f32 STATION_CONTRACT_COOLDOWN = 60.0f;
 
-// Phase 5: contracts worth at least this much (both legs) buy a warship escort.
+// Phase 5: contracts worth at least this much (both legs) buy a warship escort. Set high enough
+// that an escort marks genuinely valuable cargo -- at a low threshold nearly every contract bought
+// one and piracy could never land a blow.
 
-static const f32 ESCORT_REWARD_MIN = 1500.0f;
+static const f32 ESCORT_REWARD_MIN = 4000.0f;
+
+// How much an escort cuts a raider's interception odds. Not zero: escorts deter, they do not grant
+// immunity, so a determined sortie can still fight past one.
+
+static const f32 ESCORT_ODDS_MUL = 0.30f;
+
+
+
+// ---- Phase 6: the economic loop (trade -> wealth -> power -> fleets) -----------------------
+
+// Deliveries credit the receiving node's owner. Every ECONOMY_TICK_HOURS each civ settles that
+
+// income: part becomes `power` drift, part is earmarked as a military budget that PAYS for the
+
+// Phase 4/5 missions and rebuilds hulls lost to raiders. Strangle a civ's lanes and its power,
+
+// its fleet count and its ability to replace losses all fall together.
+
+static const f32 ECONOMY_TICK_HOURS     = 24.0f;
+
+static const f32 CIV_TAX_PER_NODE       = 1.5f;      // baseline territory income per settlement
+
+static const f32 CIV_POWER_PER_CREDIT   = 5.0e-5f;   // prosperity -> logistic power drift
+
+static const f32 CIV_POWER_GAIN_MAX     = 0.35f;     // clamp per settlement (no runaway growth)
+
+static const f32 CIV_MIL_BUDGET_SHARE   = 0.45f;     // fraction of income earmarked for the fleet
+
+static const f32 CIV_MIL_BUDGET_MAX     = 30000.0f;  // war chests do not grow without bound
+
+static const f32 CIV_HULL_COST          = 1600.0f;   // credits to lay down one replacement hull
+
+static const i16 CIV_HULL_POOL_MAX      = 12;        // ready hulls a civ can keep on the slip
+
+static const f32 SHIPYARD_WAIT_HOURS    = 48.0f;     // recheck interval while the slips are empty
+
+
+
+// Military missions are no longer free: each launch is paid for out of the civ's war chest.
+
+static const f32 MISSION_COST_REINFORCE = 2200.0f;
+
+static const f32 MISSION_COST_PATROL    = 900.0f;
+
+static const f32 MISSION_COST_RAID      = 3000.0f;
+
+
+
+// ...and a standing fleet costs wages every settlement. Upkeep is what makes wealth and fleet
+
+// size an equilibrium rather than a ratchet: cut a civ's trade and it must stand ships down.
+
+static const f32 MISSION_UPKEEP_PATROL    = 420.0f;
+
+static const f32 MISSION_UPKEEP_REINFORCE = 520.0f;
+
+static const f32 MISSION_UPKEEP_RAID      = 640.0f;
+
+
+
+// Route risk: raider activity marks a node; the mark decays every economy tick. Traders route
+
+// around marked nodes, which is what makes a sustained pirate campaign read as a blockade.
+
+static const f32 NODE_RISK_SORTIE       = 0.40f;     // raiders launched a sortie at this hub
+
+static const f32 NODE_RISK_AMBUSH       = 1.00f;     // a convoy was actually taken here
+
+static const f32 NODE_RISK_DECAY        = 0.82f;     // per economy tick
+
+static const f32 NODE_RISK_MIN          = 0.02f;     // below this an entry is released
+
+static const f32 TRADE_RISK_WEIGHT      = 1.60f;     // how hard risk divides a destination's score
+
+static const f32 TRADE_WAR_PENALTY      = 0.08f;     // score multiplier for a destination at war with us
+
+
+
+// ---- Node risk table ----------------------------------------------------------------------
+
+// Bounded and self-evicting: only nodes that have actually seen raiders occupy a slot.
+
+static void node_risk_add(GalaxyState& g, i32 node, f32 amount) {
+
+    if (node < 0 || amount <= 0.0f) return;
+
+    NodeRisk* free_slot = nullptr;
+
+    NodeRisk* weakest   = nullptr;
+
+    for (i32 i = 0; i < NODE_RISK_MAX; ++i) {
+
+        NodeRisk& r = g.node_risks[i];
+
+        if (r.node == node) { r.risk += amount; return; }
+
+        if (r.node < 0) { if (!free_slot) free_slot = &r; continue; }
+
+        if (!weakest || r.risk < weakest->risk) weakest = &r;
+
+    }
+
+    NodeRisk* slot = free_slot ? free_slot : weakest;
+
+    if (!slot) return;
+
+    // Evicting the weakest entry is only fair if the newcomer is at least as dangerous.
+
+    if (!free_slot && slot->risk > amount) return;
+
+    slot->node = node;
+
+    slot->risk = amount;
+
+}
+
+
+
+static f32 node_risk_get(const GalaxyState& g, i32 node) {
+
+    if (node < 0) return 0.0f;
+
+    for (i32 i = 0; i < NODE_RISK_MAX; ++i)
+
+        if (g.node_risks[i].node == node) return g.node_risks[i].risk;
+
+    return 0.0f;
+
+}
+
+
+
+// Public accessor: the live AI reads lane danger to decide where to post interceptors (Phase 7).
+
+f32 ship_mission_node_risk(const game_state* s, i32 node) {
+
+    return node_risk_get(s->galaxy, node);
+
+}
+
+
+
+// Credit a delivery to the civ that owns the receiving node. Unowned space banks nothing:
+
+// nobody taxes a frontier depot.
+
+static void civ_trade_income(game_state* s, i32 node, f32 credits) {
+
+    GalaxyState& g = s->galaxy;
+
+    if (node < 0 || node >= g.node_count || !g.node_owner || credits <= 0.0f) return;
+
+    i16 owner = g.node_owner[node];
+
+    if (owner < 0 || owner >= g.civ_count) return;
+
+    if (g.civs[owner].status != 0) return;
+
+    g.civs[owner].treasury += credits;
+
+}
+
+
+
+// Try to pay for a military mission out of the civ's war chest. FALSE = the civ cannot afford it
+
+// this cycle, so the order is simply not given (poverty visibly thins a fleet).
+
+static b8 civ_afford(Civilization& civ, f32 cost) {
+
+    if (civ.mil_budget < cost) return FALSE;
+
+    civ.mil_budget -= cost;
+
+    return TRUE;
+
+}
+
+
+
+// Draw a replacement hull for a contract whose ship was destroyed. Contracts with no living owner
+
+// are not gated (nobody's shipyard is on the hook for them).
+
+static b8 civ_take_hull(GalaxyState& g, i16 owner) {
+
+    if (owner < 0 || owner >= g.civ_count) return TRUE;
+
+    Civilization& civ = g.civs[owner];
+
+    if (civ.status != 0) return TRUE;
+
+    if (civ.hull_pool <= 0) return FALSE;
+
+    --civ.hull_pool;
+
+    return TRUE;
+
+}
+
+
+
+// Put an unused hull back on the slips (the contract could not be re-issued after all).
+
+static void civ_return_hull(GalaxyState& g, i16 owner) {
+
+    if (owner < 0 || owner >= g.civ_count) return;
+
+    if (g.civs[owner].hull_pool < CIV_HULL_POOL_MAX) ++g.civs[owner].hull_pool;
+
+}
+
+
+
+// Wealth buys fleet. A civ's simultaneous mission allowance scales with the war chest it can
+
+// sustain, so a prosperous power runs several circuits at once while a raided one can barely keep
+
+// one hull on station. Without this the budget has nowhere to go: income piles up against the cap
+
+// and prosperity stops meaning anything.
+
+static i32 civ_fleet_cap(const Civilization& civ, i32 base, i32 extra_max, f32 credits_per_extra) {
+
+    i32 extra = (credits_per_extra > 0.0f) ? (i32)(civ.mil_budget / credits_per_extra) : 0;
+
+    if (extra < 0)         extra = 0;
+
+    if (extra > extra_max) extra = extra_max;
+
+    return base + extra;
+
+}
 
 
 
@@ -426,11 +661,24 @@ static i32 trade_pick_market(game_state* s, ShipMission& m, i32 home) {
         score *= tier_w;
 
         MarketGood cm[GOOD_COUNT];
+
         station_market_get(s, station_id_make(cand, 0), cm);
+
         score *= cm[m.cargo_good].price / origin_price;
 
+        // Phase 6: shippers price in danger. A hub raiders keep hitting is avoided, and a market
+        // belonging to a civ we are at war with is all but closed to us -- which is how blockades
+        // and wartime scarcity emerge without anyone scripting them.
+        f32 cand_risk = node_risk_get(g, cand);
+        score /= (1.0f + cand_risk * TRADE_RISK_WEIGHT);
+        if (m.owner >= 0 && cand_owner >= 0 && cand_owner != m.owner &&
+            galaxy_history_civ_at_war(s, (i32)m.owner, (i32)cand_owner))
+            score *= TRADE_WAR_PENALTY;
+
         BS_LOG_INFO("Market pick: home=N%d cand=N%d tier=%d hops=%d price_ratio=%.2f score=%.1f",
+
                     home, cand, (i32)(tier_w == TRADE_TIER0_WEIGHT ? 0 : tier_w == TRADE_TIER1_WEIGHT ? 1 : tier_w == TRADE_TIER2_WEIGHT ? 2 : 3),
+
                     hops, cm[m.cargo_good].price / origin_price, score);
 
         if (score > best_score) { best_score = score; best = cand; best_hops = hops; }
@@ -451,8 +699,16 @@ static i32 trade_pick_market(game_state* s, ShipMission& m, i32 home) {
         score *= tier_w;
 
         MarketGood cm[GOOD_COUNT];
+
         station_market_get(s, station_id_make(cand, 0), cm);
+
         score *= cm[m.cargo_good].price / origin_price;
+
+        // Same risk / wartime discount as the near pool (see above).
+        score /= (1.0f + node_risk_get(g, cand) * TRADE_RISK_WEIGHT);
+        if (m.owner >= 0 && cand_owner >= 0 && cand_owner != m.owner &&
+            galaxy_history_civ_at_war(s, (i32)m.owner, (i32)cand_owner))
+            score *= TRADE_WAR_PENALTY;
 
         BS_LOG_INFO("Market pick: home=N%d cand=N%d tier=%d hops=%d price_ratio=%.2f score=%.1f (far)",
                     home, cand, (i32)(tier_w == TRADE_TIER0_WEIGHT ? 0 : tier_w == TRADE_TIER1_WEIGHT ? 1 : tier_w == TRADE_TIER2_WEIGHT ? 2 : 3),
@@ -826,17 +1082,66 @@ static const i32 MIL_PATROL_HOPS       = 6;      // circuit length before a patr
 
 static const i32 MIL_RAID_PER_CIV  = 1;      // max simultaneous war raids per civ
 
-static const i32 PIRATE_RAIDS_MAX  = 6;      // galaxy-wide cap on active pirate sorties
+static const i32 PIRATE_RAIDS_MAX  = 24;     // galaxy-wide cap on active pirate sorties
+
+static const i32 PIRATE_SORTIES_PER_TICK = 3; // new sorties launched per military survey
+
+static const i32 PIRATE_PREY_HOPS  = 3;      // how far raiders will range from their den
 
 static const f32 RAID_INTERCEPT_BASE      = 0.65f;  // ambush odds vs a convoy at the target node
 
 static const f32 RAID_INTERCEPT_PATROLLED = 0.20f;  // ...when a patrol circuit holds that node
+
+// How long (game hours) a raid stays on station fighting when the player is in-system. 1 real
+// second == 1 game hour at 1x, so this is a battle you can actually watch (and join) rather than
+// a sub-second blink. It ends early if the raiders are destroyed.
+static const f32 RAID_BATTLE_HOURS        = 36.0f;
 
 
 
 // A free mission slot for a military order: prefer retired military slots (station_id < 0, never
 
 // re-issued by a station), else extend the high-water mark. -1 when the pool is exhausted.
+
+// Where a military mission actually ARRIVES in its destination system. Never the star: aiming at
+// galaxy_center flew raiders and columns straight into the middle of the star, where they sat and
+// then blinked out as the mission resolved. Prefer a station hub -- the same anchors traders dock
+// at, so every hull shares one movement philosophy -- and fall back to a standoff point on the
+// innermost orbit ring for systems with no stations.
+static void military_arrival_anchor(game_state* s, i32 node, u64& rng,
+                                    HierPos2* out_pos, f32* out_radius) {
+
+    const GalaxyState& g = s->galaxy;
+
+    StationLayoutEntry layout[SYSTEM_STATION_MAX];
+
+    i32 count = galaxy_node_station_layout(s, node, layout, SYSTEM_STATION_MAX);
+
+    if (count > 0) {
+
+        i32 di = (i32)(sm64(rng) % (u64)count);
+
+        *out_pos    = layout[di].pos;
+
+        *out_radius = layout[di].radius;
+
+        return;
+
+    }
+
+    const GalaxyNode& dn = g.nodes[node];
+
+    f32 ring = (dn.orbit_count > 0) ? dn.orbit_radii[0] : 60000.0f;
+
+    f32 ang  = (f32)(sm64(rng) % 6283ull) * 0.001f;
+
+    *out_pos    = hierpos_add_vec2(&dn.galaxy_center, Vec2{ cosf(ang) * ring, sinf(ang) * ring });
+
+    *out_radius = 0.0f;
+
+}
+
+
 
 static i32 mission_alloc_military(GalaxyState& g) {
 
@@ -855,7 +1160,6 @@ static i32 mission_alloc_military(GalaxyState& g) {
 // Common military mission body: route src -> dst and depart from src's jump circle.
 
 static b8 mission_issue_military(game_state* s, i32 mi, i16 civ, u8 objective, i32 src, i32 dst, f32 strength, u64& rng) {
-
     GalaxyState& g = s->galaxy;
 
     ShipMission& m = g.missions[mi];
@@ -894,9 +1198,12 @@ static b8 mission_issue_military(game_state* s, i32 mi, i16 civ, u8 objective, i
 
     m.leg_target        = node_jump_point(g, src, next);
 
-    m.dest_station_pos  = g.nodes[dst].galaxy_center;   // final approach flies to the star
-
-    m.dest_station_radius = 0.0f;
+    // Military arrivals must fly to something REAL, not to the star. The original cut aimed at
+    // g.nodes[dst].galaxy_center, so raiders and columns flew into the middle of the star and
+    // vanished at its centre when the mission resolved. Prefer a station hub -- the same anchors
+    // traders dock at, keeping one movement philosophy for every hull -- and fall back to a
+    // standoff point out on the innermost orbit ring for systems with no stations.
+    military_arrival_anchor(s, dst, rng, &m.dest_station_pos, &m.dest_station_radius);
 
     m.stage  = MISSION_STAGE_TO_JUMP;
 
@@ -1038,7 +1345,19 @@ static void ship_missions_military_tick(game_state* s) {
 
         if (g.civs[c].status != 0) continue;
 
-        if (src[c] >= 0 && rein_n[c] < MIL_REINFORCE_PER_CIV && dst[c] >= 0 && dst[c] != src[c]) {
+        // Phase 6: how many simultaneous orders this civ can sustain is a function of its wealth.
+
+        i32 rein_cap = civ_fleet_cap(g.civs[c], MIL_REINFORCE_PER_CIV, 3, 6000.0f);
+
+        i32 pat_cap  = civ_fleet_cap(g.civs[c], MIL_PATROL_PER_CIV,    4, 4000.0f);
+
+        i32 raid_cap = civ_fleet_cap(g.civs[c], MIL_RAID_PER_CIV,      2, 9000.0f);
+
+        // Phase 6: columns are paid for out of the war chest. A civ whose trade has been strangled
+        // simply cannot field one this cycle (civ_afford debits only when it succeeds).
+        if (src[c] >= 0 && rein_n[c] < rein_cap && dst[c] >= 0 && dst[c] != src[c]
+
+            && civ_afford(g.civs[c], MISSION_COST_REINFORCE)) {
 
             i32 strength = src_gar[c] / 3;
 
@@ -1052,15 +1371,23 @@ static void ship_missions_military_tick(game_state* s) {
 
                 galaxy_history_garrison_add(s, src[c], -strength);
 
-                BS_LOG_INFO("ShipAI military: civ %d launches reinforcement column N%d -> N%d (strength %d)",
+                BS_LOG_INFO("ShipAI military: civ %d launches reinforcement column N%d -> N%d (strength %d, war chest %.0f cr)",
 
-                            c, src[c], dst[c], strength);
+                            c, src[c], dst[c], strength, g.civs[c].mil_budget);
 
-            } else if (mi >= 0) g.missions[mi].active = FALSE;
+            } else {
+
+                if (mi >= 0) g.missions[mi].active = FALSE;
+
+                g.civs[c].mil_budget += MISSION_COST_REINFORCE;   // order never sailed: refund
+
+            }
 
         }
 
-        if (src[c] >= 0 && pat_n[c] < MIL_PATROL_PER_CIV && lg.adj_start && lg.adj_neighbor) {
+        if (src[c] >= 0 && pat_n[c] < pat_cap && lg.adj_start && lg.adj_neighbor
+
+            && civ_afford(g.civs[c], MISSION_COST_PATROL)) {
 
             // Patrol: wander to a random owned neighbour of the strong node.
 
@@ -1080,25 +1407,31 @@ static void ship_missions_military_tick(game_state* s) {
 
             }
 
+            b8 sailed = FALSE;
+
             if (pick >= 0) {
 
                 i32 mi = mission_alloc_military(g);
 
                 if (mi >= 0 && mission_issue_military(s, mi, (i16)c, OBJ_PATROL, src[c], pick, 2.0f, mil_rng)) {
 
-                    BS_LOG_INFO("ShipAI military: civ %d fields a patrol circuit from N%d (%d hops)",
+                    sailed = TRUE;
 
-                                c, src[c], MIL_PATROL_HOPS);
+                    BS_LOG_INFO("ShipAI military: civ %d fields a patrol circuit from N%d (%d hops, war chest %.0f cr)",
+
+                                c, src[c], MIL_PATROL_HOPS, g.civs[c].mil_budget);
 
                 } else if (mi >= 0) g.missions[mi].active = FALSE;
 
             }
 
+            if (!sailed) g.civs[c].mil_budget += MISSION_COST_PATROL;   // no circuit sailed: refund
+
         }
 
         // Phase 5: war raid -- strike an enemy border node; troops committed are debited at launch.
 
-        if (raid_n[c] < MIL_RAID_PER_CIV && raid_src[c] >= 0) {
+        if (raid_n[c] < raid_cap && raid_src[c] >= 0) {
 
             i32 sgar = galaxy_history_garrison_at(s, raid_src[c]);
 
@@ -1108,7 +1441,7 @@ static void ship_missions_military_tick(game_state* s) {
 
             if (strength > 6) strength = 6;
 
-            if (sgar > strength) {                    // never strip the staging node bare
+            if (sgar > strength && civ_afford(g.civs[c], MISSION_COST_RAID)) {
 
                 i32 mi = mission_alloc_military(g);
 
@@ -1116,11 +1449,17 @@ static void ship_missions_military_tick(game_state* s) {
 
                     galaxy_history_garrison_add(s, raid_src[c], -strength);
 
-                    BS_LOG_INFO("ShipAI raid: civ %d launches raid N%d -> enemy N%d (strength %d)",
+                    BS_LOG_INFO("ShipAI raid: civ %d launches raid N%d -> enemy N%d (strength %d, war chest %.0f cr)",
 
-                                c, raid_src[c], raid_dst[c], strength);
+                                c, raid_src[c], raid_dst[c], strength, g.civs[c].mil_budget);
 
-                } else if (mi >= 0) g.missions[mi].active = FALSE;
+                } else {
+
+                    if (mi >= 0) g.missions[mi].active = FALSE;
+
+                    g.civs[c].mil_budget += MISSION_COST_RAID;   // raid never launched: refund
+
+                }
 
             }
 
@@ -1130,11 +1469,16 @@ static void ship_missions_military_tick(game_state* s) {
 
 
 
-    // ---- Phase 5: pirate sorties -- wild nodes with pirate presence strike busy trade hubs. ----
+    // ---- Phase 5: pirate sorties -- wild nodes with pirate presence strike nearby trade hubs. ----
 
-    if (pirate_raids < PIRATE_RAIDS_MAX) {
+    // Raiders hit what is within reach of their den. Picking prey galaxy-wide (the original cut)
+    // produced sorties dozens of jumps long that effectively never arrived, so the cap filled with
+    // permanently in-flight missions and piracy stalled. Prey is now chosen by a bounded BFS out to
+    // PIRATE_PREY_HOPS, so sorties land, resolve, free their slot, and the cycle repeats.
 
-        // Reservoir-pick a pirate-infested wild node (same deterministic seed as materialize_wild_system).
+    for (i32 sortie = 0; sortie < PIRATE_SORTIES_PER_TICK && pirate_raids < PIRATE_RAIDS_MAX; ++sortie) {
+
+        // Reservoir-pick a pirate-infested wild node (every wild system carries a crew).
 
         i32 wild = -1, wseen = 0;
 
@@ -1142,47 +1486,273 @@ static void ship_missions_military_tick(game_state* s) {
 
             if (g.node_owner[node] >= 0) continue;
 
-            u64 st = (u64)(node + 1) * 0x9E3779B97F4A7C15ull ^ 0xBADC0FFEEull;
-
-            if ((sm64(st) % 6ull) == 0) continue;    // this wild node spawns no pirates
-
             ++wseen;
 
             if ((sm64(mil_rng) % (u64)wseen) == 0) wild = node;
 
         }
 
-        // Reservoir-pick a busy trade destination: the delivery node of a random live contract.
+        if (wild < 0) break;
+
+        // Bounded BFS from the den: collect owned market nodes within PIRATE_PREY_HOPS and
+        // reservoir-pick one. Risky hubs are weighted up -- raiders return to a bleeding lane.
 
         i32 target = -1, tseen = 0;
 
-        for (i32 i = 0; i < g.mission_count; ++i) {
+        {
 
-            const ShipMission& t = g.missions[i];
+            const GalaxyLaneGraph& lg = g.lanes;
 
-            if (!t.active || t.objective != OBJ_TRADE || t.dest_station_id < 0) continue;
+            const i32 BFS_MAX = 96;
 
-            ++tseen;
+            i32 queue[BFS_MAX], hops[BFS_MAX];
 
-            if ((sm64(mil_rng) % (u64)tseen) == 0) target = station_id_node(t.dest_station_id);
+            i32 head = 0, tail = 0;
+
+            queue[tail] = wild; hops[tail] = 0; ++tail;
+
+            while (head < tail && lg.adj_start && lg.adj_neighbor) {
+
+                i32 node = queue[head]; i32 h = hops[head]; ++head;
+
+                if (node != wild && g.node_owner[node] >= 0 && node_is_market(s, node)) {
+
+                    i32 weight = 1 + (i32)(node_risk_get(g, node) * 2.0f);   // bleeding lanes attract raiders
+
+                    for (i32 w = 0; w < weight; ++w) {
+
+                        ++tseen;
+
+                        if ((sm64(mil_rng) % (u64)tseen) == 0) target = node;
+
+                    }
+
+                }
+
+                if (h >= PIRATE_PREY_HOPS) continue;
+
+                for (i32 a = lg.adj_start[node]; a < lg.adj_start[node + 1] && tail < BFS_MAX; ++a) {
+
+                    i32 nb = lg.adj_neighbor[a];
+
+                    if (nb < 0 || nb >= g.node_count) continue;
+
+                    b8 seen_already = FALSE;
+
+                    for (i32 q = 0; q < tail; ++q) if (queue[q] == nb) { seen_already = TRUE; break; }
+
+                    if (seen_already) continue;
+
+                    queue[tail] = nb; hops[tail] = h + 1; ++tail;
+
+                }
+
+            }
 
         }
 
-        if (wild >= 0 && target >= 0 && wild != target) {
+        if (target < 0 || target == wild) continue;
 
-            i32 strength = 2 + (i32)(sm64(mil_rng) % 3ull);
+        i32 strength = 2 + (i32)(sm64(mil_rng) % 3ull);
 
-            i32 mi = mission_alloc_military(g);
+        i32 mi = mission_alloc_military(g);
 
-            if (mi >= 0 && mission_issue_military(s, mi, FACTION_PIRATE, OBJ_RAID, wild, target, (f32)strength, mil_rng)) {
+        if (mi >= 0 && mission_issue_military(s, mi, FACTION_PIRATE, OBJ_RAID, wild, target, (f32)strength, mil_rng)) {
 
-                BS_LOG_INFO("ShipAI piracy: raiders sortie from wild N%d toward trade hub N%d (strength %d)",
+            // Pirate sorties fly as raiders, not as civ line warships: raider hull, pirate profile.
+            g.missions[mi].archetype = ARCHETYPE_PIRATE;
 
-                            wild, target, strength);
+            ++pirate_raids;
 
-            } else if (mi >= 0) g.missions[mi].active = FALSE;
+            // Word gets out. Shippers start pricing this hub as dangerous even before the raiders
+            // arrive, so a hunted corridor sheds traffic (see trade_pick_market).
+            node_risk_add(g, target, NODE_RISK_SORTIE);
+
+            BS_LOG_INFO("ShipAI piracy: raiders sortie from wild N%d toward trade hub N%d (strength %d, hub risk %.2f, %d/%d active)",
+
+                        wild, target, strength, node_risk_get(g, target), pirate_raids, PIRATE_RAIDS_MAX);
+
+        } else if (mi >= 0) g.missions[mi].active = FALSE;
+
+    }
+
+}
+
+
+
+// ---- Phase 6: civ economy settlement --------------------------------------------------------
+
+// Runs every ECONOMY_TICK_HOURS. Converts the trade income banked by civ_trade_income (plus a
+
+// baseline territorial tax) into logistic power drift and a military war chest, lays down
+
+// replacement hulls for contracts lost to raiders, and lets raider heat on trade nodes decay.
+
+// This is the loop that makes commerce, prosperity and fleet strength one system instead of three.
+
+static void ship_missions_economy_tick(game_state* s) {
+
+    GalaxyState& g = s->galaxy;
+
+    if (g.civ_count <= 0) return;
+
+    i32 civs = (g.civ_count < GALAXY_CIV_MAX) ? g.civ_count : GALAXY_CIV_MAX;
+
+    f32 total_income = 0.0f, total_budget = 0.0f;
+
+    i32 funded_civs = 0;
+
+    for (i32 c = 0; c < civs; ++c) {
+
+        Civilization& civ = g.civs[c];
+
+        if (civ.status != 0) continue;
+
+        f32 tax    = (f32)civ.territory_count * CIV_TAX_PER_NODE;
+
+        f32 income = civ.treasury + tax;
+
+        civ.treasury = 0.0f;
+
+        if (income <= 0.0f) continue;
+
+        ++funded_civs;
+
+        total_income += income;
+
+        // Prosperity grows the polity, bounded so one fat quarter cannot run away with the galaxy.
+
+        f32 gain = income * CIV_POWER_PER_CREDIT;
+
+        if (gain > CIV_POWER_GAIN_MAX) gain = CIV_POWER_GAIN_MAX;
+
+        civ.power += gain;
+
+        civ.mil_budget += income * CIV_MIL_BUDGET_SHARE;
+
+        if (civ.mil_budget > CIV_MIL_BUDGET_MAX) civ.mil_budget = CIV_MIL_BUDGET_MAX;
+
+    }
+
+    // ---- Fleet upkeep: a standing fleet costs money every settlement ------------------------
+
+    // This is what turns wealth and fleet size into an equilibrium instead of a ratchet. A civ
+
+    // whose trade has been cut cannot pay its patrols and must stand them down -- which in turn
+
+    // makes its lanes easier to raid. Columns and raid parties recalled this way return their
+
+    // troops to the node they set out from.
+
+    i32 stood_down = 0;
+
+    for (i32 i = 0; i < g.mission_count; ++i) {
+
+        ShipMission& m = g.missions[i];
+
+        if (!m.active || m.owner < 0 || m.owner >= g.civ_count) continue;   // pirates pay no wages
+
+        f32 upkeep = (m.objective == OBJ_PATROL)    ? MISSION_UPKEEP_PATROL
+
+                   : (m.objective == OBJ_REINFORCE) ? MISSION_UPKEEP_REINFORCE
+
+                   : (m.objective == OBJ_RAID)      ? MISSION_UPKEEP_RAID : 0.0f;
+
+        if (upkeep <= 0.0f) continue;
+
+        Civilization& civ = g.civs[m.owner];
+
+        if (civ.mil_budget >= upkeep) { civ.mil_budget -= upkeep; continue; }
+
+        if (m.objective != OBJ_PATROL)
+
+            galaxy_history_garrison_add(s, m.home_node, (i32)m.cargo_units);   // troops march home
+
+        BS_LOG_INFO("ShipAI economy: civ %d cannot pay for its %s -- stood down at N%d (war chest %.0f cr)",
+
+                    (i32)m.owner,
+
+                    (m.objective == OBJ_PATROL) ? "patrol circuit"
+
+                      : (m.objective == OBJ_REINFORCE) ? "reinforcement column" : "raid party",
+
+                    m.at_node, civ.mil_budget);
+
+        m.active = FALSE; m.stage = MISSION_STAGE_COOLDOWN;
+
+        m.ship_slot = -1; m.local_ready = FALSE;
+
+        ++stood_down;
+
+    }
+
+    // ---- Shipyards: whatever survives upkeep can lay down replacement hulls -----------------
+
+    i32 hulls_built = 0;
+
+    for (i32 c = 0; c < civs; ++c) {
+
+        Civilization& civ = g.civs[c];
+
+        if (civ.status != 0) continue;
+
+        total_budget += civ.mil_budget;
+
+        // At most one hull per settlement, paid out of the same war chest that funds missions:
+
+        // a civ under sustained raiding cannot both patrol and replace its losses.
+
+        if (civ.hull_pool < CIV_HULL_POOL_MAX && civ.mil_budget >= CIV_HULL_COST) {
+
+            civ.mil_budget -= CIV_HULL_COST;
+
+            ++civ.hull_pool;
+
+            ++hulls_built;
 
         }
+
+    }
+
+    // Raider heat fades wherever the raiders have moved on.
+
+    i32 risky = 0;
+
+    for (i32 i = 0; i < NODE_RISK_MAX; ++i) {
+
+        NodeRisk& r = g.node_risks[i];
+
+        if (r.node < 0) continue;
+
+        r.risk *= NODE_RISK_DECAY;
+
+        if (r.risk < NODE_RISK_MIN) { r.node = -1; r.risk = 0.0f; }
+
+        else ++risky;
+
+    }
+
+    static i32 econ_ticks = 0;
+
+    if ((++econ_ticks % 8) == 1) {
+
+        i32 top = -1;
+
+        for (i32 c = 0; c < civs; ++c) {
+
+            if (g.civs[c].status != 0) continue;
+
+            if (top < 0 || g.civs[c].mil_budget > g.civs[top].mil_budget) top = c;
+
+        }
+
+        if (top >= 0)
+
+            BS_LOG_INFO("ShipAI economy: tick %d -- %d civs earned %.0f cr, war chests %.0f cr, %d hull(s) laid down, %d ship(s) stood down, %d risky node(s); richest %s (power %.1f, budget %.0f, hulls %d)",
+
+                        econ_ticks, funded_civs, total_income, total_budget, hulls_built, stood_down, risky,
+
+                        g.civs[top].name, g.civs[top].power, g.civs[top].mil_budget, (i32)g.civs[top].hull_pool);
 
     }
 
@@ -1256,6 +1826,9 @@ static void mission_travel_step(game_state* s, ShipMission& m, f32 hours, i32 no
                     station_market_get(s, m.station_id, om);
                     f32 rev = m.cargo_units * om[m.cargo_good].price;
                     station_revenue_add(s, m.station_id, rev);
+                    // Phase 6: the exporting civ banks the sale -- this is the income that later
+                    // becomes power drift, military budget and replacement hulls.
+                    civ_trade_income(s, station_id_node(m.station_id), rev);
                     BS_LOG_INFO("Station revenue: N%d/%d +%+.0f cr (export %s %.0f units @ %.1f) -> total %.0f",
                                 station_id_node(m.station_id), station_id_index(m.station_id),
                                 rev, TRADE_GOOD_NAMES[m.cargo_good], m.cargo_units, om[m.cargo_good].price,
@@ -1369,6 +1942,7 @@ static void mission_travel_step(game_state* s, ShipMission& m, f32 hours, i32 no
                     station_market_get(s, dsid, dm);
                     f32 rev = m.return_cargo_units * dm[m.return_cargo_good].price;
                     station_revenue_add(s, dsid, rev);
+                    civ_trade_income(s, station_id_node(dsid), rev);
                     BS_LOG_INFO("Station revenue: N%d/%d +%+.0f cr (return %s %.0f units @ %.1f) -> total %.0f",
                                 station_id_node(dsid), station_id_index(dsid),
                                 rev, TRADE_GOOD_NAMES[m.return_cargo_good], m.return_cargo_units, dm[m.return_cargo_good].price,
@@ -1501,7 +2075,39 @@ static void mission_travel_step(game_state* s, ShipMission& m, f32 hours, i32 no
 
         case MISSION_STAGE_FINAL_APPROACH: {
 
-            if (!mission_leg_complete(m, spd_sys, hours)) return;
+            // A raid that arrived while the player is in the target system is NOT settled on paper:
+            // the raiders and the defending garrison are both live hulls on screen, so the fight
+            // decides it. Hold the mission here while the battle rages; if the raid party is
+            // destroyed, notify_destroyed retires it and no garrison damage is ever applied.
+            if (m.raid_engaged) {
+
+                m.dwell_hours -= hours;
+
+                hours = 0.0f;
+
+                if (m.dwell_hours > 0.0f && m.at_node == node_here) return;   // still shooting
+
+                m.raid_engaged = FALSE;   // battle timed out (or the player left): settle the rest
+
+            } else {
+
+                if (!mission_leg_complete(m, spd_sys, hours)) return;
+
+                if (m.objective == OBJ_RAID && m.at_node == node_here && m.ship_slot >= 0) {
+
+                    m.raid_engaged = TRUE;
+
+                    m.dwell_hours  = RAID_BATTLE_HOURS;
+
+                    BS_LOG_INFO("ShipAI raid: raiders reached N%d with the player present -- live battle (owner %d, strength %.0f)",
+
+                                m.at_node, (i32)m.owner, m.cargo_units);
+
+                    return;
+
+                }
+
+            }
 
             // ---- Phase 4: military arrivals resolve here (no dock stages) --------------
 
@@ -1529,17 +2135,30 @@ static void mission_travel_step(game_state* s, ShipMission& m, f32 hours, i32 no
 
                 i32 pick = -1, seen = 0;
 
+                // Never immediately double back on the node we just came from: a two-node ping-pong
+                // reads as a broken ship rather than a patrol circuit. The previous hop is only
+                // reconsidered when it is the sole owned neighbour (a dead-end picket).
+                i32 came_from = m.home_node;
+
                 if (m.dwell_hours > 0.0f && lg.adj_start && lg.adj_neighbor && g.node_owner) {
 
-                    for (i32 a = lg.adj_start[m.at_node]; a < lg.adj_start[m.at_node + 1]; ++a) {
+                    for (i32 pass = 0; pass < 2 && pick < 0; ++pass) {
 
-                        i32 nb = lg.adj_neighbor[a];
+                        seen = 0;
 
-                        if (g.node_owner[nb] != m.owner) continue;
+                        for (i32 a = lg.adj_start[m.at_node]; a < lg.adj_start[m.at_node + 1]; ++a) {
 
-                        ++seen;
+                            i32 nb = lg.adj_neighbor[a];
 
-                        if ((sm64(m.seed) % (u64)seen) == 0) pick = nb;
+                            if (g.node_owner[nb] != m.owner) continue;
+
+                            if (pass == 0 && nb == came_from) continue;   // first pass: keep moving on
+
+                            ++seen;
+
+                            if ((sm64(m.seed) % (u64)seen) == 0) pick = nb;
+
+                        }
 
                     }
 
@@ -1561,9 +2180,11 @@ static void mission_travel_step(game_state* s, ShipMission& m, f32 hours, i32 no
 
                 if (next < 0) return;
 
+                m.home_node        = m.at_node;               // remember this hop as "came from"
+
                 m.leg_target       = node_jump_point(g, m.at_node, next);
 
-                m.dest_station_pos = g.nodes[pick].galaxy_center;
+                { f32 unused_r; military_arrival_anchor(s, pick, m.seed, &m.dest_station_pos, &unused_r); }
 
                 m.stage            = MISSION_STAGE_TO_JUMP;   // any bound live agent just keeps flying
 
@@ -1609,7 +2230,15 @@ static void mission_travel_step(game_state* s, ShipMission& m, f32 hours, i32 no
 
                     }
 
-                    // Reservoir-pick an abstract (non-materialized) trade contract at this node.
+                    // Reservoir-pick an abstract (non-materialized) trade contract this raid can
+
+                    // actually catch: one sitting at the hub, or one INBOUND to it. A blockade
+
+                    // catches the traffic bound for the hub, not only whatever happens to be
+
+                    // parked there the instant the raiders arrive -- matching only the latter left
+
+                    // raiders reporting "no prey" almost every sortie.
 
                     i32 victim = -1, seen = 0;
 
@@ -1617,41 +2246,66 @@ static void mission_travel_step(game_state* s, ShipMission& m, f32 hours, i32 no
 
                         const ShipMission& t = g.missions[i];
 
-                        if (!t.active || t.objective != OBJ_TRADE || t.at_node != m.at_node || t.ship_slot >= 0) continue;
+                        if (!t.active || t.objective != OBJ_TRADE || t.ship_slot >= 0) continue;
 
-                        ++seen;
+                        b8 here    = (t.at_node   == m.at_node);
 
-                        if ((sm64(m.seed) % (u64)seen) == 0) victim = i;
+                        b8 inbound = (t.dest_node == m.at_node);
+
+                        if (!here && !inbound) continue;
+
+                        i32 weight = here ? 3 : 1;      // a hull already at the hub is the easier mark
+
+                        for (i32 w = 0; w < weight; ++w) {
+
+                            ++seen;
+
+                            if ((sm64(m.seed) % (u64)seen) == 0) victim = i;
+
+                        }
 
                     }
 
+                    // Escorts deter raiders, they do not make a convoy invincible: a strong sortie
+                    // can still fight past one. Folding the escort into the odds (rather than
+                    // treating it as an automatic save) is what keeps piracy a real threat to
+                    // high-value trade instead of theatre.
                     f32 odds = patrolled ? RAID_INTERCEPT_PATROLLED : RAID_INTERCEPT_BASE;
+
+                    b8  escorted = (victim >= 0) && g.missions[victim].escorted;
+
+                    if (escorted) odds *= ESCORT_ODDS_MUL;
 
                     if (victim >= 0 && (f32)(sm64(m.seed) % 1000ull) < odds * 1000.0f) {
 
                         ShipMission& t = g.missions[victim];
 
-                        if (t.escorted) {
+                        t.active = FALSE; t.stage = MISSION_STAGE_COOLDOWN;
 
-                            BS_LOG_INFO("ShipAI piracy: convoy escort drove off raiders at N%d (contract %d protected)",
+                        t.respawn_hours = STATION_CONTRACT_COOLDOWN;
 
-                                        m.at_node, victim);
+                        t.ship_slot = -1; t.local_ready = FALSE;
 
-                        } else {
+                        // Phase 6: the hull and crew are gone. The station cannot simply re-issue
+                        // -- its civ must lay down a replacement first -- and the corridor is now
+                        // marked dangerous for every other shipper.
+                        t.awaiting_hull = TRUE;
 
-                            t.active = FALSE; t.stage = MISSION_STAGE_COOLDOWN;
+                        node_risk_add(g, m.at_node, NODE_RISK_AMBUSH);
 
-                            t.respawn_hours = STATION_CONTRACT_COOLDOWN;
+                        BS_LOG_INFO("ShipAI piracy: raiders ambushed contract %d at N%d (%.0f units of %s lost)%s%s -- node risk %.2f",
 
-                            t.ship_slot = -1; t.local_ready = FALSE;
+                                    victim, m.at_node, t.cargo_units, TRADE_GOOD_NAMES[t.cargo_good],
 
-                            BS_LOG_INFO("ShipAI piracy: raiders ambushed contract %d at N%d (%.0f units of %s lost)%s",
+                                    escorted ? " -- fought past its escort" : "",
 
-                                        victim, m.at_node, t.cargo_units, TRADE_GOOD_NAMES[t.cargo_good],
+                                    patrolled ? " despite patrol presence" : "", node_risk_get(g, m.at_node));
 
-                                        patrolled ? " despite patrol presence" : "");
+                    } else if (victim >= 0 && escorted) {
 
-                        }
+                        BS_LOG_INFO("ShipAI piracy: convoy escort drove off raiders at N%d (contract %d protected)",
+
+                                    m.at_node, victim);
 
                     } else {
 
@@ -1792,6 +2446,18 @@ void ship_missions_update(game_state* s, f32 sim_dt_hours) {
 
     }
 
+    // Phase 6: throttled economic settlement (trade income -> power, war chests, hulls, risk decay).
+
+    g.economy_tick_hours += sim_dt_hours;
+
+    if (g.economy_tick_hours >= ECONOMY_TICK_HOURS) {
+
+        g.economy_tick_hours = 0.0f;
+
+        ship_missions_economy_tick(s);
+
+    }
+
     // The galaxy node the player currently occupies (current_system is a cache SLOT, not a node).
 
     i32 node_here = (g.current_system >= 0 && g.current_system < g.system_count)
@@ -1810,9 +2476,39 @@ void ship_missions_update(game_state* s, f32 sim_dt_hours) {
 
                 m.respawn_hours -= sim_dt_hours;
 
-                if (m.respawn_hours <= 0.0f && !mission_issue_contract(s, m))
+                if (m.respawn_hours <= 0.0f) {
 
-                    m.respawn_hours = STATION_CONTRACT_COOLDOWN;   // no routable market: retry later
+                    // Phase 6: a contract whose ship was destroyed cannot sail again on paper alone
+                    // -- the owning civ's shipyard has to hand over a replacement hull first. While
+                    // the slips are empty the route simply goes unserved, so sustained raiding
+                    // measurably thins a civ's active fleet.
+                    b8 hull_ok = !m.awaiting_hull || civ_take_hull(g, m.owner);
+
+                    if (!hull_ok) {
+
+                        m.respawn_hours = SHIPYARD_WAIT_HOURS;
+
+                    } else if (!mission_issue_contract(s, m)) {
+
+                        if (m.awaiting_hull) civ_return_hull(g, m.owner);   // no route: keep the hull
+
+                        m.respawn_hours = STATION_CONTRACT_COOLDOWN;        // retry later
+
+                    } else {
+
+                        if (m.awaiting_hull)
+
+                            BS_LOG_INFO("ShipAI shipyard: civ %d commissioned a replacement hull for N%d/%d (%d left on the slips)",
+
+                                        (i32)m.owner, station_id_node(m.station_id), station_id_index(m.station_id),
+
+                                        (m.owner >= 0 && m.owner < g.civ_count) ? (i32)g.civs[m.owner].hull_pool : 0);
+
+                        m.awaiting_hull = FALSE;
+
+                    }
+
+                }
 
             }
 
@@ -1880,7 +2576,9 @@ void ship_mission_notify_destroyed(game_state* s, i32 mission_id) {
 
     }
 
-    // Contract failed: the origin station re-issues after the standard cooldown.
+    // Contract failed: the origin station re-issues after the standard cooldown -- but only once
+
+    // its civ's shipyard has replaced the lost hull (Phase 6).
 
     m.active        = FALSE;
 
@@ -1892,7 +2590,9 @@ void ship_mission_notify_destroyed(game_state* s, i32 mission_id) {
 
     m.local_ready   = FALSE;
 
-    BS_LOG_INFO("ShipAI trade: mission %d destroyed in-system (contract failed; station will re-issue)", mission_id);
+    m.awaiting_hull = TRUE;
+
+    BS_LOG_INFO("ShipAI trade: mission %d destroyed in-system (contract failed; awaiting a replacement hull)", mission_id);
 
 }
 
