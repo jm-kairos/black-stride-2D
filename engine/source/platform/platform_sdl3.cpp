@@ -227,18 +227,34 @@ VOID_PTR platform_set_memory(VOID_PTR dest, i32 value, u64 size)
     return memset(dest, value, size);
 }
 
+#if BS_PLATFORM_WINDOWS
+// WriteConsoleA only works on a real console handle: it fails silently when stdout/stderr is a
+// file or pipe (`sandbox.exe > log.txt`), which makes log scraping impossible. Detect a console
+// with GetConsoleMode and fall back to WriteFile so redirected output is captured too.
+static void win_console_write(HANDLE handle, const char* message, u8 colour)
+{
+    if (handle == NULL || handle == INVALID_HANDLE_VALUE) return;
+
+    OutputDebugStringA(message);
+    DWORD length  = (DWORD)strlen(message);
+    DWORD written = 0;
+    DWORD mode    = 0;
+    if (GetConsoleMode(handle, &mode))
+    {
+        // FATAL, ERROR, WARN, INFO, DEBUG, TRACE
+        static const u8 levels[6] = {64, 4, 6, 2, 1, 8};
+        SetConsoleTextAttribute(handle, levels[colour < 6 ? colour : 5]);
+        WriteConsoleA(handle, message, length, &written, 0);
+        return;
+    }
+    WriteFile(handle, message, length, &written, NULL);
+}
+#endif
+
 void platform_console_write(const char* message, u8 colour)
 {
 #if BS_PLATFORM_WINDOWS
-    HANDLE console_handle = GetStdHandle(STD_OUTPUT_HANDLE);
-    // FATAL, ERROR, WARN, INFO, DEBUG, TRACE
-    static u8 levels[6] = {64, 4, 6, 2, 1, 8};
-    SetConsoleTextAttribute(console_handle, levels[colour]);
-
-    OutputDebugStringA(message);
-    u64 length = strlen(message);
-    LPDWORD number_written = 0;
-    WriteConsoleA(console_handle, message, (DWORD)length, number_written, 0);
+    win_console_write(GetStdHandle(STD_OUTPUT_HANDLE), message, colour);
 #else
     (void)colour;
     fputs(message, stdout);
@@ -248,14 +264,7 @@ void platform_console_write(const char* message, u8 colour)
 void platform_console_write_error(const char* message, u8 colour)
 {
 #if BS_PLATFORM_WINDOWS
-    HANDLE console_handle = GetStdHandle(STD_ERROR_HANDLE);
-    static u8 levels[6] = {64, 4, 6, 2, 1, 8};
-    SetConsoleTextAttribute(console_handle, levels[colour]);
-
-    OutputDebugStringA(message);
-    u64 length = strlen(message);
-    LPDWORD number_written = 0;
-    WriteConsoleA(console_handle, message, (DWORD)length, number_written, 0);
+    win_console_write(GetStdHandle(STD_ERROR_HANDLE), message, colour);
 #else
     (void)colour;
     fputs(message, stderr);
