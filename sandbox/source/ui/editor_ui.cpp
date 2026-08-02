@@ -435,6 +435,8 @@ void build_editor_panel(game_state* s) {
         bs_ui_slider_float("AI in-system speed (u/s)", &s->galaxy.ai_speed_in_system, 1000.0f, 1000000.0f);
         bs_ui_slider_float("AI jump speed (u/s)",      &s->galaxy.ai_speed_jump,      10000.0f, 100000000.0f);
         bs_ui_checkbox("Draw system lanes", &s->galaxy.map_draw_lanes);
+        // War room (G): objective-coded mission glyphs, red war-frontier lanes, garrison/risk labels.
+        bs_ui_checkbox("War room overlay [G]", &s->galaxy.map_war_room);
         // Progressive zoom-out speed: higher = each wheel notch covers more zoom the further out you are.
         bs_ui_slider_float("Zoom-out speed gain", &g_zoom_out_speed_gain, 0.0f, 5.0f);
         bool show_mb = (bool)s->show_metaball_ui;
@@ -494,6 +496,90 @@ void build_editor_panel(game_state* s) {
                 }
             }
         }
+        // ---- SHIP AI TELEMETRY (Phase 7) -----------------------------------------------------
+        // Read-only counters for the autonomous universe: NPC pool pressure, what the live agents
+        // are actually doing, the macro mission mix per objective, and the civ economy that funds
+        // it. This is the pass that tells you at a glance whether the sim is healthy or starving.
+        {
+            bs_ui_separator();
+            bs_ui_text_colored(0.62f, 0.82f, 1.0f, 1.0f, "SHIP AI TELEMETRY");
+
+            static const char* ARCH_NAME[7]  = { "patrol", "warship", "intercept", "trader", "scout", "pirate", "miner" };
+            static const char* STATE_NAME[10] = { "patrol", "investig", "pursue", "attack", "evade",
+                                                  "return", "dock", "docked", "leg", "deliver" };
+            i32 arch_n[7]  = { 0, 0, 0, 0, 0, 0, 0 };
+            i32 state_n[10] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+            i32 live = 0, undiscovered = 0;
+            for (i32 i = 0; i < NPC_SHIP_MAX; ++i) {
+                const NpcShip& n = s->npc_ships[i];
+                if (!n.active) continue;
+                ++live;
+                if (!n.discovered) ++undiscovered;
+                if (n.archetype < 7) ++arch_n[n.archetype];
+                if (n.state < 10)    ++state_n[n.state];
+            }
+            char buf[256];
+            snprintf(buf, sizeof(buf), "NPC pool: %d / %d live (%d unidentified)", live, (i32)NPC_SHIP_MAX, undiscovered);
+            bs_ui_text(buf);
+            snprintf(buf, sizeof(buf), "hulls  %s %d  %s %d  %s %d  %s %d",
+                     ARCH_NAME[0], arch_n[0], ARCH_NAME[1], arch_n[1], ARCH_NAME[2], arch_n[2], ARCH_NAME[4], arch_n[4]);
+            bs_ui_text(buf);
+            snprintf(buf, sizeof(buf), "       %s %d  %s %d  %s %d",
+                     ARCH_NAME[3], arch_n[3], ARCH_NAME[6], arch_n[6], ARCH_NAME[5], arch_n[5]);
+            bs_ui_text(buf);
+            snprintf(buf, sizeof(buf), "states %s %d  %s %d  %s %d  %s %d  %s %d",
+                     STATE_NAME[0], state_n[0], STATE_NAME[1], state_n[1], STATE_NAME[2], state_n[2],
+                     STATE_NAME[3], state_n[3], STATE_NAME[4], state_n[4]);
+            bs_ui_text(buf);
+            snprintf(buf, sizeof(buf), "       %s %d  %s %d  %s %d  %s %d",
+                     STATE_NAME[6], state_n[6], STATE_NAME[7], state_n[7], STATE_NAME[8], state_n[8],
+                     STATE_NAME[9], state_n[9]);
+            bs_ui_text(buf);
+
+            // ---- Macro tier: mission mix + the Phase 6 economy that pays for it ----
+            const auto& g = s->galaxy;
+            i32 m_trade = 0, m_rein = 0, m_pat = 0, m_raid = 0, m_pirate = 0;
+            i32 m_hull_wait = 0, m_escort = 0, m_bound = 0;
+            for (i32 i = 0; i < g.mission_count; ++i) {
+                const ShipMission& m = g.missions[i];
+                if (!m.active) { if (m.awaiting_hull) ++m_hull_wait; continue; }
+                if (m.ship_slot >= 0) ++m_bound;
+                if (m.owner < 0) { ++m_pirate; continue; }
+                switch (m.objective) {
+                    case OBJ_TRADE:     ++m_trade; if (m.escorted) ++m_escort; break;
+                    case OBJ_REINFORCE: ++m_rein;  break;
+                    case OBJ_PATROL:    ++m_pat;   break;
+                    case OBJ_RAID:      ++m_raid;  break;
+                    default: break;
+                }
+            }
+            snprintf(buf, sizeof(buf), "missions %d/%d  trade %d (esc %d)  reinf %d  patrol %d  raid %d  pirate %d",
+                     g.mission_count, g.mission_capacity, m_trade, m_escort, m_rein, m_pat, m_raid, m_pirate);
+            bs_ui_text(buf);
+            snprintf(buf, sizeof(buf), "materialised %d   awaiting a replacement hull %d", m_bound, m_hull_wait);
+            bs_ui_text(buf);
+
+            f32 budget_total = 0.0f; i32 hulls_total = 0, alive_civs = 0;
+            for (i32 c = 0; c < g.civ_count && c < GALAXY_CIV_MAX; ++c) {
+                if (g.civs[c].status != 0) continue;
+                ++alive_civs;
+                budget_total += g.civs[c].mil_budget;
+                hulls_total  += (i32)g.civs[c].hull_pool;
+            }
+            i32 risky = 0; f32 worst = 0.0f; i32 worst_node = -1;
+            for (i32 i = 0; i < NODE_RISK_MAX; ++i) {
+                if (g.node_risks[i].node < 0) continue;
+                ++risky;
+                if (g.node_risks[i].risk > worst) { worst = g.node_risks[i].risk; worst_node = g.node_risks[i].node; }
+            }
+            snprintf(buf, sizeof(buf), "economy  %d civs  war chests %.0f cr  hulls on the slips %d",
+                     alive_civs, budget_total, hulls_total);
+            bs_ui_text(buf);
+            if (worst_node >= 0) snprintf(buf, sizeof(buf), "lane risk  %d node(s) marked, worst N%d (%.2f)", risky, worst_node, worst);
+            else                 snprintf(buf, sizeof(buf), "lane risk  no nodes currently marked");
+            bs_ui_text(buf);
+        }
+
         // ---- HARDPOINT EDITOR (live .ship authoring gizmo) -----------------------------------
         // Edits the FLAGSHIP's hardpoint skeleton in place: nudge a slot's position/facing/arc
         // with sliders (or drop it under the cursor), watch the overlay update live, then dump

@@ -2407,6 +2407,34 @@ b8 game_update(Game* game_inst, f32 dt) {
 
     }
 
+    // DEBUG (K): drop a hostile strike group next to the fleet to force an NPC-vs-NPC engagement
+    // on demand -- raids only reach the player's system occasionally, which makes combat nearly
+    // impossible to observe or test by waiting.
+    if (input_is_key_down(KEY_K) && !input_was_key_down(KEY_K)) {
+
+        i32 n = ai_ships_debug_spawn_strike(s, 3);
+
+        char msg[96];
+
+        snprintf(msg, sizeof(msg), "[K] Spawned %d hostile warship(s) -- expect combat", n);
+
+        action_log_push(s, msg);
+
+    }
+
+    // DEBUG (G): war room overlay -- mission glyphs by objective (red chevron = raid, green arrow =
+    // reinforcement column, blue ring = patrol, orange chevron = pirate sortie), red pulsing lanes
+    // across borders at war, and garrison / lane-risk readouts at contested nodes. Pair with F3
+    // (jump to a war frontier, forcing the war if needed) to watch a war unfold in real time.
+    if (input_is_key_down(KEY_G) && !input_was_key_down(KEY_G)) {
+
+        s->galaxy.map_war_room = !s->galaxy.map_war_room;
+
+        action_log_push(s, s->galaxy.map_war_room ? "[G] War room ON (F3 jumps to a war frontier)"
+                                                  : "[G] War room OFF");
+
+    }
+
     // Feature B: the F3 debug faction-pin has been retired. Real jump-travel now resolves the
     // current system's owner from the flagship's nearest node, so the patrol reflects the true
     // faction wherever you fly. Test transitive stance by aiding a civ (F5) then entering an enemy's

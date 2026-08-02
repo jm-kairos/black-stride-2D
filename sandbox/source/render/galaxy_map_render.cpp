@@ -680,6 +680,10 @@ static void draw_galaxy_overview(game_state* s) {
 
         bs_color lane_col = bs_color{ 0.25f, 0.40f, 0.55f, 0.35f };
 
+        // War room: a lane whose two ends are held by civs at war IS the front line. Pulse it red
+        // so the shape of the war is legible on the map at a glance.
+        f32 war_pulse = 0.65f + 0.35f * sinf(s->elapsed_time * 3.0f);
+
         for (i32 l = 0; l < g.lanes.lane_count && budget > 0; ++l) {
 
             Vec2 ra = hierpos_diff(&g.nodes[g.lanes.lane_a[l]].galaxy_center, &s->camera_state.camera_hierpos, BS_HIERPOS_CELL_SIZE);
@@ -698,7 +702,25 @@ static void draw_galaxy_overview(game_state* s) {
 
                 (sa.y < -32.0f && sb.y < -32.0f) || (sa.y > cull_y && sb.y > cull_y)) continue;
 
-            renderer_draw_line(pa, pb, 1.0f, lane_col, LAYER_CELESTIAL);
+            bs_color col = lane_col;
+
+            f32      th  = 1.0f;
+
+            if (g.map_war_room && g.node_owner) {
+
+                i16 oa = g.node_owner[g.lanes.lane_a[l]], ob = g.node_owner[g.lanes.lane_b[l]];
+
+                if (oa >= 0 && ob >= 0 && oa != ob && galaxy_history_civ_at_war(s, (i32)oa, (i32)ob)) {
+
+                    col = bs_color{ 1.0f, 0.22f, 0.18f, 0.85f * war_pulse };
+
+                    th  = 2.5f;
+
+                }
+
+            }
+
+            renderer_draw_line(pa, pb, th, col, LAYER_CELESTIAL);
 
             --budget;
 
@@ -740,6 +762,23 @@ static void draw_galaxy_overview(game_state* s) {
 
         col.a = 1.0f;
 
+        // War room: recolour by what the mission actually IS, so a raid party bearing down on a
+        // border node no longer looks like a grain freighter. Military orders also draw larger.
+        f32 war_scale = 1.0f;
+
+        if (g.map_war_room) {
+
+            if (m.owner < 0) { col = bs_color{ 1.00f, 0.55f, 0.10f, 1.0f }; war_scale = 1.5f; }        // pirate sortie
+            else switch (m.objective) {
+
+                case OBJ_RAID:      col = bs_color{ 1.00f, 0.20f, 0.16f, 1.0f }; war_scale = 1.7f; break;  // strike
+                case OBJ_REINFORCE: col = bs_color{ 0.35f, 1.00f, 0.45f, 1.0f }; war_scale = 1.5f; break;  // column
+                case OBJ_PATROL:    col = bs_color{ 0.40f, 0.75f, 1.00f, 1.0f }; war_scale = 1.3f; break;  // circuit
+                default: break;                                                                            // trade
+            }
+
+        }
+
         // Swell the marker while docked at a station so trade stops read as brief pulses.
 
         b8 docked = (m.stage == MISSION_STAGE_ORIGIN_DOCK || m.stage == MISSION_STAGE_MARKET_DOCK);
@@ -764,7 +803,7 @@ static void draw_galaxy_overview(game_state* s) {
 
         if (dlen > 1e-3f) dir = vec2_scale(dir, 1.0f / dlen); else dir = Vec2{ 0.0f, 1.0f };
 
-        f32 marker_px = NODE_DOT_PX * (docked ? 2.8f : 1.8f);
+        f32 marker_px = NODE_DOT_PX * (docked ? 2.8f : 1.8f) * war_scale;
 
 
 
@@ -774,7 +813,7 @@ static void draw_galaxy_overview(game_state* s) {
 
         // Missions bound to a live in-system trader skip entirely -- the NpcShip renders itself.
 
-        if (s->npc_template_ready) {
+        if (s->npc_template_ready && (!g.map_war_room || (m.owner >= 0 && m.objective == OBJ_TRADE))) {
 
             const ShipVisual& tv = s->npc_template.visual;
 
@@ -830,19 +869,160 @@ static void draw_galaxy_overview(game_state* s) {
 
         Vec2 perp{ -dir.y, dir.x };
 
-        Vec2 nose { rel.x + dir.x * px,                          rel.y + dir.y * px };
+        // War room: shape carries the objective too, so the map reads without a colour key --
+        // chevron = a strike inbound (raid / pirate sortie), ring = a patrol circuit holding a
+        // node, arrow = a reinforcement column, triangle = ordinary commerce.
+        u8 glyph = 0;   // 0 = triangle, 1 = chevron, 2 = ring, 3 = arrow
 
-        Vec2 left { rel.x - dir.x * px * 0.7f + perp.x * px * 0.6f, rel.y - dir.y * px * 0.7f + perp.y * px * 0.6f };
+        if (g.map_war_room) {
 
-        Vec2 right{ rel.x - dir.x * px * 0.7f - perp.x * px * 0.6f, rel.y - dir.y * px * 0.7f - perp.y * px * 0.6f };
+            if (m.owner < 0)                        glyph = 1;
 
-        renderer_draw_line(nose, left,  1.5f, col, LAYER_UI);
+            else if (m.objective == OBJ_RAID)       glyph = 1;
 
-        renderer_draw_line(left, right, 1.5f, col, LAYER_UI);
+            else if (m.objective == OBJ_PATROL)     glyph = 2;
 
-        renderer_draw_line(right, nose, 1.5f, col, LAYER_UI);
+            else if (m.objective == OBJ_REINFORCE)  glyph = 3;
+
+        }
+
+        if (glyph == 2) {
+
+            renderer_draw_circle(rel, px, 12, 1.5f, col, LAYER_UI);
+
+        } else if (glyph == 1) {
+
+            // Double chevron pointing along the travel direction.
+            Vec2 tipa { rel.x + dir.x * px,          rel.y + dir.y * px };
+
+            Vec2 tipb { rel.x + dir.x * px * 0.2f,   rel.y + dir.y * px * 0.2f };
+
+            for (i32 c = 0; c < 2; ++c) {
+
+                Vec2 tip  = (c == 0) ? tipa : tipb;
+
+                Vec2 back { tip.x - dir.x * px * 0.8f, tip.y - dir.y * px * 0.8f };
+
+                renderer_draw_line(tip, Vec2{ back.x + perp.x * px * 0.7f, back.y + perp.y * px * 0.7f }, 2.0f, col, LAYER_UI);
+
+                renderer_draw_line(tip, Vec2{ back.x - perp.x * px * 0.7f, back.y - perp.y * px * 0.7f }, 2.0f, col, LAYER_UI);
+
+            }
+
+        } else if (glyph == 3) {
+
+            // Arrow: shaft along the heading with a barbed head.
+            Vec2 tip  { rel.x + dir.x * px,        rel.y + dir.y * px };
+
+            Vec2 tail { rel.x - dir.x * px,        rel.y - dir.y * px };
+
+            renderer_draw_line(tail, tip, 2.0f, col, LAYER_UI);
+
+            Vec2 barb { tip.x - dir.x * px * 0.7f, tip.y - dir.y * px * 0.7f };
+
+            renderer_draw_line(tip, Vec2{ barb.x + perp.x * px * 0.5f, barb.y + perp.y * px * 0.5f }, 2.0f, col, LAYER_UI);
+
+            renderer_draw_line(tip, Vec2{ barb.x - perp.x * px * 0.5f, barb.y - perp.y * px * 0.5f }, 2.0f, col, LAYER_UI);
+
+        } else {
+
+            Vec2 nose { rel.x + dir.x * px,                          rel.y + dir.y * px };
+
+            Vec2 left { rel.x - dir.x * px * 0.7f + perp.x * px * 0.6f, rel.y - dir.y * px * 0.7f + perp.y * px * 0.6f };
+
+            Vec2 right{ rel.x - dir.x * px * 0.7f - perp.x * px * 0.6f, rel.y - dir.y * px * 0.7f - perp.y * px * 0.6f };
+
+            renderer_draw_line(nose, left,  1.5f, col, LAYER_UI);
+
+            renderer_draw_line(left, right, 1.5f, col, LAYER_UI);
+
+            renderer_draw_line(right, nose, 1.5f, col, LAYER_UI);
+
+        }
 
         --budget;
+
+    }
+
+
+
+    // ---- War room: garrison strength + lane risk at the nodes that matter --------------------
+
+    // Only frontier nodes (a neighbour held by someone this owner is at war with) and nodes the
+
+    // raiders have actually marked get a readout, so the map never drowns in 10k labels. Watching
+
+    // a garrison number fall as a red chevron lands on it is the whole point of this overlay.
+
+    if (g.map_war_room && g.node_owner && g.lanes.adj_start && g.lanes.adj_neighbor) {
+
+        i32 labels = 0;
+
+        const i32 WAR_LABEL_MAX = 48;
+
+        for (i32 n = 0; n < g.node_count && labels < WAR_LABEL_MAX; ++n) {
+
+            i16 ow = g.node_owner[n];
+
+            f32 risk = ship_mission_node_risk(s, n);
+
+            b8  frontier = FALSE;
+
+            if (ow >= 0) {
+
+                i32 a0 = g.lanes.adj_start[n], a1 = g.lanes.adj_start[n + 1];
+
+                for (i32 k = a0; k < a1 && !frontier; ++k) {
+
+                    i16 od = g.node_owner[g.lanes.adj_neighbor[k]];
+
+                    if (od >= 0 && od != ow && galaxy_history_civ_at_war(s, (i32)ow, (i32)od)) frontier = TRUE;
+
+                }
+
+            }
+
+            if (!frontier && risk <= 0.05f) continue;
+
+            Vec2 rel = hierpos_diff(&g.nodes[n].galaxy_center, &s->camera_state.camera_hierpos, BS_HIERPOS_CELL_SIZE);
+
+            Vec2 sc  = camera2d_world_to_screen(&s->camera_state.camera, s->fb_width, s->fb_height, rel);
+
+            if (sc.x < 0.0f || sc.x > cull_x || sc.y < 0.0f || sc.y > cull_y) continue;
+
+            // Raider heat reads as an orange ring whose size tracks how bad the corridor has got.
+
+            if (risk > 0.05f) {
+
+                f32 rr = (2.5f + risk * 2.0f) * NODE_DOT_PX * inv_zoom;
+
+                renderer_draw_circle(rel, rr, 16, 1.5f,
+
+                                     bs_color{ 1.0f, 0.55f, 0.10f, 0.75f }, LAYER_UI);
+
+            }
+
+            char txt[64]; char id[32];
+
+            i32 gar = galaxy_history_garrison_at(s, n);
+
+            if (frontier && risk > 0.05f)      snprintf(txt, sizeof(txt), "G%d  risk %.1f", gar, risk);
+
+            else if (frontier)                 snprintf(txt, sizeof(txt), "G%d", gar);
+
+            else                               snprintf(txt, sizeof(txt), "risk %.1f", risk);
+
+            snprintf(id, sizeof(id), "warroom%d", n);
+
+            bs_color tc = frontier ? bs_color{ 1.0f, 0.45f, 0.40f, 0.95f }
+
+                                   : bs_color{ 1.0f, 0.70f, 0.30f, 0.95f };
+
+            bs_ui_label_at(id, sc.x + 8.0f, sc.y - 10.0f, 1.0f, tc, txt);
+
+            ++labels;
+
+        }
 
     }
 
