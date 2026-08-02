@@ -90,7 +90,7 @@ bs__api__ void bs_rml_debugger_toggle(void);
 
 #define BS_RML_LOG_MAX     12   // most recent action-log lines carried in a snapshot
 #define BS_RML_DISC_MAX    64   // most recent discovery lines carried in a snapshot
-#define BS_RML_WEAPON_MAX  4    // flagship-inspector Arsenal inventory rows per section
+#define BS_RML_BAY_MAX     12   // flagship-inspector Modules bay tiles (6 x 2 grid, socket-padded)
 #define BS_RML_GROUP_MAX   5    // fleet-ship HUD fire-group rows (SHIP_WEAPON_GROUPS game-side)
 #define BS_RML_GM_COLS     8    // fire-group matrix: max weapon columns (mounted weapons)
 #define BS_RML_ACTION_CAP  32   // max bytes (incl. NUL) for a polled action string
@@ -108,20 +108,36 @@ typedef struct bs_rml_disc_line
     char color[10];
 } bs_rml_disc_line;
 
-// A generic HUD list row, used by the fleet panel's fire-group rows ("K - weapon, ..." text,
-// action "group:N" on click) and by the flagship-inspector Arsenal queues, where the SAME
-// struct backs a draggable weapon symbol: `icon` names a ui-icons emblem sprite shown in the
-// box (falls back to the `glyph` text when empty) and `text` is the hover-tooltip (weapon name).
+// A fleet-panel fire-group row: `text` = "K - weapon, weapon, ...", `action` = "group:N"
+// enqueued on click, `selected` = the active fire group, `empty` = no member weapons.
 typedef struct bs_rml_weapon_line
 {
     char text[64];
-    char glyph[8];   // arsenal only: fallback text symbol when `icon` is empty
-    char icon[16];   // arsenal only: ui-icons sprite name ("ic-cannon"; "" = use glyph text)
-    char action[16]; // "group:N" / "inv:K" / "mod:K" enqueued on click OR dragstart
-    char drop[16];   // arsenal only: enqueued on dragdrop (unused since the slot strip retired)
+    char action[16]; // "group:N" enqueued on click
     b8   selected;   // highlighted row (the active fire group)
-    b8   empty;      // no content (dim style; group rows stay clickable, arsenal bays go inert)
+    b8   empty;      // no content (dim style; group rows stay clickable)
 } bs_rml_weapon_line;
+
+// One Modules-bay tile (flagship inspector): a draggable item (weapon / point-defense /
+// ship module) or an inert empty socket. `icon` names a ui-icons emblem sprite (falls back
+// to the `glyph` text); `action` is enqueued on dragstart and routes the drop game-side
+// ("inv:K" / "defdrag" / "mod:K"; "" = inert socket). The card_* fields are the hover
+// stat card, all pre-formatted game-side; "" hides the optional blocks (mode B, footer).
+typedef struct bs_rml_bay_line
+{
+    char glyph[8];              // fallback text symbol when `icon` is empty
+    char icon[16];              // ui-icons sprite name ("ic-cannon"; "" = use glyph text)
+    char action[16];            // dragstart source; "" = inert empty socket
+    b8   selected;              // highlighted tile (active weapon selection)
+    b8   empty;                 // empty socket (recessed style, not draggable)
+    char card_title[48];        // "AUTOCANNON MK I"
+    char card_rows[160];        // "TYPE  Weapon...\nSIZE  Small...\nINTEGRITY  100%" (pre-line)
+    char card_mode_a[64];       // active/primary mode line ("AP SHELLS - anti-ship")
+    char card_mode_a_stats[64]; // its stat line ("DMG 6  RATE 12.0/s  PWR 1.5")
+    char card_mode_b[64];       // secondary mode ("FLAK SCREEN - anti-ordnance"; "" = single-role)
+    char card_mode_b_stats[64]; // its stat line
+    char card_foot[80];         // keybind hint ("[T] switches fire mode..."; "" = none)
+} bs_rml_bay_line;
 
 // One cell of the flagship-inspector fire-group matrix: `action` ("gm:W:G") is enqueued on
 // click to toggle weapon column W's membership in group row G; `on` renders the checkmark.
@@ -213,21 +229,17 @@ typedef struct bs_rml_hud_state
 
     // Flagship inspector: a persistent window opened via the bottom-center "Inspector" button.
     // inspector_btn_visible shows the launcher button during gameplay; inspector_visible shows the
-    // window while it is open. The single Arsenal tab lists the flagship's UNMOUNTED inventory:
-    // arsenal_inv = offensive weapons in the loadout stash (draggable, action "inv:K");
-    // arsenal_def = defensive systems; arsenal_mod = ship modules in the module rack (draggable,
-    // action "mod:K"). Each list is also an unmount drop target ("stash" / "defstash" /
-    // "modstash"). Mounted items live on the SHIP itself (world hardpoint boxes), not in the
-    // window; a weapon is shown in EITHER the inventory OR on a hardpoint, never both.
+    // window while it is open. The single MODULES tab lists the flagship's UNMOUNTED inventory as
+    // ONE unified bay grid: weapons ("inv:K"), the point-defense ("defdrag") and ship modules
+    // ("mod:K") together, padded to BS_RML_BAY_MAX with inert empty sockets. The bay well is a
+    // single unmount drop target ("baydrop"; the game routes by dragged kind). Mounted items live
+    // on the SHIP itself (world hardpoint boxes), not in the window; an item is shown in EITHER
+    // the bay OR on a hardpoint, never both.
     b8                 inspector_btn_visible;
     b8                 inspector_visible;
     char               insp_ship_name[64];
-    i32                arsenal_inv_count;     // valid rows in arsenal_inv[0..count-1] (unmounted offensive stash)
-    bs_rml_weapon_line arsenal_inv[BS_RML_WEAPON_MAX];
-    i32                arsenal_def_count;     // valid rows in arsenal_def[0..count-1] (defensive systems)
-    bs_rml_weapon_line arsenal_def[BS_RML_WEAPON_MAX];
-    i32                arsenal_mod_count;     // valid rows in arsenal_mod[0..count-1] (unmounted ship modules)
-    bs_rml_weapon_line arsenal_mod[BS_RML_WEAPON_MAX];
+    i32                bay_count;              // valid tiles in bay[0..count-1]
+    bs_rml_bay_line    bay[BS_RML_BAY_MAX];
 
     // Fire-group assignment matrix (inspector): columns = mounted weapons, rows = groups 1..5.
     // gm_col_count is the number of weapon columns this frame (0 hides the section); gm_col

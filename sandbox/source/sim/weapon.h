@@ -15,9 +15,11 @@ struct Weapon {
     const char*   name;           // display label
     const char*   icon;           // ui-icons emblem sprite for the Arsenal tile ("ic-cannon")
     u8            wkind;          // WeaponKind tag for kind-specific fire logic
+    u8            size;           // HardpointSize: mounts on slots of this size or larger
+    f32           damage;         // hull damage per hit (stamped into spawned projectiles)
     VesselFaction owner_faction;  // set at equip time (legacy binary faction; projectile visuals)
     i16           owner_faction_id; // unified faction stamped from the firing ship at each fire site
-    Weapon(const char* n) : name(n), icon("ic-cannon"), wkind(WEAPON_KIND_BALLISTIC), owner_faction((VesselFaction)0), owner_faction_id(FACTION_PIRATE) {}
+    Weapon(const char* n) : name(n), icon("ic-cannon"), wkind(WEAPON_KIND_BALLISTIC), size(HARDPOINT_MEDIUM), damage(15.0f), owner_faction((VesselFaction)0), owner_faction_id(FACTION_PIRATE) {}
     virtual ~Weapon() {}
     // fire at the given origin in the given direction (unit or non-unit).
     // `ship_velocity` is the owning ship's current world velocity (added to projectile).
@@ -48,6 +50,7 @@ struct BallisticWeapon : Weapon {
     f32 projectile_radius;  // visual radius (world units)
     f32 projectile_emission; // 0..1 radiation heat-source strength for the projectile
     f32 cap_cost_value;     // capacitor cost per shot (member, editor-exposable)
+    f32 proj_hp_value;      // spawned shell HP vs point-defense/flak (def-driven)
     u8  fire_mode;          // MODE_AP / MODE_FLAK (toggled per fire group via the T key)
     // runtime state
     f32 cooldown_remaining; // seconds until next shot
@@ -101,8 +104,6 @@ struct MissileLauncher : Weapon {
     f32  cap_cost() const override { return cap_cost_value; }
 };
 // ---------------------------------------------------------------------------
-// Helper: factory for creating the default ballistic cannon.
+// Helper: instances are normally built from `.weapon` defs by weapon_instantiate
+// (sim/weapon_def.h). No hardcoded factories remain.
 // ---------------------------------------------------------------------------
-Weapon* weapon_create_ballistic_cannon(VesselFaction owner);
-// Factory for the standard guided-missile launcher.
-Weapon* weapon_create_missile_launcher(VesselFaction owner);

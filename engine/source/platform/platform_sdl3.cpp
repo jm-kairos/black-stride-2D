@@ -305,6 +305,19 @@ static keys sdl_scancode_to_bs_key(SDL_Scancode sc)
         case SDL_SCANCODE_DELETE:    return KEY_DELETE;
         case SDL_SCANCODE_HELP:      return KEY_HELP;
 
+        // Number row (0-9). The engine's `keys` enum uses Win32 VK values, where
+        // VK '0'-'9' match ASCII 0x30-0x39.
+        case SDL_SCANCODE_1: return KEY_NUM1;
+        case SDL_SCANCODE_2: return KEY_NUM2;
+        case SDL_SCANCODE_3: return KEY_NUM3;
+        case SDL_SCANCODE_4: return KEY_NUM4;
+        case SDL_SCANCODE_5: return KEY_NUM5;
+        case SDL_SCANCODE_6: return KEY_NUM6;
+        case SDL_SCANCODE_7: return KEY_NUM7;
+        case SDL_SCANCODE_8: return KEY_NUM8;
+        case SDL_SCANCODE_9: return KEY_NUM9;
+        case SDL_SCANCODE_0: return KEY_NUM0;
+
         case SDL_SCANCODE_A: return KEY_A;
         case SDL_SCANCODE_B: return KEY_B;
         case SDL_SCANCODE_C: return KEY_C;

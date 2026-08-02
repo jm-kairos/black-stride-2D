@@ -429,17 +429,9 @@ void RtsControls::draw() {
             }
         }
     }
-    // The FLEET SHIP readout is now an RmlUi HUD document (see hud.rml + game_push_hud). Only the
-    // number-row weapon switching for the piloted ship remains here as input handling.
-    FleetShip* piloted = m_state->fleet_state.fleet.piloted();
-    if (!piloted) piloted = &m_state->fleet_state.fleet.at(0);
-    if (piloted) {
-        Ship* ship = &piloted->ship;
-        if (input_is_key_down(KEY_NUM1) && !input_was_key_down(KEY_NUM1)) ship_select_weapon_slot(ship, 0);
-        if (input_is_key_down(KEY_NUM2) && !input_was_key_down(KEY_NUM2)) ship_select_weapon_slot(ship, 1);
-        if (input_is_key_down(KEY_NUM3) && !input_was_key_down(KEY_NUM3)) ship_select_weapon_slot(ship, 2);
-        if (input_is_key_down(KEY_NUM4) && !input_was_key_down(KEY_NUM4)) ship_select_weapon_slot(ship, 3);
-    }
+    // The FLEET SHIP readout is now an RmlUi HUD document (see hud.rml + game_push_hud), and the
+    // number-row weapon-group selection for the piloted ship now lives in game_update's
+    // MODE_GLOBAL branch (with action-log feedback), so no input handling remains here.
 }
 // =====================================================================================
 // HUD "Pilot unit" / "Auto-pilot / RTS" button handler. Invoked by game_push_hud when the

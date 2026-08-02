@@ -1,0 +1,18 @@
+# Large torpedo: devastating if it lands, slow and expensive. 6.0 hp makes it a
+# point-defense CHECK -- standard PD needs most of a second of beam time, so it
+# punishes drained capacitors and HOLD stances. Counter it early or dodge hard.
+id          heavy_torpedo
+name        "Heavy Torpedo"
+kind        missile
+size        L
+icon        ic-missile
+damage      120
+reload      9.0
+proj_speed  5000
+proj_life   16
+proj_radius 8.0
+cap_cost    45
+emission    1.0
+proj_hp     6.0
+price       2600
+tier        2

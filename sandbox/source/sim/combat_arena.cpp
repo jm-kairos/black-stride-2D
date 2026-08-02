@@ -371,7 +371,7 @@ void combat_arena_update_projectiles(game_state* s, f32 sim_dt) {
                 if (hit) {
                     // General Ship AI: NPC agents take damage; the projectile's faction id
                     // attributes the kill (player kills raid the civ, NPC kills don't).
-                    if (ce->is_npc) ai_ship_damage(s, ce->npc_index, 15.0f, p->faction_id);
+                    if (ce->is_npc) ai_ship_damage(s, ce->npc_index, p->dmg, p->faction_id);
                     // Attributed missile-hit feedback (Phase E): when a missile lands on a
                     // player fleet ship, say WHY the defenses missed it -- read from the hit
                     // ship's own PD state at impact time. Disabled/unmounted reads as holding.

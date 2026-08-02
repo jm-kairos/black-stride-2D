@@ -1,0 +1,18 @@
+# Standard guided-missile launcher (the former hardcoded "Missile Launcher").
+# Fire-and-seek: missiles steer onto hostiles after launch. Hot engines make them
+# easy to see coming; 3.5 hp costs enemy PD a real dwell to burn down.
+id          harpoon_rack
+name        "Harpoon Missile Rack"
+kind        missile
+size        M
+icon        ic-missile
+damage      40
+reload      4.0
+proj_speed  3000
+proj_life   12
+proj_radius 6.0
+cap_cost    25
+emission    0.9
+proj_hp     3.5
+price       900
+tier        1

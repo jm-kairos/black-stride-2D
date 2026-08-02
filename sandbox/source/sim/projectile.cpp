@@ -66,7 +66,7 @@ void ProjectileSystem::init() {
 }
 b8 ProjectileSystem::spawn(HierPos2 origin, Vec2 velocity,
                            f32 lifetime, f32 radius, bs_color color, VesselFaction owner, i16 faction_id,
-                           f32 radiation_emission, f32 hp, u8 kind)
+                           f32 radiation_emission, f32 hp, u8 kind, f32 dmg)
 {
     // find first free slot
     for (i32 i = 0; i < MAX_PROJECTILES; ++i) {
@@ -84,6 +84,7 @@ b8 ProjectileSystem::spawn(HierPos2 origin, Vec2 velocity,
             pool[i].radiation_emission = radiation_emission;
             pool[i].hp                 = hp;
             pool[i].max_hp             = hp;
+            pool[i].dmg                = dmg;
             ++count;
             return TRUE;
         }
@@ -92,7 +93,7 @@ b8 ProjectileSystem::spawn(HierPos2 origin, Vec2 velocity,
 }
 b8 ProjectileSystem::spawn_missile(HierPos2 origin, Vec2 velocity,
                                    f32 lifetime, f32 radius, bs_color color, VesselFaction owner,
-                                   i16 faction_id, f32 radiation_emission, f32 hp)
+                                   i16 faction_id, f32 radiation_emission, f32 hp, f32 dmg)
 {
     // Same free-slot scan as spawn(), but the slot is tagged PROJ_MISSILE so the combat-arena
     // steering pass picks it up. Kept as a separate loop (not a spawn() call) because spawn()
@@ -112,6 +113,7 @@ b8 ProjectileSystem::spawn_missile(HierPos2 origin, Vec2 velocity,
             pool[i].radiation_emission = radiation_emission;
             pool[i].hp                 = hp;
             pool[i].max_hp             = hp;
+            pool[i].dmg                = dmg;
             ++count;
             return TRUE;
         }

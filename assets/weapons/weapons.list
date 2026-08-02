@@ -1,0 +1,8 @@
+# Black Stride weapon registry manifest.
+# One .weapon file path per line (relative to the working directory, bin/).
+# Loaded once at game init by weapon_registry_load (sim/weapon_def.cpp).
+assets/weapons/gauss_mk1.weapon
+assets/weapons/autocannon_mk1.weapon
+assets/weapons/longlance_rail.weapon
+assets/weapons/harpoon_rack.weapon
+assets/weapons/heavy_torpedo.weapon

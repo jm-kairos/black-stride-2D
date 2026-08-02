@@ -355,6 +355,10 @@ b8 game_init(Game* game_inst) {
 
     module_registry_load(&s->module_registry, "assets/modules/modules.list");
 
+    // ---- Weapon def registry (stat system S2): immutable stat blocks from assets/weapons --
+
+    weapon_registry_load(&s->weapon_registry, "assets/weapons/weapons.list");
+
     s->view.alt_movement_active = FALSE;
 
     // ---- Fleet: flagship (member 0) loaded from the player hull --------------------------
@@ -383,19 +387,19 @@ b8 game_init(Game* game_inst) {
 
         fs.ship.radiation_emission = 0.05f;
 
-        // The flagship's cannons start UNMOUNTED in the loadout stash; the player mounts them onto
-        // hardpoints from the Arsenal inspector (ship_load cleared all hardpoint mounts). Until
-        // mounted, the flagship has no active weapon. One cannon per weapon hardpoint (bow/port/stbd)
-        // so weapon groups can be exercised.
-        fs.ship.weapon_stash[0]     = weapon_create_ballistic_cannon(fs.ship.faction);
+        // The flagship's weapons start UNMOUNTED in the loadout stash; the player mounts them
+        // onto hardpoints from the Arsenal inspector (ship_load cleared all hardpoint mounts).
+        // A deliberately diverse starting rack -- baseline gauss, rapid autocannon (flak
+        // platform), and a missile rack -- so the stat cards read differently from minute one.
+        fs.ship.weapon_stash[0]     = weapon_instantiate(weapon_registry_find(&s->weapon_registry, "gauss_mk1"),      fs.ship.faction);
 
-        fs.ship.weapon_stash[1]     = weapon_create_ballistic_cannon(fs.ship.faction);
+        fs.ship.weapon_stash[1]     = weapon_instantiate(weapon_registry_find(&s->weapon_registry, "gauss_mk1"),      fs.ship.faction);
 
-        fs.ship.weapon_stash[2]     = weapon_create_ballistic_cannon(fs.ship.faction);
+        fs.ship.weapon_stash[2]     = weapon_instantiate(weapon_registry_find(&s->weapon_registry, "autocannon_mk1"), fs.ship.faction);
 
         // Guided-missile launcher (Phase A): starts stashed like the cannons; mount and
         // fire-group it from the Arsenal inspector.
-        fs.ship.weapon_stash[3]     = weapon_create_missile_launcher(fs.ship.faction);
+        fs.ship.weapon_stash[3]     = weapon_instantiate(weapon_registry_find(&s->weapon_registry, "harpoon_rack"),   fs.ship.faction);
 
         fs.ship.weapon_stash_count  = 4;
 
@@ -471,7 +475,7 @@ b8 game_init(Game* game_inst) {
 
             if (whp >= 0) {
 
-                fs.ship.mounts[whp]       = weapon_create_ballistic_cannon(fs.ship.faction);
+                fs.ship.mounts[whp]       = weapon_instantiate(weapon_registry_find(&s->weapon_registry, "gauss_mk1"), fs.ship.faction);
 
                 fs.ship.active_weapon_idx = whp;
 
@@ -513,7 +517,7 @@ b8 game_init(Game* game_inst) {
 
     if (enemy_hp < 0) enemy_hp = 0;
 
-    s->fleet_state.enemy_ship.mounts[enemy_hp] = weapon_create_ballistic_cannon(s->fleet_state.enemy_ship.faction);
+    s->fleet_state.enemy_ship.mounts[enemy_hp] = weapon_instantiate(weapon_registry_find(&s->weapon_registry, "gauss_mk1"), s->fleet_state.enemy_ship.faction);
 
     // Extend the enemy's effective firing range ~10x by lengthening its projectile lifetime
 
@@ -542,7 +546,8 @@ b8 game_init(Game* game_inst) {
 
     if (enemy_ml_hp >= 0)
         s->fleet_state.enemy_ship.mounts[enemy_ml_hp] =
-            weapon_create_missile_launcher(s->fleet_state.enemy_ship.faction);
+            weapon_instantiate(weapon_registry_find(&s->weapon_registry, "harpoon_rack"),
+                               s->fleet_state.enemy_ship.faction);
 
     // Default to single-ship command: the escorts are spawned above (so their data + weapons exist
     // and can be revealed instantly), but only the flagship is ACTIVE until the player enables
@@ -1291,13 +1296,52 @@ static void game_push_hud(game_state* s, f32 dt) {
 
     // ---- Flagship inspector (floating side window; bottom-center Inspector button) -------
     // The launcher button shows during gameplay; the window shows while it is open. The single
-    // Arsenal tab lists the flagship's UNMOUNTED inventory: arsenal_inv holds offensive weapons
-    // in the loadout stash (draggable, action "inv:K"), arsenal_def the defensive systems
-    // ("defdrag"), arsenal_mod the module rack ("mod:K"). Mounting happens by dragging an item
-    // out of the window and releasing it on one of the cruiser's world hardpoint boxes (the
-    // "dragend" handler); mounted items are managed on the ship itself (ship-side pick-up in
-    // game_update). Each list is also an unmount drop target ("stash"/"defstash"/"modstash").
-    // An item lives in EITHER an inventory OR on a hardpoint, never both.
+    // MODULES tab presents the flagship's UNMOUNTED inventory as ONE unified bay grid: weapons
+    // (drag action "inv:K"), the point-defense ("defdrag") and ship modules ("mod:K") together,
+    // padded to BS_RML_BAY_MAX with inert empty sockets. Mounting happens by dragging an item
+    // out of the window onto one of the cruiser's world hardpoint boxes; the bay well is one
+    // unmount drop target ("baydrop", routed game-side by dragged kind). An item lives in
+    // EITHER the bay OR on a hardpoint, never both. Each tile carries a structured hover STAT
+    // CARD (TYPE/SIZE/INTEGRITY rows + per-mode stat blocks + keybind footer) built from the
+    // instance's def-driven stats; card_rows uses '\n' (the RCSS is pre-line).
+    auto fill_card_weapon = [](bs_rml_bay_line& row, const Weapon* w) {
+        const char* name = w->name ? w->name : "?";
+        // Mount-size row text (a weapon mounts on slots of its own size or LARGER).
+        static const char* SIZE_ROW[3] = { "Small - fits S/M/L mounts", "Medium - fits M/L mounts",
+                                           "Large - fits L mounts" };
+        const char* size_txt = SIZE_ROW[(w->size < 3) ? w->size : 1];
+        snprintf(row.card_title, sizeof(row.card_title), "%s", name);
+        if (w->wkind == WEAPON_KIND_MISSILE) {
+            const MissileLauncher* ml = (const MissileLauncher*)w;
+            snprintf(row.card_rows, sizeof(row.card_rows),
+                     "TYPE       Weapon - Missile\nSIZE       %s\nINTEGRITY  100%%", size_txt);
+            snprintf(row.card_mode_a, sizeof(row.card_mode_a), "> GUIDED - anti-ship");
+            snprintf(row.card_mode_a_stats, sizeof(row.card_mode_a_stats),
+                     "DMG %.0f  RELOAD %.1fs  PWR %.0f", w->damage, ml->reload_time, ml->cap_cost_value);
+            row.card_mode_b[0] = row.card_mode_b_stats[0] = row.card_foot[0] = '\0';
+        } else {
+            const BallisticWeapon* bw = (const BallisticWeapon*)w;
+            snprintf(row.card_rows, sizeof(row.card_rows),
+                     "TYPE       Weapon - Ballistic (dual role)\nSIZE       %s\nINTEGRITY  100%%",
+                     size_txt);
+            const b8 flak = (bw->fire_mode == MODE_FLAK);
+            // The LIVE mode leads (amber block, "> " chevron); the other follows dimmed.
+            if (!flak) {
+                snprintf(row.card_mode_a, sizeof(row.card_mode_a), "> AP SHELLS - anti-ship");
+                snprintf(row.card_mode_a_stats, sizeof(row.card_mode_a_stats),
+                         "DMG %.0f  RATE %.1f/s  PWR %.1f", w->damage, bw->fire_rate, bw->cap_cost_value);
+                snprintf(row.card_mode_b, sizeof(row.card_mode_b), "FLAK SCREEN - anti-ordnance");
+                snprintf(row.card_mode_b_stats, sizeof(row.card_mode_b_stats), "no hull damage");
+            } else {
+                snprintf(row.card_mode_a, sizeof(row.card_mode_a), "> FLAK SCREEN - anti-ordnance");
+                snprintf(row.card_mode_a_stats, sizeof(row.card_mode_a_stats), "no hull damage");
+                snprintf(row.card_mode_b, sizeof(row.card_mode_b), "AP SHELLS - anti-ship");
+                snprintf(row.card_mode_b_stats, sizeof(row.card_mode_b_stats),
+                         "DMG %.0f  RATE %.1f/s  PWR %.1f", w->damage, bw->fire_rate, bw->cap_cost_value);
+            }
+            snprintf(row.card_foot, sizeof(row.card_foot), "[T] switches fire mode on the active group");
+        }
+    };
     if (!s->editor.edit_mode_active) {
         hud.inspector_btn_visible = TRUE;
         if (s->show_flagship_inspector) {
@@ -1305,80 +1349,76 @@ static void game_push_hud(game_state* s, f32 dt) {
             hud.inspector_visible = TRUE;
             snprintf(hud.insp_ship_name, sizeof(hud.insp_ship_name), "%s",
                      fs.vessel_name ? fs.vessel_name : "Flagship");
-            // LEFT: unmounted offensive inventory. Render a FIXED number of bays (SHIP_MAX_WEAPONS)
-            // so an empty "+" placeholder persists after a weapon is dragged out onto a hardpoint --
-            // the list keeps its slots instead of collapsing. Real weapons fill the leading bays
-            // (drag sources, action "inv:K"); the remaining bays are inert "+" placeholders.
-            i32 iv = 0;
-            for (i32 k = 0; k < SHIP_MAX_WEAPONS && iv < BS_RML_WEAPON_MAX; ++k, ++iv) {
-                bs_rml_weapon_line& row = hud.arsenal_inv[iv];
-                Weapon* w = (k < fs.weapon_stash_count) ? fs.weapon_stash[k] : nullptr;
-                if (w) {
-                    const char* name = w->name ? w->name : "?";
-                    snprintf(row.text,   sizeof(row.text),   "%s", name);                    // tooltip = name
-                    snprintf(row.glyph,  sizeof(row.glyph),  "%c", name[0] ? name[0] : '*'); // fallback text
-                    snprintf(row.icon,   sizeof(row.icon),   "%s", w->icon ? w->icon : "");  // emblem sprite
-                    snprintf(row.action, sizeof(row.action), "inv:%d", k);                   // dragstart source
-                    row.drop[0]  = '\0';
-                    row.empty    = FALSE;
-                    row.selected = FALSE;
+            // ---- Unified Modules bay ------------------------------------------------------
+            i32 nb = 0;
+            // 1) Weapons from the loadout stash (drag sources "inv:K").
+            for (i32 k = 0; k < fs.weapon_stash_count && nb < BS_RML_BAY_MAX; ++k) {
+                Weapon* w = fs.weapon_stash[k];
+                if (!w) continue;
+                bs_rml_bay_line& row = hud.bay[nb++];
+                const char* name = w->name ? w->name : "?";
+                snprintf(row.glyph,  sizeof(row.glyph),  "%c", name[0] ? name[0] : '*');
+                snprintf(row.icon,   sizeof(row.icon),   "%s", w->icon ? w->icon : "");
+                snprintf(row.action, sizeof(row.action), "inv:%d", k);
+                row.empty    = FALSE;
+                row.selected = FALSE;
+                fill_card_weapon(row, w);
+            }
+            // 2) Point-defense, ONLY while unmounted (mounted PD lives on its hardpoint).
+            if (fs.point_defense_mount < 0 && nb < BS_RML_BAY_MAX) {
+                bs_rml_bay_line& row = hud.bay[nb++];
+                snprintf(row.glyph,  sizeof(row.glyph),  "P");
+                snprintf(row.icon,   sizeof(row.icon),   "ic-pd");
+                snprintf(row.action, sizeof(row.action), "defdrag");
+                row.empty    = FALSE;
+                row.selected = FALSE;
+                snprintf(row.card_title, sizeof(row.card_title), "Point Defense Laser");
+                snprintf(row.card_rows, sizeof(row.card_rows),
+                         "TYPE       Defense - Point defense\nINTEGRITY  100%%");
+                snprintf(row.card_mode_a, sizeof(row.card_mode_a), "AUTO BEAM - anti-ordnance");
+                snprintf(row.card_mode_a_stats, sizeof(row.card_mode_a_stats),
+                         "DPS %.0f  DRAIN %.0f/s", fs.point_defense.damage_per_second,
+                         fs.point_defense.cap_drain_per_s);
+                row.card_mode_b[0] = row.card_mode_b_stats[0] = '\0';
+                snprintf(row.card_foot, sizeof(row.card_foot), "[P] cycles stance - doctrine below");
+            }
+            // 3) Ship modules from the rack (drag sources "mod:K").
+            for (i32 k = 0; k < fs.module_stash_count && nb < BS_RML_BAY_MAX; ++k) {
+                const ModuleDef* m = fs.module_stash[k];
+                if (!m) continue;
+                bs_rml_bay_line& row = hud.bay[nb++];
+                snprintf(row.glyph,  sizeof(row.glyph),  "%s", m->glyph);
+                snprintf(row.icon,   sizeof(row.icon),   "%s", m->icon);
+                snprintf(row.action, sizeof(row.action), "mod:%d", k);
+                row.empty    = FALSE;
+                row.selected = FALSE;
+                snprintf(row.card_title, sizeof(row.card_title), "%s", m->name);
+                snprintf(row.card_rows, sizeof(row.card_rows),
+                         "TYPE       Module - %s\nSIZE       %s\nINTEGRITY  100%%",
+                         hardpoint_kind_label(m->type), hardpoint_size_name(m->size));
+                if (m->type == MODULE_TYPE_SENSOR) {
+                    snprintf(row.card_mode_a, sizeof(row.card_mode_a), "PASSIVE - sensor array");
+                    snprintf(row.card_mode_a_stats, sizeof(row.card_mode_a_stats),
+                             "RANGE x%.2f (layer 1)", m->sensor_mult[1]);
                 } else {
-                    snprintf(row.text,  sizeof(row.text),  "Empty weapon bay");
-                    snprintf(row.glyph, sizeof(row.glyph), "+");
-                    snprintf(row.icon,  sizeof(row.icon),  "ic-empty");
-                    row.action[0] = '\0';
-                    row.drop[0]   = '\0';
-                    row.empty      = TRUE;
-                    row.selected   = FALSE;
+                    snprintf(row.card_mode_a, sizeof(row.card_mode_a), "PASSIVE");
+                    row.card_mode_a_stats[0] = '\0';
                 }
+                row.card_mode_b[0] = row.card_mode_b_stats[0] = row.card_foot[0] = '\0';
             }
-            hud.arsenal_inv_count = iv;
-            // Defensive systems: the point-defense laser, shown in the inventory ONLY while it is
-            // unmounted (point_defense_mount < 0). Once mounted it appears on its hardpoint instead.
-            if (fs.point_defense_mount < 0) {
-                bs_rml_weapon_line& drow = hud.arsenal_def[0];
-                snprintf(drow.text,  sizeof(drow.text),  "Point Defense Laser");
-                snprintf(drow.glyph, sizeof(drow.glyph), "P");
-                snprintf(drow.icon,  sizeof(drow.icon),  "ic-pd");
-                snprintf(drow.action, sizeof(drow.action), "defdrag");
-                drow.drop[0]   = '\0';
-                drow.empty     = FALSE;
-                drow.selected  = FALSE;
-                hud.arsenal_def_count = 1;
-            } else {
-                hud.arsenal_def_count = 0;
+            // 4) Pad to a full grid with inert empty sockets.
+            while (nb < BS_RML_BAY_MAX) {
+                bs_rml_bay_line& row = hud.bay[nb++];
+                snprintf(row.glyph, sizeof(row.glyph), "+");
+                snprintf(row.icon,  sizeof(row.icon),  "ic-empty");
+                row.action[0] = '\0';
+                row.empty     = TRUE;
+                row.selected  = FALSE;
+                row.card_title[0] = row.card_rows[0] = '\0';
+                row.card_mode_a[0] = row.card_mode_a_stats[0] = '\0';
+                row.card_mode_b[0] = row.card_mode_b_stats[0] = row.card_foot[0] = '\0';
             }
-            // Ship modules (Phase 4): the module rack, rendered as FIXED bays like the offensive
-            // list so placeholders persist. Occupied bays are drag sources ("mod:K"); tooltips
-            // carry the module's kind/size and its sensor effect.
-            i32 mv = 0;
-            for (i32 k = 0; k < SHIP_MAX_MODULES && mv < BS_RML_WEAPON_MAX; ++k, ++mv) {
-                bs_rml_weapon_line& row = hud.arsenal_mod[mv];
-                const ModuleDef* m = (k < fs.module_stash_count) ? fs.module_stash[k] : nullptr;
-                if (m) {
-                    if (m->type == MODULE_TYPE_SENSOR)
-                        snprintf(row.text, sizeof(row.text), "%s \xE2\x80\x94 sensor %s, range x%.2f",
-                                 m->name, hardpoint_size_name(m->size), m->sensor_mult[1]);
-                    else
-                        snprintf(row.text, sizeof(row.text), "%s \xE2\x80\x94 %s module (%s)",
-                                 m->name, hardpoint_kind_label(m->type), hardpoint_size_name(m->size));
-                    snprintf(row.glyph,  sizeof(row.glyph),  "%s", m->glyph);
-                    snprintf(row.icon,   sizeof(row.icon),   "%s", m->icon);
-                    snprintf(row.action, sizeof(row.action), "mod:%d", k);              // dragstart source
-                    row.drop[0]  = '\0';
-                    row.empty    = FALSE;
-                    row.selected = FALSE;
-                } else {
-                    snprintf(row.text,  sizeof(row.text),  "Empty module rack");
-                    snprintf(row.glyph, sizeof(row.glyph), "+");
-                    snprintf(row.icon,  sizeof(row.icon),  "ic-empty");
-                    row.action[0] = '\0';
-                    row.drop[0]   = '\0';
-                    row.empty      = TRUE;
-                    row.selected   = FALSE;
-                }
-            }
-            hud.arsenal_mod_count = mv;
+            hud.bay_count = nb;
             // Fire-group assignment matrix: one column per MOUNTED weapon (hardpoint order),
             // one row per group key 1..5. Column headers are the hardpoint id up to the first
             // '_' ("bow_gun" -> "bow"); cell actions toggle membership ("gm:H:G").
@@ -1846,13 +1886,12 @@ static void game_push_hud(game_state* s, f32 dt) {
             s->station_insp_tab = action[12] - '0';
             continue;
         }
-        // Arsenal drag source armed on dragstart. Window sources: "inv:K" = an unmounted weapon
-        // in the loadout stash, "defdrag" = the point-defense from the defensive inventory,
-        // "mod:K" = a ship module in the module rack. Kinds 0/3/5 (mounted weapon / mounted PD /
-        // installed module) are armed by the ship-side pick-up in game_update instead - the old
-        // in-window hardpoint slot strip is gone. The armed source resolves on: "dragend" (world
-        // hardpoint hit-test -> arsenal_drop_on_slot), "stash"/"defstash"/"modstash" (inventory
-        // no-op guards), or "uidrop" (window dead space -> disarm).
+        // Modules-bay drag source armed on dragstart. Bay sources: "inv:K" = an unmounted weapon
+        // in the loadout stash, "defdrag" = the unmounted point-defense, "mod:K" = a ship module
+        // in the rack. Kinds 0/3/5 (mounted weapon / mounted PD / installed module) are armed by
+        // the ship-side pick-up in game_update instead. The armed source resolves on: "dragend"
+        // (world hardpoint hit-test -> arsenal_drop_on_slot), "baydrop" (unmount into the bay),
+        // or "uidrop" (window dead space -> disarm).
         if (strncmp(action, "inv:", 4) == 0) {
             s->pending_weapon_drag      = atoi(action + 4);
             s->pending_weapon_drag_kind = 1;   // unmounted offensive weapon (stash)
@@ -1895,9 +1934,11 @@ static void game_push_hud(game_state* s, f32 dt) {
             }
             continue;
         }
-        // Arsenal drop onto the offensive inventory (left list): UNMOUNT a mounted weapon back into
-        // the stash. Any other source dropped here is a no-op.
-        if (strcmp(action, "stash") == 0) {
+        // Legacy per-tray drop actions removed: the unified Modules bay emits "baydrop" (below).
+        // Unified Modules-bay drop: UNMOUNT whatever mounted item was dragged in, routed by the
+        // armed drag's kind (0 = mounted weapon, 3 = mounted point-defense, 5 = mounted module).
+        // Drops from bay sources onto the bay itself are no-ops (kind 1/2/4 fall through).
+        if (strcmp(action, "baydrop") == 0) {
             Ship& fs = s->player_ship();
             i32 src  = s->pending_weapon_drag;
             i32 kind = s->pending_weapon_drag_kind;
@@ -1906,34 +1947,15 @@ static void game_push_hud(game_state* s, f32 dt) {
                 fs.mounts[src] = nullptr;
                 ship_stash_append(fs, w);
                 ship_rehome_weapons(fs);
-                action_log_push(s, "%s returned to inventory.", w->name ? w->name : "Weapon");
-            }
-            s->pending_weapon_drag = -1;
-            continue;
-        }
-        // Arsenal drop onto the defensive inventory (left list): UNMOUNT the point-defense. Any other
-        // source dropped here is a no-op.
-        if (strcmp(action, "defstash") == 0) {
-            Ship& fs = s->player_ship();
-            i32 kind = s->pending_weapon_drag_kind;
-            if (kind == 3 && fs.point_defense_mount >= 0) {
+                action_log_push(s, "%s returned to the module bay.", w->name ? w->name : "Weapon");
+            } else if (kind == 3 && fs.point_defense_mount >= 0) {
                 i32 slot = fs.point_defense_mount;
                 fs.point_defense_mount   = -1;
                 fs.point_defense.enabled = FALSE;
                 ship_rehome_weapons(fs);
-                action_log_push(s, "Point Defense Laser returned to inventory (was '%s').",
+                action_log_push(s, "Point Defense Laser returned to the module bay (was '%s').",
                                 fs.hardpoints[slot].id);
-            }
-            s->pending_weapon_drag = -1;
-            continue;
-        }
-        // Arsenal drop onto the module rack (left list): UNINSTALL a mounted module. Any other
-        // source dropped here is a no-op.
-        if (strcmp(action, "modstash") == 0) {
-            Ship& fs = s->player_ship();
-            i32 src  = s->pending_weapon_drag;
-            i32 kind = s->pending_weapon_drag_kind;
-            if (kind == 5 && src >= 0 && src < fs.hardpoint_count && fs.module_mounts[src]) {
+            } else if (kind == 5 && src >= 0 && src < fs.hardpoint_count && fs.module_mounts[src]) {
                 const ModuleDef* m = fs.module_mounts[src];
                 if (fs.module_stash_count >= SHIP_MAX_MODULES) {
                     action_log_push(s, "Module rack full - can't remove '%s'.", m->name);
@@ -1941,7 +1963,7 @@ static void game_push_hud(game_state* s, f32 dt) {
                     fs.module_mounts[src] = nullptr;
                     ship_module_stash_append(fs, m);
                     ship_recompute_stats(&fs);
-                    action_log_push(s, "%s returned to the module rack.", m->name);
+                    action_log_push(s, "%s returned to the module bay.", m->name);
                 }
             }
             s->pending_weapon_drag = -1;

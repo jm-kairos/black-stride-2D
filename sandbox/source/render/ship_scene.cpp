@@ -7,8 +7,10 @@
 #include "render/ship_render.h"     // draw_collider_outline, draw_fleet_emblems
 #include "core/cursor_world.h"      // mouse_true_hierpos (ship-side drag tether)
 #include "core/render_layers.h"   // LAYER_SHIP / LAYER_UI
+#include "render/text.h"            // text_draw (weapon-group digits)
 
 #include <renderer/renderer.h>
+#include <renderer/camera2d.h>      // camera2d_world_to_screen (weapon-group digits)
 #include <math.h>
 
 using namespace bs_math;
@@ -37,6 +39,33 @@ static b8 arsenal_drag_fits(const Ship& fs, i32 kind, i32 src, i32 dst) {
         case 5: return (src >= 0 && src < fs.hardpoint_count && fs.module_mounts[src])
                            ? hardpoint_fits_module(&dhp, fs.module_mounts[src]) : FALSE;
         default: return FALSE;
+    }
+}
+
+// Weapon-group digits: under each mounted weapon's hardpoint box, print the group numbers
+// the weapon belongs to. Members of the ACTIVE fire group render bright (they fire on
+// click), the rest dim. Screen-anchored bitmap text so the labels stay readable at any zoom.
+static void draw_weapon_group_digits(game_state* s, const Ship* ship) {
+    const Camera2D* cam = &s->camera_state.camera;
+    f32 zoom = cam->zoom > 1.0e-6f ? cam->zoom : 1.0e-6f;
+    const f32 scale = 1.5f;                          // 12 px glyphs
+    for (i32 h = 0; h < ship->hardpoint_count; ++h) {
+        if (!ship->mounts[h]) continue;
+        Vec2 center = vec2_add(ship->render_pos,
+                               ship_local_dir(ship, ship->hardpoints[h].pos_local));
+        Vec2 sc = camera2d_world_to_screen(cam, s->fb_width, s->fb_height, center);
+        f32 e   = hardpoint_half_extent(ship->hardpoints[h].size) * 1.25f * zoom;
+        f32 step = text_width("0", scale) + 3.0f;
+        f32 x = sc.x - ((f32)SHIP_WEAPON_GROUPS * step - 3.0f) * 0.5f;
+        f32 y = sc.y + e + 4.0f;
+        for (i32 g = 0; g < SHIP_WEAPON_GROUPS; ++g, x += step) {
+            if (!((ship->mount_groups[h] >> g) & 1)) continue;
+            char d[2] = { (char)('1' + g), '\0' };
+            bs_color col = (g == ship->active_group)
+                               ? bs_color{ 0.35f, 1.00f, 0.55f, 0.95f }    // active group: green
+                               : bs_color{ 0.75f, 0.85f, 1.00f, 0.55f };   // other groups: dim
+            text_draw(d, x, y, scale, col, cam, s->fb_width, s->fb_height, LAYER_GIZMO);
+        }
     }
 }
 
@@ -244,6 +273,7 @@ void draw_ship_scene(game_state* s) {
         // hardpoint editor draws its own overlay (editor_ui.cpp).
         if (s->show_flagship_inspector && ship == &s->player_ship()) {
             draw_hardpoint_overlay(ship, 1.5f);
+            draw_weapon_group_digits(s, ship);
             if (s->pending_weapon_drag >= 0) {
                 for (i32 h = 0; h < ship->hardpoint_count; ++h)
                     draw_hardpoint_drag_feedback(ship, h,

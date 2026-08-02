@@ -1,0 +1,18 @@
+# Large alpha-strike railgun: brutal single hits at sniper reach, with a capacitor
+# spike per shot that forces deliberate timing. Fast, tough slugs are hard for
+# point-defense to stop.
+id          longlance_rail
+name        "Long-Lance Railgun"
+kind        ballistic
+size        L
+icon        ic-cannon
+damage      45
+fire_rate   0.8
+proj_speed  16000
+proj_life   24
+proj_radius 5.0
+cap_cost    18
+emission    0.8
+proj_hp     1.6
+price       1400
+tier        2

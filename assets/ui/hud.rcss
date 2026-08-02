@@ -641,28 +641,75 @@ body {
 .weapon-symbol.selected .weapon-icon { image-color: #e8b45a; }   /* amber = selected */
 .weapon-symbol.empty .weapon-icon    { image-color: #6e6555; }   /* dim open socket  */
 
-/* Tooltip child: themed like the star-system tooltip (.panel slab). Shown on hover, hidden the
-   instant the symbol is pressed to begin a drag (the :active rule below wins by source order). */
-.weapon-tip {
+/* Structured stat card: plate slab above the tile (shown on hover, hidden the instant the
+   symbol is pressed to begin a drag -- the :active rule below wins by source order).
+   Anchored to the tile's LEFT edge so cards from the leftmost column never clip the panel. */
+.stat-card {
     display: none;
     position: absolute;
     bottom: 40px;
-    left: 50%;
-    margin-left: -80px;
-    width: 160px;
-    padding: 6px 8px;
-    background-color: #141518f2;
+    left: -8px;
+    width: 300px;
+    padding: 8px 10px;
+    background-color: #141518f8;
     border: 1px #0b0c0e;
     border-top-color: #33383f;
-    border-radius: 0;
     color: #ddd6c4;
-    font-size: 13px;
-    text-align: center;
+    font-size: 12px;
+    text-align: left;
     pointer-events: none;
 }
 
-.weapon-symbol:hover  .weapon-tip { display: block; }   /* hover -> tooltip appears */
-.weapon-symbol:active .weapon-tip { display: none;  }   /* press-to-drag -> tooltip hides */
+.weapon-symbol:hover  .stat-card { display: block; }   /* hover -> card appears */
+.weapon-symbol:active .stat-card { display: none;  }   /* press-to-drag -> card hides */
+
+.card-title {
+    display: block;
+    color: #f2ead6;
+    font-size: 13px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 4px;
+}
+
+.card-rows {
+    display: block;
+    color: #a89a7e;
+    font-size: 11px;
+    white-space: pre;            /* preserve '\n' rows AND the key-column space padding */
+    margin-bottom: 2px;
+}
+
+.card-mode {
+    display: block;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-top: 3px;
+}
+
+.card-mode.on  { color: #e8b45a; }   /* live/primary mode: amber */
+.card-mode.dim { color: #6e6555; }   /* alternate mode: dimmed   */
+
+.card-stats {
+    display: block;
+    font-size: 12px;
+    margin-top: 1px;
+}
+
+.card-stats.on  { color: #ddd6c4; }
+.card-stats.dim { color: #6e6555; }
+
+.card-foot {
+    display: block;
+    color: #a89a7e;
+    font-size: 11px;
+    margin-top: 2px;
+}
+
+.stat-card .rule { margin: 5px 0; }
 
 /* Inspector captions (hint line + ship name under the module sections). */
 .ship-preview-label {
@@ -701,6 +748,7 @@ body {
     text-transform: uppercase;
     letter-spacing: 1px;
     border: 1px #2e333a00;       /* transparent border keeps inactive chips the same size */
+    position: relative;          /* anchor for the hover tooltip */
     pointer-events: auto;        /* clickable doctrine chip */
     transition: color background-color border-color 0.12s quadratic-out;
 }
@@ -715,6 +763,29 @@ body {
     border-color: #c9963f;
     background-color: #2b2415;
 }
+
+/* Doctrine tooltip: plate slab above the chip (same pattern as .weapon-tip). Normal-case
+   body text -- the chip's uppercase/tracking must not leak into a paragraph. */
+.pd-tip {
+    display: none;
+    position: absolute;
+    bottom: 22px;
+    left: 50%;
+    margin-left: -110px;
+    width: 220px;
+    padding: 6px 8px;
+    background-color: #141518f2;
+    border: 1px #0b0c0e;
+    border-top-color: #33383f;
+    color: #ddd6c4;
+    font-size: 12px;
+    text-transform: none;
+    letter-spacing: 0px;
+    text-align: left;
+    pointer-events: none;
+}
+
+.pd-opt:hover .pd-tip { display: block; }
 
 .ship-preview-name {
     display: block;

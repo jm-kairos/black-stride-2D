@@ -1,0 +1,18 @@
+# Small rapid-fire cannon: cheap per shot, capacitor-hungry per second (18/s at full
+# rate vs the gauss's 20/s but with far less alpha). Shines as a flak platform: 12
+# shells/s of proximity screen. Shells are light and easy for enemy PD to burn.
+id          autocannon_mk1
+name        "Autocannon Mk I"
+kind        ballistic
+size        S
+icon        ic-cannon
+damage      6
+fire_rate   12.0
+proj_speed  10000
+proj_life   14
+proj_radius 3.0
+cap_cost    1.5
+emission    0.5
+proj_hp     0.6
+price       250
+tier        1

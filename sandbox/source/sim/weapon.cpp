@@ -18,6 +18,7 @@ BallisticWeapon::BallisticWeapon(const char* name,
     , projectile_radius(radius)
     , projectile_emission(emission)
     , cap_cost_value(4.0f)
+    , proj_hp_value(1.0f)
     , fire_mode(MODE_AP)
     , cooldown_remaining(0.0f)
 {
@@ -49,7 +50,7 @@ void BallisticWeapon::fire(HierPos2 origin, Vec2 direction, Vec2 ship_velocity,
     if (flak) col = bs_color{ 0.82f, 0.85f, 0.88f, 1.0f };   // pale burst-grey tracer
     projectiles->spawn(origin, vel, lifetime,
                        projectile_radius, col, owner_faction, owner_faction_id,
-                       projectile_emission, 1.0f, flak ? PROJ_FLAK : PROJ_SHELL);
+                       projectile_emission, proj_hp_value, flak ? PROJ_FLAK : PROJ_SHELL, damage);
     cooldown_remaining = cooldown_duration;
 }
 void BallisticWeapon::update(f32 dt) {
@@ -102,7 +103,8 @@ void MissileLauncher::fire(HierPos2 origin, Vec2 direction, Vec2 ship_velocity,
     // Exhaust-orange tint distinguishes missiles from cannon shells until bespoke art lands.
     bs_color col = bs_color{ 1.00f, 0.45f, 0.20f, 1.0f };
     projectiles->spawn_missile(origin, vel, missile_lifetime, missile_radius, col,
-                               owner_faction, owner_faction_id, missile_emission, missile_hp);
+                               owner_faction, owner_faction_id, missile_emission, missile_hp,
+                               damage);
     cooldown_remaining = reload_time;
 }
 void MissileLauncher::update(f32 dt) {
@@ -122,30 +124,6 @@ f32 MissileLauncher::cooldown_progress() const {
     return t;
 }
 // ---------------------------------------------------------------------------
-// Factory helpers
+// Instances are built from `.weapon` defs by weapon_instantiate (weapon_def.cpp);
+// the old hardcoded factories are gone.
 // ---------------------------------------------------------------------------
-Weapon* weapon_create_ballistic_cannon(VesselFaction owner) {
-    BallisticWeapon* w = new BallisticWeapon(
-        "Ballistic Cannon",
-        5.0f,      // 5 shots/sec
-        12000.0f,   // 12000 units/s
-        20.0f,     // 20 second lifetime
-        4.0f,      // 4 unit radius
-        0.6f       // 0..1 radiation emission
-    );
-    w->owner_faction = owner;
-    return w;
-}
-Weapon* weapon_create_missile_launcher(VesselFaction owner) {
-    MissileLauncher* w = new MissileLauncher(
-        "Missile Launcher",
-        4.0f,      // 4 s reload per tube
-        3000.0f,   // slow launch (cannon shell = 12000; head-on outrun is possible)
-        12.0f,     // 12 s lifetime, then self-destruct
-        6.0f,      // slightly larger than a shell (visual distinction + PD hit ease)
-        0.9f,      // hot engine: strongly visible to radiation sensors (counterplay)
-        3.5f       // ~0.3 s of standard PD dwell to kill (shell = 1.0)
-    );
-    w->owner_faction = owner;
-    return w;
-}

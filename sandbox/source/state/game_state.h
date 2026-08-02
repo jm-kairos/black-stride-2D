@@ -18,6 +18,8 @@
 
 #include "sim/module.h"
 
+#include "sim/weapon_def.h"
+
 
 
 #include "sim/projectile.h"
@@ -3444,6 +3446,10 @@ struct game_state {
     // ---- Ship module registry (immutable defs loaded once from assets/modules) -------------------
 
     ModuleRegistry   module_registry;         // shared ModuleDef pool; ships mount entries by pointer
+
+    // ---- Weapon def registry (immutable stat blocks loaded once from assets/weapons) -------------
+
+    WeaponRegistry   weapon_registry;         // shared WeaponDef pool; instances built via weapon_instantiate
 
 
 

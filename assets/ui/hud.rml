@@ -91,70 +91,69 @@
     <div id="inspector-btn" data-if="inspector_btn_visible"
          data-event-click="hud_action('toggle_inspector')">Inspector</div>
 
-    <!-- Flagship inspector window (floating, right side; planet-inspector footprint). Vertically
-         stacked loadout editor: inventory sections on top (draggable sources; also unmount drop
-         targets), the ship's hardpoint slots below (drop targets / drag sources). Drag sources
-         also emit 'dragend' so a release over the world can hit-test the cruiser's hardpoint
-         boxes and install directly on the ship (game.cpp). -->
+    <!-- Flagship inspector window (floating, right side; planet-inspector footprint). The single
+         MODULES tab presents all unmounted equipment -- weapons, point-defense, ship modules --
+         as ONE bay grid of draggable tiles, each with a structured hover stat card (type/size/
+         integrity rows, per-mode stat blocks, keybind footer). Drag a tile onto a matching world
+         hardpoint box to mount; drag a mounted item back into the bay well to unmount ('baydrop',
+         routed game-side by dragged kind). Drag sources also emit 'dragend' so a release over the
+         world can hit-test the cruiser's hardpoint boxes and install directly (game.cpp). -->
     <div id="inspector" class="panel" data-if="inspector_visible"
          data-event-dragdrop="hud_action('uidrop')">
         <div class="win-title">FLAGSHIP INSPECTOR<span class="win-close" data-event-click="hud_action('close_inspector')">Collapse</span></div>
         <div class="insp-tabs">
-            <div class="insp-tab active">Arsenal</div>
+            <div class="insp-tab active">Modules</div>
         </div>
         <div class="rule"></div>
-        <div class="insp-section-hdr">Offensive weapons</div>
-        <div class="weapon-queue inv-drop" data-event-dragdrop="hud_action('stash')">
-            <div class="weapon-symbol" data-for="w : arsenal_inv"
-                 data-class-empty="w.empty"
-                 data-event-dragstart="hud_action(w.action)"
-                 data-event-dragend="hud_action('dragend')">
-                <img class="weapon-icon" data-if="w.icon != ''" data-attr-sprite="w.icon"/>
-                <span class="weapon-glyph" data-if="w.icon == ''">{{ w.glyph }}</span>
-                <div class="weapon-tip">{{ w.text }}</div>
-            </div>
-        </div>
-        <div class="insp-section-hdr">Defensive weapons</div>
-        <div class="weapon-queue inv-drop" data-event-dragdrop="hud_action('defstash')">
-            <div class="weapon-symbol def" data-for="w : arsenal_def"
+        <div class="insp-section-hdr">Module bay</div>
+        <div class="weapon-queue inv-drop" data-event-dragdrop="hud_action('baydrop')">
+            <div class="weapon-symbol" data-for="w : bay"
                  data-class-selected="w.selected" data-class-empty="w.empty"
-                 data-event-dragstart="hud_action('defdrag')"
-                 data-event-dragend="hud_action('dragend')">
-                <img class="weapon-icon" data-if="w.icon != ''" data-attr-sprite="w.icon"/>
-                <span class="weapon-glyph" data-if="w.icon == ''">{{ w.glyph }}</span>
-                <div class="weapon-tip">{{ w.text }}</div>
-            </div>
-        </div>
-        <div class="insp-section-hdr">Ship modules</div>
-        <div class="weapon-queue inv-drop" data-event-dragdrop="hud_action('modstash')">
-            <div class="weapon-symbol" data-for="w : arsenal_mod"
-                 data-class-empty="w.empty"
                  data-event-dragstart="hud_action(w.action)"
                  data-event-dragend="hud_action('dragend')">
                 <img class="weapon-icon" data-if="w.icon != ''" data-attr-sprite="w.icon"/>
                 <span class="weapon-glyph" data-if="w.icon == ''">{{ w.glyph }}</span>
-                <div class="weapon-tip">{{ w.text }}</div>
+                <div class="stat-card" data-if="w.card_title != ''">
+                    <div class="card-title">{{ w.card_title }}</div>
+                    <div class="card-rows">{{ w.card_rows }}</div>
+                    <div class="rule"></div>
+                    <div class="card-mode on">{{ w.card_mode_a }}</div>
+                    <div class="card-stats on" data-if="w.card_mode_a_stats != ''">{{ w.card_mode_a_stats }}</div>
+                    <div class="card-mode dim" data-if="w.card_mode_b != ''">{{ w.card_mode_b }}</div>
+                    <div class="card-stats dim" data-if="w.card_mode_b != ''">{{ w.card_mode_b_stats }}</div>
+                    <div class="rule" data-if="w.card_foot != ''"></div>
+                    <div class="card-foot" data-if="w.card_foot != ''">{{ w.card_foot }}</div>
+                </div>
             </div>
         </div>
         <div class="insp-section-hdr" data-if="pd_visible">Point defense</div>
         <div class="pd-doctrine" data-if="pd_visible">
             <div class="pd-row">
                 <span class="pd-lbl">Stance</span>
-                <span class="pd-opt" data-class-active="pd_stance == 0" data-event-click="hud_action('pd:stance:0')">Hold</span>
-                <span class="pd-opt" data-class-active="pd_stance == 1" data-event-click="hud_action('pd:stance:1')">Standard</span>
-                <span class="pd-opt" data-class-active="pd_stance == 2" data-event-click="hud_action('pd:stance:2')">Overdrive</span>
+                <span class="pd-opt" data-class-active="pd_stance == 0" data-event-click="hud_action('pd:stance:0')">Hold
+                    <div class="pd-tip">Laser offline. Drains no energy &#8212; and stops nothing. Stay dark, or bank every drop of capacitor for the guns. Hotkey P cycles stance.</div></span>
+                <span class="pd-opt" data-class-active="pd_stance == 1" data-event-click="hud_action('pd:stance:1')">Standard
+                    <div class="pd-tip">Balanced auto-fire. Steady beam damage at a drain the reactor can almost sustain. The default watch setting.</div></span>
+                <span class="pd-opt" data-class-active="pd_stance == 2" data-event-click="hud_action('pd:stance:2')">Overdrive
+                    <div class="pd-tip">Double beam damage, triple energy drain, faster retargeting. Empties a full capacitor in seconds &#8212; switch on when a salvo is inbound, off when it passes.</div></span>
             </div>
             <div class="pd-row">
                 <span class="pd-lbl">Priority</span>
-                <span class="pd-opt" data-class-active="pd_priority == 0" data-event-click="hud_action('pd:pri:0')">Impact time</span>
-                <span class="pd-opt" data-class-active="pd_priority == 1" data-event-click="hud_action('pd:pri:1')">Missiles first</span>
-                <span class="pd-opt" data-class-active="pd_priority == 2" data-event-click="hud_action('pd:pri:2')">Nearest</span>
+                <span class="pd-opt" data-class-active="pd_priority == 0" data-event-click="hud_action('pd:pri:0')">Impact time
+                    <div class="pd-tip">Burn whatever will hit this ship soonest, missile or shell. The best all-round choice against mixed incoming fire.</div></span>
+                <span class="pd-opt" data-class-active="pd_priority == 1" data-event-click="hud_action('pd:pri:1')">Missiles first
+                    <div class="pd-tip">Always target missiles before cannon shells, even distant ones. Choose this when missiles are the real killer and stray shells can be absorbed.</div></span>
+                <span class="pd-opt" data-class-active="pd_priority == 2" data-event-click="hud_action('pd:pri:2')">Nearest
+                    <div class="pd-tip">Shoot the closest threat, nothing fancier. Predictable &#8212; but easily distracted by harmless near-misses that were never going to hit.</div></span>
             </div>
             <div class="pd-row">
                 <span class="pd-lbl">Gate</span>
-                <span class="pd-opt" data-class-active="pd_gate == 0" data-event-click="hud_action('pd:gate:0')">Near 60%</span>
-                <span class="pd-opt" data-class-active="pd_gate == 1" data-event-click="hud_action('pd:gate:1')">Mid 80%</span>
-                <span class="pd-opt" data-class-active="pd_gate == 2" data-event-click="hud_action('pd:gate:2')">Full 100%</span>
+                <span class="pd-opt" data-class-active="pd_gate == 0" data-event-click="hud_action('pd:gate:0')">Near 60%
+                    <div class="pd-tip">Hold fire until threats are deep inside range. Wastes no energy on targets that might still miss or turn away &#8212; but leaves no margin if the beam fails to kill.</div></span>
+                <span class="pd-opt" data-class-active="pd_gate == 1" data-event-click="hud_action('pd:gate:1')">Mid 80%
+                    <div class="pd-tip">A working compromise: earlier engagement than NEAR without chasing everything at the edge of range.</div></span>
+                <span class="pd-opt" data-class-active="pd_gate == 2" data-event-click="hud_action('pd:gate:2')">Full 100%
+                    <div class="pd-tip">Engage at maximum laser range. Longest time on target and a second chance at leakers &#8212; at the cost of energy spent on threats that might never have connected.</div></span>
             </div>
         </div>
         <div class="insp-section-hdr" data-if="gm_visible">Fire groups</div>
@@ -169,7 +168,7 @@
                      data-event-click="hud_action(cl.action)"><span data-if="cl.on">X</span></div>
             </div>
         </div>
-        <div class="ship-preview-label">Drag onto the ship to mount - drag a mounted item off the ship to unmount - check a Fire groups box to assign that weapon to that key</div>
+        <div class="ship-preview-label">Hover a tile for its stat card - drag onto the ship to mount - drag a mounted item back into the bay to unmount - check a Fire groups box to assign that weapon to that key</div>
         <div class="ship-preview-name">{{ insp_ship_name }}</div>
     </div>
 

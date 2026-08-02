@@ -1,0 +1,17 @@
+# Baseline medium cannon (the former hardcoded "Ballistic Cannon").
+# Damage-per-capacitor ~3.75: the reference point the rest of the catalog is tuned against.
+id          gauss_mk1
+name        "Gauss Cannon Mk I"
+kind        ballistic
+size        M
+icon        ic-cannon
+damage      15
+fire_rate   5.0
+proj_speed  12000
+proj_life   20
+proj_radius 4.0
+cap_cost    4
+emission    0.6
+proj_hp     1.0
+price       400
+tier        1

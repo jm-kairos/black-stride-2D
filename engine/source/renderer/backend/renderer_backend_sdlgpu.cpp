@@ -4254,16 +4254,11 @@ struct BsRmlHudDisc
     Rml::String color;
 };
 
-// A repeated fleet-ship weapon row, exposed to RML as { text, glyph, icon, action, selected,
-// empty }. `glyph` is the fallback text symbol shown in the Arsenal drag-queue when `icon` is
-// empty; `icon` names a ui-icons sprite (emblem stencil) rendered instead when set.
+// A fleet-panel fire-group row, exposed to RML as { text, action, selected, empty }.
 struct BsRmlHudWeapon
 {
     Rml::String text;
-    Rml::String glyph;
-    Rml::String icon;
     Rml::String action;
-    Rml::String drop;
     bool        selected = false;
     bool        empty    = false;
 };
@@ -4274,6 +4269,23 @@ struct BsRmlHudGmCell
 {
     Rml::String action;
     bool        on = false;
+};
+
+// One Modules-bay tile + its structured hover stat card (see bs_rml_bay_line).
+struct BsRmlHudBay
+{
+    Rml::String glyph;
+    Rml::String icon;
+    Rml::String action;
+    bool        selected = false;
+    bool        empty    = false;
+    Rml::String card_title;
+    Rml::String card_rows;
+    Rml::String card_mode_a;
+    Rml::String card_mode_a_stats;
+    Rml::String card_mode_b;
+    Rml::String card_mode_b_stats;
+    Rml::String card_foot;
 };
 
 struct BsRmlHudGmRow
@@ -4329,9 +4341,7 @@ struct BsRmlHudModel
     bool                        inspector_btn_visible = false;
     bool                        inspector_visible = false;
     Rml::String                 insp_ship_name;
-    Rml::Vector<BsRmlHudWeapon> arsenal_inv;
-    Rml::Vector<BsRmlHudWeapon> arsenal_def;
-    Rml::Vector<BsRmlHudWeapon> arsenal_mod;
+    Rml::Vector<BsRmlHudBay>    bay;      // unified Modules-bay tiles (weapons + PD + modules)
 
     Rml::Vector<Rml::String>    gm_col;   // fire-group matrix column headers (mounted weapons)
     Rml::Vector<BsRmlHudGmRow>  gm_row;   // fire-group matrix rows (groups 1..5)
@@ -4425,14 +4435,28 @@ b8 bs_rml_hud_init(const char* rml_path)
     if (auto h = c.RegisterStruct<BsRmlHudWeapon>())
     {
         h.RegisterMember("text",     &BsRmlHudWeapon::text);
-        h.RegisterMember("glyph",    &BsRmlHudWeapon::glyph);
-        h.RegisterMember("icon",     &BsRmlHudWeapon::icon);
         h.RegisterMember("action",   &BsRmlHudWeapon::action);
-        h.RegisterMember("drop",     &BsRmlHudWeapon::drop);
         h.RegisterMember("selected", &BsRmlHudWeapon::selected);
         h.RegisterMember("empty",    &BsRmlHudWeapon::empty);
     }
     c.RegisterArray<Rml::Vector<BsRmlHudWeapon>>();
+
+    if (auto h = c.RegisterStruct<BsRmlHudBay>())
+    {
+        h.RegisterMember("glyph",             &BsRmlHudBay::glyph);
+        h.RegisterMember("icon",              &BsRmlHudBay::icon);
+        h.RegisterMember("action",            &BsRmlHudBay::action);
+        h.RegisterMember("selected",          &BsRmlHudBay::selected);
+        h.RegisterMember("empty",             &BsRmlHudBay::empty);
+        h.RegisterMember("card_title",        &BsRmlHudBay::card_title);
+        h.RegisterMember("card_rows",         &BsRmlHudBay::card_rows);
+        h.RegisterMember("card_mode_a",       &BsRmlHudBay::card_mode_a);
+        h.RegisterMember("card_mode_a_stats", &BsRmlHudBay::card_mode_a_stats);
+        h.RegisterMember("card_mode_b",       &BsRmlHudBay::card_mode_b);
+        h.RegisterMember("card_mode_b_stats", &BsRmlHudBay::card_mode_b_stats);
+        h.RegisterMember("card_foot",         &BsRmlHudBay::card_foot);
+    }
+    c.RegisterArray<Rml::Vector<BsRmlHudBay>>();
 
     if (auto h = c.RegisterStruct<BsRmlHudGmCell>())
     {
@@ -4504,9 +4528,7 @@ b8 bs_rml_hud_init(const char* rml_path)
     c.Bind("inspector_btn_visible", &g_hud_model.inspector_btn_visible);
     c.Bind("inspector_visible",     &g_hud_model.inspector_visible);
     c.Bind("insp_ship_name",        &g_hud_model.insp_ship_name);
-    c.Bind("arsenal_inv",           &g_hud_model.arsenal_inv);
-    c.Bind("arsenal_def",           &g_hud_model.arsenal_def);
-    c.Bind("arsenal_mod",           &g_hud_model.arsenal_mod);
+    c.Bind("bay",                   &g_hud_model.bay);
     c.Bind("gm_col",                &g_hud_model.gm_col);
     c.Bind("gm_row",                &g_hud_model.gm_row);
     c.Bind("gm_visible",            &g_hud_model.gm_visible);
@@ -4678,66 +4700,26 @@ void bs_rml_hud_update(const bs_rml_hud_state* s)
     g_hud_model.inspector_visible     = s->inspector_visible ? true : false;
     bs_rml_assign(g_hud_model.insp_ship_name, s->insp_ship_name, sizeof(s->insp_ship_name));
     {
-        i32 n = s->arsenal_inv_count;
+        i32 n = s->bay_count;
         if (n < 0) n = 0;
-        if (n > BS_RML_WEAPON_MAX) n = BS_RML_WEAPON_MAX;
-        g_hud_model.arsenal_inv.resize((size_t)n);
+        if (n > BS_RML_BAY_MAX) n = BS_RML_BAY_MAX;
+        g_hud_model.bay.resize((size_t)n);
         for (i32 i = 0; i < n; ++i)
         {
-            bs_rml_assign(g_hud_model.arsenal_inv[(size_t)i].text, s->arsenal_inv[i].text,
-                          sizeof(s->arsenal_inv[i].text));
-            bs_rml_assign(g_hud_model.arsenal_inv[(size_t)i].glyph, s->arsenal_inv[i].glyph,
-                          sizeof(s->arsenal_inv[i].glyph));
-            bs_rml_assign(g_hud_model.arsenal_inv[(size_t)i].icon, s->arsenal_inv[i].icon,
-                          sizeof(s->arsenal_inv[i].icon));
-            bs_rml_assign(g_hud_model.arsenal_inv[(size_t)i].action, s->arsenal_inv[i].action,
-                          sizeof(s->arsenal_inv[i].action));
-            bs_rml_assign(g_hud_model.arsenal_inv[(size_t)i].drop, s->arsenal_inv[i].drop,
-                          sizeof(s->arsenal_inv[i].drop));
-            g_hud_model.arsenal_inv[(size_t)i].selected = s->arsenal_inv[i].selected ? true : false;
-            g_hud_model.arsenal_inv[(size_t)i].empty    = s->arsenal_inv[i].empty ? true : false;
-        }
-    }
-    {
-        i32 n = s->arsenal_def_count;
-        if (n < 0) n = 0;
-        if (n > BS_RML_WEAPON_MAX) n = BS_RML_WEAPON_MAX;
-        g_hud_model.arsenal_def.resize((size_t)n);
-        for (i32 i = 0; i < n; ++i)
-        {
-            bs_rml_assign(g_hud_model.arsenal_def[(size_t)i].text, s->arsenal_def[i].text,
-                          sizeof(s->arsenal_def[i].text));
-            bs_rml_assign(g_hud_model.arsenal_def[(size_t)i].glyph, s->arsenal_def[i].glyph,
-                          sizeof(s->arsenal_def[i].glyph));
-            bs_rml_assign(g_hud_model.arsenal_def[(size_t)i].icon, s->arsenal_def[i].icon,
-                          sizeof(s->arsenal_def[i].icon));
-            bs_rml_assign(g_hud_model.arsenal_def[(size_t)i].action, s->arsenal_def[i].action,
-                          sizeof(s->arsenal_def[i].action));
-            bs_rml_assign(g_hud_model.arsenal_def[(size_t)i].drop, s->arsenal_def[i].drop,
-                          sizeof(s->arsenal_def[i].drop));
-            g_hud_model.arsenal_def[(size_t)i].selected = s->arsenal_def[i].selected ? true : false;
-            g_hud_model.arsenal_def[(size_t)i].empty    = s->arsenal_def[i].empty ? true : false;
-        }
-    }
-    {
-        i32 n = s->arsenal_mod_count;
-        if (n < 0) n = 0;
-        if (n > BS_RML_WEAPON_MAX) n = BS_RML_WEAPON_MAX;
-        g_hud_model.arsenal_mod.resize((size_t)n);
-        for (i32 i = 0; i < n; ++i)
-        {
-            bs_rml_assign(g_hud_model.arsenal_mod[(size_t)i].text, s->arsenal_mod[i].text,
-                          sizeof(s->arsenal_mod[i].text));
-            bs_rml_assign(g_hud_model.arsenal_mod[(size_t)i].glyph, s->arsenal_mod[i].glyph,
-                          sizeof(s->arsenal_mod[i].glyph));
-            bs_rml_assign(g_hud_model.arsenal_mod[(size_t)i].icon, s->arsenal_mod[i].icon,
-                          sizeof(s->arsenal_mod[i].icon));
-            bs_rml_assign(g_hud_model.arsenal_mod[(size_t)i].action, s->arsenal_mod[i].action,
-                          sizeof(s->arsenal_mod[i].action));
-            bs_rml_assign(g_hud_model.arsenal_mod[(size_t)i].drop, s->arsenal_mod[i].drop,
-                          sizeof(s->arsenal_mod[i].drop));
-            g_hud_model.arsenal_mod[(size_t)i].selected = s->arsenal_mod[i].selected ? true : false;
-            g_hud_model.arsenal_mod[(size_t)i].empty    = s->arsenal_mod[i].empty ? true : false;
+            const bs_rml_bay_line& src = s->bay[i];
+            BsRmlHudBay&           dst = g_hud_model.bay[(size_t)i];
+            bs_rml_assign(dst.glyph,             src.glyph,             sizeof(src.glyph));
+            bs_rml_assign(dst.icon,              src.icon,              sizeof(src.icon));
+            bs_rml_assign(dst.action,            src.action,            sizeof(src.action));
+            dst.selected = src.selected ? true : false;
+            dst.empty    = src.empty ? true : false;
+            bs_rml_assign(dst.card_title,        src.card_title,        sizeof(src.card_title));
+            bs_rml_assign(dst.card_rows,         src.card_rows,         sizeof(src.card_rows));
+            bs_rml_assign(dst.card_mode_a,       src.card_mode_a,       sizeof(src.card_mode_a));
+            bs_rml_assign(dst.card_mode_a_stats, src.card_mode_a_stats, sizeof(src.card_mode_a_stats));
+            bs_rml_assign(dst.card_mode_b,       src.card_mode_b,       sizeof(src.card_mode_b));
+            bs_rml_assign(dst.card_mode_b_stats, src.card_mode_b_stats, sizeof(src.card_mode_b_stats));
+            bs_rml_assign(dst.card_foot,         src.card_foot,         sizeof(src.card_foot));
         }
     }
     {
