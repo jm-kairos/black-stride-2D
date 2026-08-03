@@ -64,8 +64,13 @@ struct AiProfile {
 const AiProfile& ai_profile(u8 archetype);
 
 // Lifecycle / per-frame.
-void ai_ships_init(game_state* s);                 // load the hull template, clear the pool
-void ai_ships_shutdown(game_state* s);             // release the shared per-archetype weapons
+void ai_ships_init(game_state* s);                 // load the hull templates + archetype weapons,
+                                                   // clear the pool. Owns the shared per-archetype
+                                                   // Weapon instances and releases any previous set
+                                                   // on every call, so repeated inits (new galaxy,
+                                                   // restart) never accumulate. The engine's Game
+                                                   // struct exposes no shutdown hook, so this
+                                                   // idempotent re-init IS the release path.
 void ai_ships_update(game_state* s, f32 dt);        // population manager + perceive/think/steer/fire
 void ai_ships_register_combat(game_state* s);       // rebuild the NPC window in combat_entities[]
 

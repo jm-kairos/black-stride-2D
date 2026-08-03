@@ -1343,6 +1343,19 @@ struct ShipMission {
     b8   raid_engaged;         // Phase 5/7: raid reached its target WHILE THE PLAYER IS THERE -- abstract
                                // resolution is suspended so the live hulls fight it out on screen
 
+    f32  stall_hours;          // Watchdog: game-hours this mission has waited on a live agent WITHOUT
+                               // MAKING PROGRESS. The macro tier hands its current leg or dock stage
+                               // to a materialised hull and waits on local_ready; if that hull is
+                               // pinned in combat, culled mid-handshake, or otherwise unable to
+                               // finish, the mission would wait forever. Measuring progress rather
+                               // than raw elapsed time matters because the two tiers move at very
+                               // different speeds -- a dock approach runs at the hull's own
+                               // max_speed, orders of magnitude below the macro leg speed, so a
+                               // pure timeout would fire on perfectly healthy approaches.
+
+    f32  stall_ref;            // Last measured distance to the current stage target; progress is
+                               // "this got meaningfully smaller".
+
 
 
     i32  ship_slot;       // bound live NpcShip pool index while docked in the player's system (-1 = none)
@@ -1806,6 +1819,13 @@ struct NpcShip {
     i16           wing_leader;
 
     u8            wing_slot;
+
+    // Identity token of the leader at the moment the wing was formed. Pool slots are RECYCLED by
+    // spawn_npc, so a bare index is not a safe reference: if a leader is culled and an unrelated
+    // ship is later spawned into its slot, its wingmen would silently fly formation on a stranger
+    // (potentially a hostile). Validating this against the leader's spawn_seed makes the reference
+    // exact and self-healing.
+    u64           wing_leader_seed;
 
 
 

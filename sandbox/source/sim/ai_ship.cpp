@@ -110,7 +110,14 @@ static bs_color faction_tint(const game_state* s, i16 faction) {
 
 
 
-// ---- Phase 7: per-archetype hulls + weapons ------------------------------------------------
+// Ordnance budget for NPC fire. The projectile pool is a shared first-free-slot allocator that
+// silently drops spawns when full, so without a reservation a large NPC engagement would fill it
+// and the PLAYER's weapons would stop working -- a hard player-facing failure. NPC fire is capped
+// below the pool ceiling, leaving the remainder permanently available to the player. NPCs degrade
+// gracefully (a shell is skipped, the cooldown still runs, no state is corrupted).
+static const i32 NPC_PROJECTILE_BUDGET = (MAX_PROJECTILES * 3) / 4;
+
+// Phase 7: per-archetype hulls + weapons ------------------------------------------------------
 
 // Hulls are DATA: each archetype names a .ship file, so a new ship kind is a new asset plus one
 
@@ -306,19 +313,6 @@ void ai_ships_init(game_state* s) {
 
 
 
-void ai_ships_shutdown(game_state* s) {
-    (void)s;
-
-    for (i32 a = 0; a < ARCHETYPE_COUNT; ++a) {
-
-        delete g_npc_weapons[a];
-
-        g_npc_weapons[a] = nullptr;
-
-    }
-
-}
-
 
 
 // Spawn one agent at an explicit world position, tagged to `faction`, with the given archetype. Its
@@ -382,6 +376,7 @@ static i32 spawn_npc(game_state* s, i16 faction, HierPos2 pos, i32 home_node, u8
     n.sense_countdown = (i16)(slot % AI_SENSE_INTERVAL);   // stagger the first scan across the pool
     n.wing_leader   = -1;                                  // independent until a wing is assigned
     n.wing_slot     = 0;
+    n.wing_leader_seed = 0;
 
     n.home      = pos;                        // loiter / return anchor = local spawn point
 
@@ -505,6 +500,34 @@ static Vec2 wing_slot_offset(u8 slot) {
 
 
 
+// Resolve a wingman's leader, or -1 if the wing no longer exists. Pool slots are recycled, so a
+// bare index can silently come to point at an unrelated ship; the stored identity token makes the
+// reference exact. Any failure DETACHES the wingman (it becomes an independent agent) rather than
+// leaving it chasing a stranger -- a fail-safe, not an error state.
+static i32 wing_resolve_leader(game_state* s, NpcShip& n) {
+
+    if (n.wing_leader < 0) return -1;
+
+    if (n.wing_leader >= NPC_SHIP_MAX) { n.wing_leader = -1; return -1; }
+
+    NpcShip& L = s->npc_ships[n.wing_leader];
+
+    b8 ok = L.active
+
+            && L.spawn_seed == n.wing_leader_seed   // same ship, not a recycled slot
+
+            && L.wing_leader < 0                    // leaders never nest (no wing chains)
+
+            && L.faction == n.faction;              // never form up on another faction
+
+    if (!ok) { n.wing_leader = -1; n.wing_leader_seed = 0; n.wing_slot = 0; return -1; }
+
+    return n.wing_leader;
+
+}
+
+
+
 // Group a just-spawned set of combat hulls into wings of three.
 
 static void assign_wings(game_state* s, const i32* slots, i32 count) {
@@ -515,19 +538,23 @@ static void assign_wings(game_state* s, const i32* slots, i32 count) {
 
         if (lead < 0) continue;
 
-        s->npc_ships[lead].wing_leader = -1;
+        s->npc_ships[lead].wing_leader      = -1;
 
-        s->npc_ships[lead].wing_slot   = 0;
+        s->npc_ships[lead].wing_slot        = 0;
+
+        s->npc_ships[lead].wing_leader_seed = 0;
 
         for (i32 k = 1; k < 3 && (i + k) < count; ++k) {
 
             i32 w = slots[i + k];
 
-            if (w < 0) continue;
+            if (w < 0 || w == lead) continue;
 
-            s->npc_ships[w].wing_leader = (i16)lead;
+            s->npc_ships[w].wing_leader      = (i16)lead;
 
-            s->npc_ships[w].wing_slot   = (u8)k;
+            s->npc_ships[w].wing_slot        = (u8)k;
+
+            s->npc_ships[w].wing_leader_seed = s->npc_ships[lead].spawn_seed;
 
         }
 
@@ -984,6 +1011,8 @@ static void ai_ships_sync_missions(game_state* s) {
 
             m.ship_slot   = slot;
 
+            m.stall_hours = 0.0f; m.stall_ref = 0.0f;   // fresh binding: full watchdog budget
+
             // Phase 10: a military column of strength N arrives as a WING, not a lone hull. The
             // mission-bound leader keeps the macro binding; its escorts fly the triangle as
             // ordinary wingmen (no mission of their own), so the abstract strength number finally
@@ -1002,9 +1031,11 @@ static void ai_ships_sync_missions(game_state* s) {
 
                     if (ws < 0) break;
 
-                    s->npc_ships[ws].wing_leader = (i16)slot;
+                    s->npc_ships[ws].wing_leader      = (i16)slot;
 
-                    s->npc_ships[ws].wing_slot   = (u8)(w + 1);
+                    s->npc_ships[ws].wing_slot        = (u8)(w + 1);
+
+                    s->npc_ships[ws].wing_leader_seed = s->npc_ships[slot].spawn_seed;
 
                 }
 
@@ -1051,6 +1082,8 @@ static void ai_ships_sync_missions(game_state* s) {
 
         m.ship_slot = best;
 
+        m.stall_hours = 0.0f; m.stall_ref = 0.0f;   // fresh binding: full watchdog budget
+
         BS_LOG_INFO("ShipAI trade: contract %d picked up by trader %d (station %d)", mi, best, m.station_id);
 
     }
@@ -1073,14 +1106,40 @@ static void ai_sense(game_state* s, NpcShip& n, i32 self) {
 
     const AiProfile& p = ai_profile(n.archetype);
 
-    // Staggered by slot so the cost spreads evenly instead of spiking on one frame.
+    const f32 range2 = p.sensor_range * p.sensor_range;
+
+    // combat_entities[] is REBUILT and re-packed every frame, so a cached index is only meaningful
+    // while it still resolves to a valid hostile: when any agent dies every later index shifts. A
+    // cached target is therefore re-validated (alive, not self, still hostile, still in range)
+    // rather than trusted. Validation is O(1); only a failed validation pays for a full rescan, so
+    // the staggered cadence keeps its cost saving without ever acting on a stale contact.
     if (n.sense_countdown > 0) {
 
         --n.sense_countdown;
 
-        // Validate the cached target cheaply; a stale/destroyed one falls through to a full scan.
-        if (n.target_ce >= 0 && n.target_ce < s->combat_entity_count &&
-            s->combat_entities[n.target_ce].active) return;
+        if (n.target_ce >= 0 && n.target_ce < s->combat_entity_count) {
+
+            const CombatEntity& ce = s->combat_entities[n.target_ce];
+
+            if (ce.active && !(ce.is_npc && ce.npc_index == self) &&
+
+                galaxy_history_factions_hostile(s, n.faction, ce.faction_id)) {
+
+                Vec2 to = hierpos_diff(&ce.position, &n.ship.origin, BS_HIERPOS_CELL_SIZE);
+
+                if (to.x * to.x + to.y * to.y <= range2) {
+
+                    n.last_seen = ce.position;
+
+                    return;                                  // cached contact still holds
+
+                }
+
+            }
+
+        }
+
+        // Stale or invalid: fall through and rescan now rather than act on bad data.
 
     }
 
@@ -1088,7 +1147,7 @@ static void ai_sense(game_state* s, NpcShip& n, i32 self) {
 
     n.target_ce = -1;
 
-    f32 best_d2 = p.sensor_range * p.sensor_range;
+    f32 best_d2 = range2;
 
     i32 best = -1;
 
@@ -1422,6 +1481,9 @@ static void ai_trader_tick(game_state* s, NpcShip& n, f32 dt) {
 
                         p.accel, p.max_speed, p.turn_rate, dt);
 
+        m.pos = sh->origin;   // mirror the hull: keeps the map pip honest AND lets the macro
+                              // watchdog see that this approach is making progress
+
     } else {
 
         if (n.state != AI_TRADE_DOCKED) { n.state = AI_TRADE_DOCKED; n.state_timer = 0.0f; }
@@ -1752,7 +1814,10 @@ static b8 ai_mission_warship_tick(game_state* s, NpcShip& n, i32 self, f32 dt) {
 
     ShipMission& m = g.missions[n.mission_id];
 
-    ai_sense(s, n, self);
+    // Perception already ran for this agent this frame (single perception point in ai_ship_tick),
+    // so the cached contact is authoritative here: ai_sense guarantees target_ce is either -1 or a
+    // live, in-range hostile.
+    (void)self;
 
     if (n.target_ce >= 0) {
 
@@ -1790,6 +1855,13 @@ static void ai_ship_tick(game_state* s, NpcShip& n, i32 self, f32 dt) {
 
 
 
+    // Resolve (and self-heal) this agent's wing before anything reads it. A detached wingman simply
+    // reverts to independent behaviour, so a culled or recycled leader can never strand a wing.
+    i32 wing_lead = wing_resolve_leader(s, n);
+
+    // Wingmen are anchored to their leader rather than to their spawn point, so the loiter leash
+    // must not apply to them (see the leash note below).
+
     // Civilian miners run their own work loop (no combat pursuit).
 
     if (n.archetype == ARCHETYPE_MINER) { ai_miner_tick(s, n, dt); return; }
@@ -1804,6 +1876,15 @@ static void ai_ship_tick(game_state* s, NpcShip& n, i32 self, f32 dt) {
 
     if (n.archetype == ARCHETYPE_TRADER && ai_ambient_trader_tick(s, n, dt)) return;
 
+    // Single perception point for every combat-capable hull, BEFORE any dispatch that consumes a
+    // contact. Sensing once per frame keeps the staggered cadence honest (it was previously run
+    // twice for mission-bound combatants, halving it) and guarantees every consumer below reads
+    // the same, freshly validated contact. Weapon cooldown ticks here too: mission hulls used to
+    // return before the decrement and so carried a stale cooldown into their next engagement.
+    if (n.fire_cd > 0.0f) n.fire_cd -= dt;
+
+    ai_sense(s, n, self);
+
     // Mission-bound combatants (Phase 4/5) fly their leg unless there is something to fight.
 
     if ((n.archetype == ARCHETYPE_WARSHIP || n.archetype == ARCHETYPE_PIRATE) &&
@@ -1813,12 +1894,6 @@ static void ai_ship_tick(game_state* s, NpcShip& n, i32 self, f32 dt) {
 
 
     n.state_timer += dt;
-
-    if (n.fire_cd > 0.0f) n.fire_cd -= dt;
-
-
-
-    ai_sense(s, n, self);
 
 
 
@@ -1869,7 +1944,7 @@ static void ai_ship_tick(game_state* s, NpcShip& n, i32 self, f32 dt) {
     // would drag it backwards -- and because the leash is tested before everything else, it would
     // refuse to fight at all (the ship yo-yos: retreat while a hostile is in range, resume the leg
     // when it drops out, retreat again). Garrison and ambient agents keep their leash.
-    b8 leashed = (n.mission_id < 0) && (n.wing_leader < 0) && (home_dist > p.leash_range);
+    b8 leashed = (n.mission_id < 0) && (wing_lead < 0) && (home_dist > p.leash_range);
 
     if (have_target) { n.last_contact = s->combat_entities[n.target_ce].position; n.contact_timer = AI_INVESTIGATE_HOLD; }
 
@@ -1946,12 +2021,11 @@ static void ai_ship_tick(game_state* s, NpcShip& n, i32 self, f32 dt) {
             // Phase 10: a wingman holds its slot on the leader instead of running its own loiter.
             // Formation is a CRUISE behaviour only -- PURSUE/ATTACK/EVADE are separate states, so
             // engaging automatically breaks the wing and disengaging reforms it.
-            if (n.wing_leader >= 0 && n.wing_leader < NPC_SHIP_MAX) {
+            if (wing_lead >= 0) {
 
-                const NpcShip& L = s->npc_ships[n.wing_leader];
+                const NpcShip& L = s->npc_ships[wing_lead];
 
-                if (L.active) {
-
+                {
                     Vec2     off      = vec2_rotate(wing_slot_offset(n.wing_slot), L.ship.angle);
 
                     HierPos2 slot_pos = hierpos_add_vec2(&L.ship.origin, off);
@@ -1967,7 +2041,16 @@ static void ai_ship_tick(game_state* s, NpcShip& n, i32 self, f32 dt) {
 
                     f32 wacc     = (p.accel > 0.0f ? p.accel : 500.0f) * (1.0f + lead_spd / (p.max_speed > 1.0f ? p.max_speed : 1.0f));
 
-                    steering::apply(sh, fl, steering::arrive(to_slot, wspd, WING_SPACING * 1.5f),
+                    // Ease down over the distance this hull actually needs to shed that speed. A
+                    // fixed slow radius is fine at combat speeds but is dwarfed by the stopping
+                    // distance when matching a leader at macro speed, which would make wingmen
+                    // overshoot their slot and oscillate around it -- the same failure the mission
+                    // legs originally had.
+                    f32 slow_r = (wacc > 1.0f) ? (wspd * wspd) / (2.0f * wacc) * 1.5f : WING_SPACING;
+
+                    if (slow_r < WING_SPACING * 1.5f) slow_r = WING_SPACING * 1.5f;
+
+                    steering::apply(sh, fl, steering::arrive(to_slot, wspd, slow_r),
 
                                     wacc, wspd, p.turn_rate, dt);
 
@@ -2052,7 +2135,13 @@ static void ai_ship_tick(game_state* s, NpcShip& n, i32 self, f32 dt) {
                     // internal cooldown is cleared first (update with a large dt).
                     Weapon* w2 = w;
 
-                    if (w2) {
+                    if (s->projectiles.count >= NPC_PROJECTILE_BUDGET) {
+
+                        // Pool reserved for the player: skip the shell, still spend the cooldown so
+                        // this branch cannot spin every frame while the pool is saturated.
+                        n.fire_cd = p.fire_period;
+
+                    } else if (w2) {
 
                         w2->owner_faction    = VESSEL_PIRATE;
 
@@ -2244,10 +2333,14 @@ void ai_ship_damage(game_state* s, i32 npc_index, f32 dmg, i16 attacker_faction)
         n.active = FALSE;
 
         // Phase 10: a dead leader does not strand its wing. Promote the first surviving wingman
-        // and re-slot the rest onto it, so the formation closes up instead of scattering.
+        // and re-slot the rest onto it. Slots are assigned DISTINCTLY (they previously all became
+        // slot 1, stacking survivors on one point and making them fight for the same space), and
+        // the promoted leader's identity token is propagated so the reference stays exact.
         {
 
             i32 new_lead = -1;
+
+            u8  next_slot = 1;
 
             for (i32 i = 0; i < NPC_SHIP_MAX; ++i) {
 
@@ -2255,9 +2348,27 @@ void ai_ship_damage(game_state* s, i32 npc_index, f32 dmg, i16 attacker_faction)
 
                 if (!w.active || w.wing_leader != (i16)npc_index) continue;
 
-                if (new_lead < 0) { new_lead = i; w.wing_leader = -1; w.wing_slot = 0; }
+                if (w.wing_leader_seed != n.spawn_seed) continue;   // not actually this wing
 
-                else              { w.wing_leader = (i16)new_lead; w.wing_slot = 1; }
+                if (new_lead < 0) {
+
+                    new_lead = i;
+
+                    w.wing_leader = -1; w.wing_slot = 0; w.wing_leader_seed = 0;
+
+                } else if (next_slot <= 2) {
+
+                    w.wing_leader      = (i16)new_lead;
+
+                    w.wing_slot        = next_slot++;
+
+                    w.wing_leader_seed = s->npc_ships[new_lead].spawn_seed;
+
+                } else {
+
+                    w.wing_leader = -1; w.wing_slot = 0; w.wing_leader_seed = 0;   // wing is full
+
+                }
 
             }
 

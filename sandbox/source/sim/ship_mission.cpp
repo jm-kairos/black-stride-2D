@@ -70,6 +70,46 @@ static const f32 TRADE_DWELL_HOURS = 18.0f;
 
 static const f32 STATION_CONTRACT_COOLDOWN = 60.0f;
 
+// Watchdog budget: how many game-hours a mission may wait on the LOCAL tier WITHOUT MAKING
+// PROGRESS before the macro tier takes its stage back. The two tiers hand stages to each other via
+// `local_ready`; if a materialised hull is pinned in combat, culled mid-handshake, or a hub never
+// frees a trader, the mission would wait forever. The budget is measured against progress (see
+// mission_stall_check) rather than raw elapsed time, because a dock approach legitimately runs at
+// the hull's own max_speed -- orders of magnitude below the macro leg speed -- and a pure timeout
+// fired constantly on healthy approaches.
+
+static const f32 MISSION_STALL_HOURS = 120.0f;
+
+// Distance a bound hull must close on its stage target to count as progress (world units). Well
+// above per-frame jitter, well below any real approach.
+
+static const f32 MISSION_PROGRESS_EPS = 250.0f;
+
+// Advance the stall watchdog for a mission whose current stage is owned by a live hull. `target` is
+// the point that hull is trying to reach. Returns TRUE when the mission has waited out its budget
+// without closing on the target, i.e. the local tier is genuinely wedged rather than merely slow.
+static b8 mission_stall_check(ShipMission& m, const HierPos2& target, f32 waited) {
+
+    f32 d = vec2_length(hierpos_diff(&target, &m.pos, BS_HIERPOS_CELL_SIZE));
+
+    if (m.stall_ref <= 0.0f || d < m.stall_ref - MISSION_PROGRESS_EPS) {
+
+        m.stall_ref   = d;        // closing: the hull is working, reset the budget
+
+        m.stall_hours = 0.0f;
+
+        return FALSE;
+
+    }
+
+    if (d < m.stall_ref) m.stall_ref = d;   // creeping forward; keep the tightest mark
+
+    m.stall_hours += waited;
+
+    return (m.stall_hours > MISSION_STALL_HOURS);
+
+}
+
 // Phase 5: contracts worth at least this much (both legs) buy a warship escort. Set high enough
 // that an escort marks genuinely valuable cargo -- at a low threshold nearly every contract bought
 // one and piracy could never land a blow.
@@ -445,9 +485,39 @@ static b8 mission_leg_complete(ShipMission& m, f32 speed, f32& hours) {
 
     if (m.ship_slot >= 0) {
 
+        f32 waited = hours;
+
         hours = 0.0f;
 
-        if (!m.local_ready) return FALSE;
+        if (!m.local_ready) {
+
+            // Watchdog: the live hull owns this leg, but it may be pinned in combat or otherwise
+            // unable to finish it. Only a hull that is NOT closing on the leg target counts as
+            // stalled; drop the binding then, and ai_ships_sync_missions releases the agent next
+            // frame while the macro resumes the leg itself.
+            if (mission_stall_check(m, m.leg_target, waited)) {
+
+                BS_LOG_WARN("ShipAI watchdog: leg stalled %.0fh with no progress on live agent %d (stage %u) -- resuming macro control",
+
+                            m.stall_hours, m.ship_slot, (u32)m.stage);
+
+                m.stall_hours = 0.0f;
+
+                m.stall_ref   = 0.0f;
+
+                m.ship_slot   = -1;
+
+                m.local_ready = FALSE;
+
+            }
+
+            return FALSE;
+
+        }
+
+        m.stall_hours = 0.0f;
+
+        m.stall_ref   = 0.0f;
 
         m.local_ready = FALSE;
 
@@ -994,6 +1064,15 @@ static b8 mission_issue_contract(game_state* s, ShipMission& m) {
 
     m.respawn_hours = 0.0f;
 
+    // Contract slots are RECYCLED in place (unlike military orders, which are reset wholesale), so
+    // any per-run watchdog/battle state must be cleared explicitly or a previously stalled slot
+    // would start its next contract already over budget and refuse the live tier.
+    m.stall_hours   = 0.0f;
+
+    m.stall_ref     = 0.0f;
+
+    m.raid_engaged  = FALSE;
+
     m.active        = TRUE;
 
     return TRUE;
@@ -1010,11 +1089,45 @@ static b8 mission_issue_contract(game_state* s, ShipMission& m) {
 
 static b8 mission_dock_complete(ShipMission& m, i32 node_here, f32& hours) {
 
-    if (m.at_node >= 0 && m.at_node == node_here) {
+    // Live handoff, but watchdog-guarded. Two ways this stage can wait forever: a bound hull that
+    // never reports in (pinned in combat, or culled mid-handshake), and an unbound contract at a
+    // hub where no free trader ever appears. Past MISSION_STALL_HOURS the mission stops waiting on
+    // the local tier and falls through to the macro dwell timer below, so it always makes progress.
+    if (m.at_node >= 0 && m.at_node == node_here && m.stall_hours <= MISSION_STALL_HOURS) {
 
-        if (m.ship_slot >= 0) return m.local_ready;   // bound: the live docking loop decides
+        f32 waited = hours;
+
+        if (m.ship_slot >= 0) {
+
+            hours = 0.0f;
+
+            if (m.local_ready) { m.stall_hours = 0.0f; m.stall_ref = 0.0f; return TRUE; }
+
+            // Progress here is measured against the dock anchor the live hull is flying to.
+            const HierPos2& anchor = (m.stage == MISSION_STAGE_MARKET_DOCK) ? m.dest_station_pos
+                                                                            : m.station_pos;
+
+            if (mission_stall_check(m, anchor, waited)) {
+
+                BS_LOG_WARN("ShipAI watchdog: dock stalled %.0fh with no progress on live agent %d (stage %u) -- resuming macro control",
+
+                            m.stall_hours, m.ship_slot, (u32)m.stage);
+
+                m.stall_ref   = 0.0f;
+
+                m.ship_slot   = -1;
+
+                m.local_ready = FALSE;
+
+            }
+
+            return FALSE;
+
+        }
 
         hours = 0.0f;                                 // unbound: wait for the closest free trader
+
+        m.stall_hours += waited;
 
         return FALSE;
 
@@ -1026,7 +1139,9 @@ static b8 mission_dock_complete(ShipMission& m, i32 node_here, f32& hours) {
 
     hours         -= d;
 
-    return (m.dwell_hours <= 0.0f);
+    if (m.dwell_hours <= 0.0f) { m.stall_hours = 0.0f; m.stall_ref = 0.0f; return TRUE; }
+
+    return FALSE;
 
 }
 
@@ -1096,6 +1211,7 @@ static const f32 RAID_INTERCEPT_PATROLLED = 0.20f;  // ...when a patrol circuit 
 // second == 1 game hour at 1x, so this is a battle you can actually watch (and join) rather than
 // a sub-second blink. It ends early if the raiders are destroyed.
 static const f32 RAID_BATTLE_HOURS        = 36.0f;
+
 
 
 
@@ -1225,9 +1341,28 @@ static void ship_missions_military_tick(game_state* s) {
 
     if (!g.missions || !g.node_owner || g.civ_count <= 0) return;
 
-    static u64 mil_rng = 0;
+    // Deterministic military/piracy RNG stream. It must be re-derived whenever the GALAXY changes:
+    // previously it was seeded once per process, so starting a second galaxy in the same session
+    // inherited the first one's evolved stream and the macro sim stopped being reproducible from
+    // its seed. Tracking the source seed makes every galaxy replay identically, and the explicit
+    // zero guard keeps the stream out of splitmix64's fixed point.
+    static u64 mil_rng     = 0;
 
-    if (mil_rng == 0) mil_rng = g.galaxy_seed ^ 0x5741525348495053ull;   // "WARSHIPS"
+    static u64 mil_rng_src = 0;
+
+    static b8  mil_rng_set = FALSE;
+
+    if (!mil_rng_set || mil_rng_src != g.galaxy_seed) {
+
+        mil_rng_src = g.galaxy_seed;
+
+        mil_rng     = g.galaxy_seed ^ 0x5741525348495053ull;   // "WARSHIPS"
+
+        if (mil_rng == 0) mil_rng = 0x5741525348495053ull;
+
+        mil_rng_set = TRUE;
+
+    }
 
 
 

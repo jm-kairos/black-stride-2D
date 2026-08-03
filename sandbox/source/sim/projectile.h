@@ -4,7 +4,7 @@
 #include <math/bs_hierpos.h>
 #include <renderer/renderer_types.h>
 #include "sim/ship.h"
-#define MAX_PROJECTILES 256
+#define MAX_PROJECTILES 512
 // Projectile kinds: plain shells fly straight; missiles are steered toward hostile combat
 // entities each tick by combat_arena_steer_missiles (flight model in game_state::missile_tuning);
 // flak shells proximity-detonate against hostile ordnance (game_state::flak_tuning) and never
