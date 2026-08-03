@@ -46,23 +46,40 @@ static const f32 AI_INVESTIGATE_HOLD = 8.0f;
 // meaningfully between frames, so results are cached and refreshed on this staggered cadence.
 static const i32 AI_SENSE_INTERVAL = 4;
 
+// Sensor doctrine: a star system spans tens of millions of world units (innermost planet orbit is
+// 3-6e6, the jump ring ~84e6), so the original 60-90k sensors saw barely 0.2% of a system -- combat
+// hulls were effectively blind and only ever found contacts that were practically touching them.
+// Every COMBAT archetype now runs a 500,000-unit sensor, matching the player's Layer 1
+// identification radius so both sides of an engagement perceive at the same scale. Civilians
+// (trader, miner) keep their short ranges -- they are not combatants and should not react to
+// distant contacts.
+static const f32 COMBAT_SENSOR_RANGE = 500000.0f;
+
+static const f32 COMBAT_ENGAGE_RANGE = 2000000.0f;
+
+// The loiter leash MUST stay above the sensor range. It is tested before every other transition, so
+// a hull that can see 5e5 but is leashed at 9e4 would acquire a contact, pursue, breach its leash
+// within a second and turn back -- oscillating forever and never fighting. Keeping the leash wider
+// than perception makes pursuit coherent by construction.
+static const f32 COMBAT_LEASH_RANGE  = 1000000.0f;
+
 static const AiProfile g_profiles[ARCHETYPE_COUNT] = {
 
     // max_spd accel turn  sensor  engage standoff minR  patSpd patRad aggr flee  leash  fireT  states
 
-    {  800.f, 500.f, 3.0f, 60000.f, 45000.f, 12000.f, 1500.f, 420.f, 12000.f, 0.85f, 0.25f, 80000.f, 1.5f, 0xFFFF }, // PATROL
+    {  800.f, 500.f, 3.0f, COMBAT_SENSOR_RANGE, COMBAT_ENGAGE_RANGE, 12000.f, 1500.f, 420.f, 12000.f, 0.85f, 0.25f, COMBAT_LEASH_RANGE, 1.5f, 0xFFFF }, // PATROL
 
-    {  820.f, 560.f, 3.2f, 70000.f, 50000.f, 14000.f, 1500.f, 500.f, 14000.f, 1.00f, 0.15f, 90000.f, 1.2f, 0xFFFF }, // WARSHIP
+    {  820.f, 560.f, 3.2f, COMBAT_SENSOR_RANGE, COMBAT_ENGAGE_RANGE, 14000.f, 1500.f, 500.f, 14000.f, 1.00f, 0.15f, COMBAT_LEASH_RANGE, 1.2f, 0xFFFF }, // WARSHIP
 
-    {  950.f, 640.f, 3.6f, 65000.f, 40000.f,  9000.f, 1200.f, 650.f, 12000.f, 1.00f, 0.30f, 90000.f, 1.4f, 0xFFFF }, // INTERCEPTOR
+    {  950.f, 640.f, 3.6f, COMBAT_SENSOR_RANGE, COMBAT_ENGAGE_RANGE,  9000.f, 1200.f, 650.f, 12000.f, 1.00f, 0.30f, COMBAT_LEASH_RANGE, 1.4f, 0xFFFF }, // INTERCEPTOR
 
-    {  760.f, 420.f, 2.6f, 55000.f, 20000.f, 18000.f, 2000.f, 520.f, 16000.f, 0.05f, 0.90f, 70000.f, 3.0f, 0xFFFF }, // TRADER
+    {  760.f, 420.f, 2.6f,             55000.f,             20000.f, 18000.f, 2000.f, 520.f, 16000.f, 0.05f, 0.90f,            70000.f, 3.0f, 0xFFFF }, // TRADER
 
-    {  900.f, 560.f, 3.4f, 90000.f, 15000.f, 30000.f, 2000.f, 560.f, 20000.f, 0.10f, 0.80f, 90000.f, 3.0f, 0xFFFF }, // SCOUT
+    {  900.f, 560.f, 3.4f, COMBAT_SENSOR_RANGE,             15000.f, 30000.f, 2000.f, 560.f, 20000.f, 0.10f, 0.80f, COMBAT_LEASH_RANGE, 3.0f, 0xFFFF }, // SCOUT
 
-    {  840.f, 560.f, 3.2f, 70000.f, 48000.f, 12000.f, 1400.f, 520.f, 14000.f, 1.00f, 0.20f, 99999.f, 1.2f, 0xFFFF }, // PIRATE
+    {  840.f, 560.f, 3.2f, COMBAT_SENSOR_RANGE, COMBAT_ENGAGE_RANGE, 12000.f, 1400.f, 520.f, 14000.f, 1.00f, 0.20f, COMBAT_LEASH_RANGE, 1.2f, 0xFFFF }, // PIRATE
 
-    {  600.f, 380.f, 2.4f, 45000.f,     0.f,     0.f,    0.f, 300.f,  9000.f, 0.00f, 0.90f, 60000.f, 3.0f, 0xFFFF }, // MINER
+    {  600.f, 380.f, 2.4f,             45000.f,                 0.f,     0.f,    0.f, 300.f,  9000.f, 0.00f, 0.90f,            60000.f, 3.0f, 0xFFFF }, // MINER
 
 };
 
@@ -528,6 +545,43 @@ static i32 wing_resolve_leader(game_state* s, NpcShip& n) {
 
 
 
+// Fly this wingman onto its formation slot behind the leader. Used by every state in which the wing
+// stays together: cruising, sweeping toward a lost contact, and CLOSING on a target. Only ATTACK
+// (inside weapons range) breaks the wing, so a formation holds all the way through its approach.
+static void wing_fly_slot(game_state* s, NpcShip& n, const NpcShip& L, const AiProfile& p, f32 dt) {
+
+    (void)s;
+
+    Ship* sh = &n.ship; ShipFlight* fl = &n.flight;
+
+    Vec2     off      = vec2_rotate(wing_slot_offset(n.wing_slot), L.ship.angle);
+
+    HierPos2 slot_pos = hierpos_add_vec2(&L.ship.origin, off);
+
+    Vec2     to_slot  = hierpos_diff(&slot_pos, &sh->origin, BS_HIERPOS_CELL_SIZE);
+
+    // The leader may be flying a macro leg at ai_speed_in_system, far above a combat profile's
+    // max_speed. Wingmen inherit enough speed/thrust headroom to stay with it, otherwise the
+    // formation strings out and breaks on every transit.
+    f32 lead_spd = vec2_length(L.flight.velocity);
+
+    f32 wspd     = lead_spd * 1.35f + p.max_speed;
+
+    f32 wacc     = (p.accel > 0.0f ? p.accel : 500.0f) * (1.0f + lead_spd / (p.max_speed > 1.0f ? p.max_speed : 1.0f));
+
+    // Ease down over the distance this hull actually needs to shed that speed. A fixed slow radius
+    // is fine at combat speeds but is dwarfed by the stopping distance when matching a leader at
+    // macro speed, which would make wingmen overshoot their slot and oscillate around it.
+    f32 slow_r = (wacc > 1.0f) ? (wspd * wspd) / (2.0f * wacc) * 1.5f : WING_SPACING;
+
+    if (slow_r < WING_SPACING * 1.5f) slow_r = WING_SPACING * 1.5f;
+
+    steering::apply(sh, fl, steering::arrive(to_slot, wspd, slow_r), wacc, wspd, p.turn_rate, dt);
+
+}
+
+
+
 // Group a just-spawned set of combat hulls into wings of three.
 
 static void assign_wings(game_state* s, const i32* slots, i32 count) {
@@ -592,11 +646,11 @@ static void materialize_system(game_state* s, i32 node, i16 owner) {
 
     }
 
-    i32 patrols = galaxy_history_garrison_at(s, node);   if (patrols > 20) patrols = 20; if (patrols < 3) patrols = 3;
+    i32 patrols = galaxy_history_garrison_at(s, node);   if (patrols > 32) patrols = 32; if (patrols < 4) patrols = 4;
 
-    i32 miners  = 10 + oc * 2 + (i32)(seed % 6ull);      if (miners  > 24) miners  = 24;
+    i32 miners  = 14 + oc * 2 + (i32)(seed % 8ull);      if (miners  > 30) miners  = 30;
 
-    i32 traders = 4 + station_ct + (i32)(power * 0.3f) + (i32)((seed >> 8) % 4ull); if (traders > 14) traders = 14;
+    i32 traders = 6 + station_ct + (i32)(power * 0.4f) + (i32)((seed >> 8) % 5ull); if (traders > 20) traders = 20;
 
 
 
@@ -640,11 +694,11 @@ static void materialize_system(game_state* s, i32 node, i16 owner) {
 
     }
 
-    i32 interceptors = (risk > 0.05f) ? 1 + (i32)(risk * 1.5f) : 0;
+    i32 interceptors = (risk > 0.05f) ? 2 + (i32)(risk * 2.0f) : 0;
 
-    if (interceptors > 4) interceptors = 4;
+    if (interceptors > 6) interceptors = 6;
 
-    i32 scouts = war_border ? 2 : (wild_border ? 1 : 0);
+    i32 scouts = war_border ? 3 : (wild_border ? 2 : 0);
 
 
 
@@ -690,11 +744,11 @@ static void materialize_system(game_state* s, i32 node, i16 owner) {
     // piracy in front of the player inside civ space, and gives the local patrols something to hunt.
     i32 lurkers = 0;
 
-    if (risk > 0.05f)      lurkers = 1 + (i32)(risk * 2.0f);
+    if (risk > 0.05f)      lurkers = 2 + (i32)(risk * 2.5f);
 
-    else if (wild_border)  lurkers = 1 + (i32)((seed >> 16) % 2ull);
+    else if (wild_border)  lurkers = 1 + (i32)((seed >> 16) % 3ull);
 
-    if (lurkers > 5) lurkers = 5;
+    if (lurkers > 8) lurkers = 8;
 
     for (i32 k = 0; k < lurkers; ++k, ++idx)
 
@@ -719,7 +773,7 @@ static void materialize_wild_system(game_state* s, i32 node) {
 
     u64 st = (u64)(node + 1) * 0x9E3779B97F4A7C15ull ^ 0xBADC0FFEEull;
 
-    i32 pirates = 3 + (i32)(sm64(st) % 6ull);   // 3..8 raiders
+    i32 pirates = 4 + (i32)(sm64(st) % 8ull);   // 4..11 raiders
 
     i32 wing_slots[16]; i32 wing_n = 0;
 
@@ -1978,7 +2032,13 @@ static void ai_ship_tick(game_state* s, NpcShip& n, i32 self, f32 dt) {
 
                              else if (tdist > p.engage_range * 1.2f) st = AI_PURSUE; break;
 
-            case AI_EVADE:   if (!have_target || tdist > p.sensor_range || hp_frac >= p.flee_hp_frac) st = AI_RETURN; break;
+            case AI_EVADE:   // Disengage distance is WEAPON scale, not sensor scale. This test used
+                             // sensor_range back when that was ~70k (roughly weapon reach); with a
+                             // 1e6 sensor the same expression would mean a damaged hull had to run
+                             // a million units -- some twenty minutes -- before it stopped fleeing,
+                             // and since NPCs do not regenerate it would never re-engage. Breaking
+                             // contact past a couple of weapon ranges preserves the original intent.
+                             if (!have_target || tdist > p.engage_range * 2.5f || hp_frac >= p.flee_hp_frac) st = AI_RETURN; break;
 
             case AI_RETURN:  if (home_dist <= p.patrol_radius) st = AI_PATROL; break;
 
@@ -2019,44 +2079,13 @@ static void ai_ship_tick(game_state* s, NpcShip& n, i32 self, f32 dt) {
         case AI_PATROL: {
 
             // Phase 10: a wingman holds its slot on the leader instead of running its own loiter.
-            // Formation is a CRUISE behaviour only -- PURSUE/ATTACK/EVADE are separate states, so
-            // engaging automatically breaks the wing and disengaging reforms it.
+            // Formation is held while CRUISING and while CLOSING on a contact; it breaks only at
+            // ATTACK (inside weapons range) so a wing flies its whole approach as a triangle.
             if (wing_lead >= 0) {
 
-                const NpcShip& L = s->npc_ships[wing_lead];
+                wing_fly_slot(s, n, s->npc_ships[wing_lead], p, dt);
 
-                {
-                    Vec2     off      = vec2_rotate(wing_slot_offset(n.wing_slot), L.ship.angle);
-
-                    HierPos2 slot_pos = hierpos_add_vec2(&L.ship.origin, off);
-
-                    Vec2     to_slot  = hierpos_diff(&slot_pos, &sh->origin, BS_HIERPOS_CELL_SIZE);
-
-                    // The leader may be flying a macro leg at ai_speed_in_system, far above a
-                    // combat profile's max_speed. Wingmen inherit enough speed/thrust headroom to
-                    // stay with it, otherwise the formation strings out and breaks on every transit.
-                    f32 lead_spd = vec2_length(L.flight.velocity);
-
-                    f32 wspd     = lead_spd * 1.35f + p.max_speed;
-
-                    f32 wacc     = (p.accel > 0.0f ? p.accel : 500.0f) * (1.0f + lead_spd / (p.max_speed > 1.0f ? p.max_speed : 1.0f));
-
-                    // Ease down over the distance this hull actually needs to shed that speed. A
-                    // fixed slow radius is fine at combat speeds but is dwarfed by the stopping
-                    // distance when matching a leader at macro speed, which would make wingmen
-                    // overshoot their slot and oscillate around it -- the same failure the mission
-                    // legs originally had.
-                    f32 slow_r = (wacc > 1.0f) ? (wspd * wspd) / (2.0f * wacc) * 1.5f : WING_SPACING;
-
-                    if (slow_r < WING_SPACING * 1.5f) slow_r = WING_SPACING * 1.5f;
-
-                    steering::apply(sh, fl, steering::arrive(to_slot, wspd, slow_r),
-
-                                    wacc, wspd, p.turn_rate, dt);
-
-                    break;
-
-                }
+                break;
 
             }
 
@@ -2079,6 +2108,18 @@ static void ai_ship_tick(game_state* s, NpcShip& n, i32 self, f32 dt) {
         } break;
 
         case AI_PURSUE: {
+
+            // A wing closes on its contact IN FORMATION: the leader runs the intercept and its
+            // wingmen hold their slots, so a three-ship element flies the whole approach as a
+            // triangle. The wing only breaks up at ATTACK, inside weapons range, where individual
+            // maneuvering matters.
+            if (wing_lead >= 0) {
+
+                wing_fly_slot(s, n, s->npc_ships[wing_lead], p, dt);
+
+                break;
+
+            }
 
             steering::apply(sh, fl, steering::seek(to_target, p.max_speed),
 
@@ -2201,7 +2242,15 @@ static void ai_ship_tick(game_state* s, NpcShip& n, i32 self, f32 dt) {
 
             // Sweep toward the last known contact position; the transition table drops back to
 
-            // PATROL when the trail goes cold.
+            // PATROL when the trail goes cold. Wings sweep in formation (the leader searches).
+
+            if (wing_lead >= 0) {
+
+                wing_fly_slot(s, n, s->npc_ships[wing_lead], p, dt);
+
+                break;
+
+            }
 
             Vec2 to_contact = hierpos_diff(&n.last_contact, &sh->origin, BS_HIERPOS_CELL_SIZE);
 

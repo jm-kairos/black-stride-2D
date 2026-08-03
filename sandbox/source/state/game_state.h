@@ -1680,7 +1680,7 @@ struct MapEntity {
 
 
 
-#define MAX_COMBAT_ENTITIES 288
+#define MAX_COMBAT_ENTITIES 416
 
 
 
@@ -1776,7 +1776,7 @@ struct CombatEntity {
 
 // =====================================================================================
 
-#define NPC_SHIP_MAX 256
+#define NPC_SHIP_MAX 384
 
 
 
