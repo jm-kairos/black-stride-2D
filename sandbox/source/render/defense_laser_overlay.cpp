@@ -21,7 +21,7 @@ void defense_laser_overlay_draw(game_state* s) {
         const DefenseLaser& L    = flag.point_defense;
         if (L.enabled && L.stance != PD_HOLD) {
             static const f32 GATE_FRAC[3] = { 0.6f, 0.8f, 1.0f };
-            f32 range = ((L.range > 0.0f) ? L.range : flag.sensors.layer1_radius)
+            f32 range = ((L.range > 0.0f) ? L.range : flag.sensors.layer0_radius)
                         * GATE_FRAC[(L.gate_tier < 3) ? L.gate_tier : 2];
             Vec2 center = render_from_hierpos(s, &flag.origin);
             bs_color ring = (L.stance == PD_OVERDRIVE)

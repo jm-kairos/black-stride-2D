@@ -13,6 +13,7 @@
 #include "sim/galaxy_history.h"  // galaxy_history_faction_label / faction_is_hostile
 #include "sim/ai_ship.h"         // ShipArchetype (role marker shapes)
 #include "render/text.h"                // text_draw (patrol label)
+#include "sim/weapon_def.h"       // WeaponDef (weapon-group reach ring)
 #include <renderer/renderer.h>
 #include <renderer/camera2d.h>   // camera2d_world_to_screen (patrol label placement)
 #include <math.h>
@@ -265,6 +266,45 @@ void draw_gameplay_overlays(game_state* s) {
     if (s->editor.draw_discovery_sensor_range) {
         bs_color disc_col = bs_color{ 0.40f, 0.85f, 0.95f, 0.25f };
         renderer_draw_circle(render_from_hierpos(s, &s->player_ship().origin), s->player_ship().sensors.layer1_radius, 64, 2.0f, disc_col, LAYER_UI);
+    }
+
+    // ---- Selected weapon group: effective reach ring -------------------------------------
+    // Radius is the SHORTEST reach in the active fire group, so the ring marks the distance
+    // inside which EVERY weapon in that group can actually land a shot -- fire from outside it
+    // and the shortest-legged weapon's shells expire before arriving. Reach is data-driven: a
+    // projectile lives proj_life seconds travelling at proj_speed, so it covers their product.
+    {
+        const Ship& psh = s->player_ship();
+
+        f32 min_reach = 0.0f;
+
+        b8  any = FALSE;
+
+        for (i32 h = 0; h < psh.hardpoint_count; ++h) {
+
+            const Weapon* w = psh.mounts[h];
+
+            if (!w || !w->def) continue;
+
+            if (!((psh.mount_groups[h] >> psh.active_group) & 1)) continue;
+
+            f32 reach = w->def->proj_speed * w->def->proj_life;
+
+            if (reach <= 0.0f) continue;
+
+            if (!any || reach < min_reach) { min_reach = reach; any = TRUE; }
+
+        }
+
+        if (any) {
+
+            bs_color grp_col = bs_color{ 1.00f, 0.55f, 0.30f, 0.35f };
+
+            renderer_draw_circle(render_from_hierpos(s, &psh.origin), min_reach, 96, 1.5f,
+
+                                 grp_col, LAYER_UI);
+
+        }
     }
 
     // ---- Metaball movement UI (global mode only) ------------------------------------------

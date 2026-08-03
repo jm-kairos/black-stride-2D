@@ -26,7 +26,9 @@ void combat_arena_init(game_state* s) {
     combat_arena_rebuild_player_entities(s);
 
     // ---- Sensor / heat-signature / encounter tunables --------------------------------------
-    s->ship_sensor_range      = 30000.0f;
+    // Enemy-hull render range: matched to the player's Layer 1 identification radius so a contact
+    // resolves into a real sprite exactly when the sensor suite says it is identified.
+    s->ship_sensor_range      = SENSOR_LAYER1_RADIUS;
     s->out_sensor_fx.init();
     s->show_metaball_ui       = FALSE;
     s->show_sensor_layers     = FALSE;

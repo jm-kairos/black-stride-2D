@@ -10,7 +10,7 @@
 using namespace bs_math;
 
 // Editor-tunable distance (world units) at which a contact's blip reaches its dim floor (see header).
-f32 g_sensor_fade_distance = 200000.0f;
+f32 g_sensor_fade_distance = 4000000.0f;
 
 // Fixed radar sweep period (seconds). Shared by the blink envelope and the position snapshot so
 // the blip's fade and its sampled position advance on the exact same cadence.

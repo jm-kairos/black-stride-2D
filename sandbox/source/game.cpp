@@ -1439,12 +1439,12 @@ static void game_push_hud(game_state* s, f32 dt) {
                 row.selected = FALSE;
                 snprintf(row.card_title, sizeof(row.card_title), "Point Defense Laser");
                 {
-                    // Live engagement radius: Layer 1 sensors (or override) narrowed by the gate.
+                    // Live engagement radius: Layer 0 sensors (or override) narrowed by the gate.
                     static const f32 GATE_FRAC[3] = { 0.6f, 0.8f, 1.0f };
                     const DefenseLaser& pdl = fs.point_defense;
                     const f32 gate = GATE_FRAC[(pdl.gate_tier < 3) ? pdl.gate_tier : 2];
                     const f32 pd_range =
-                        ((pdl.range > 0.0f) ? pdl.range : fs.sensors.layer1_radius) * gate;
+                        ((pdl.range > 0.0f) ? pdl.range : fs.sensors.layer0_radius) * gate;
                     snprintf(row.card_rows, sizeof(row.card_rows),
                              "TYPE       Defense - Point defense\n"
                              "INTEGRITY  100%%\n"

@@ -33,9 +33,11 @@ void point_defense_update(game_state* s, f32 dt) {
         static const f32 GATE_FRAC[3] = { 0.6f, 0.8f, 1.0f };
         const f32 gate_frac = GATE_FRAC[(L.gate_tier < 3) ? L.gate_tier : 2];
 
-        // Engagement range: 0 => live-coupled to THIS ship's Layer 1 sensor radius, so the
-        // laser range tracks the Layer 1 slider automatically. The gate narrows it.
-        const f32 range = ((L.range > 0.0f) ? L.range : sh.sensors.layer1_radius) * gate_frac;
+        // Engagement range: 0 => live-coupled to THIS ship's Layer 0 sensor radius, so the
+        // laser range tracks the Layer 0 slider automatically. The gate narrows it further.
+        // Layer 0 is the close-in "comfort zone": point defense is a last-ditch screen and must
+        // not reach out to identification range.
+        const f32 range = ((L.range > 0.0f) ? L.range : sh.sensors.layer0_radius) * gate_frac;
 
         // Tick the retarget cooldown down toward zero.
         if (L.cooldown_remaining > 0.0f) {

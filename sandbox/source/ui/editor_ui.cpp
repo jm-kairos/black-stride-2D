@@ -440,7 +440,7 @@ void build_editor_panel(game_state* s) {
         // Progressive zoom-out speed: higher = each wheel notch covers more zoom the further out you are.
         bs_ui_slider_float("Zoom-out speed gain", &g_zoom_out_speed_gain, 0.0f, 5.0f);
         bool show_mb = (bool)s->show_metaball_ui;
-        bs_ui_slider_float("Ship sensor range (units)", &s->ship_sensor_range, 0.0f, 100000.0f);
+        bs_ui_slider_float("Ship sensor range (units)", &s->ship_sensor_range, 0.0f, 8000000.0f);
         // ---- Three-layer sensor overlay radii (Layer 0 < Layer 1 < Layer 2, press V) --------
         // The sliders edit the hull BASELINE (sensors_base); the effective suite is re-derived
         // per ship by ship_recompute_stats so mounted sensor modules keep their multipliers.
@@ -452,7 +452,7 @@ void build_editor_panel(game_state* s) {
             // Dynamic bounds keep l0 < l1 < l2: each slider is clamped by its neighbours.
             changed |= bs_ui_slider_float("Sensor Layer 0 radius", &l0, 1000.0f,   l1 - GAP);
             changed |= bs_ui_slider_float("Sensor Layer 1 radius", &l1, l0 + GAP,  l2 - GAP);
-            changed |= bs_ui_slider_float("Sensor Layer 2 falloff", &l2, l1 + GAP,  200000.0f);
+            changed |= bs_ui_slider_float("Sensor Layer 2 falloff", &l2, l1 + GAP,  12000000.0f);
             if (changed) {
                 // Re-assert ordering in case a typed value momentarily broke the bounds.
                 if (l1 < l0 + GAP) l1 = l0 + GAP;
@@ -468,7 +468,7 @@ void build_editor_panel(game_state* s) {
             }
         }
         // Unbounded Layer 2: distance (world units) at which distant contact blips fade to the dim floor.
-        bs_ui_slider_float("Sensor blip fade distance", &g_sensor_fade_distance, 50000.0f, 2000000.0f);
+        bs_ui_slider_float("Sensor blip fade distance", &g_sensor_fade_distance, 500000.0f, 20000000.0f);
         // ---- Point-defense laser (auto-intercepts incoming hostile projectiles) --------------
         // Range is intentionally NOT a slider: it is live-coupled to each ship's Layer 1 radius
         // (DefenseLaser.range stays 0), so the Layer 1 slider above drives the laser range too.
@@ -482,7 +482,7 @@ void build_editor_panel(game_state* s) {
             changed |= bs_ui_slider_float("Laser dwell (s)",      &pd.dwell_time,        0.02f, 1.0f);
             changed |= bs_ui_slider_float("Laser retarget cd (s)", &pd.retarget_cooldown, 0.0f, 0.5f);
             char rng[64];
-            snprintf(rng, sizeof(rng), "Laser range = Layer 1 (%.0f)", s->player_ship().sensors.layer1_radius);
+            snprintf(rng, sizeof(rng), "Laser range = Layer 0 (%.0f)", s->player_ship().sensors.layer0_radius);
             bs_ui_text(rng);
             if (changed) {
                 // Propagate tuning (not runtime state) to the whole fleet; range stays 0/live-coupled.

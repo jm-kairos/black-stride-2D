@@ -152,11 +152,18 @@ const char* vessel_faction_desc(VesselFaction f);
 
 // =====================================================================================
 
-#define SENSOR_LAYER0_RADIUS 15000.0f
+// Player sensor suite, matched to the NPC combat profile so both sides of an engagement perceive at
+// the same scale (previously the player saw 30k while combat hulls saw millions -- NPCs detected and
+// closed long before anything appeared on the player's scope).
+//   Layer 1 == the NPC sensor_range (identification / discovery / point-defense reach)
+//   Layer 0 == comfort zone; no gameplay effect, kept below Layer 1 to preserve suite ordering
+//   Layer 2 == long-range contact; must stay ABOVE layer 1 (the suite is strictly ordered and the
+//              editor enforces l0 < l1 < l2), so it sits a step beyond identification range.
+#define SENSOR_LAYER0_RADIUS 250000.0f
 
-#define SENSOR_LAYER1_RADIUS 30000.0f
+#define SENSOR_LAYER1_RADIUS 500000.0f
 
-#define SENSOR_LAYER2_RADIUS 50000.0f
+#define SENSOR_LAYER2_RADIUS 1000000.0f
 
 struct SensorSuite {
 
@@ -178,9 +185,11 @@ struct SensorSuite {
 
 // depleted; survivors are released and may be re-engaged. `range` defaults to 0, which the
 
-// point-defense subsystem resolves to the ship's LIVE Layer 1 sensor radius each frame -- so
+// point-defense subsystem resolves to the ship's LIVE Layer 0 sensor radius each frame -- so
 
-// changing Layer 1 changes the laser range with it.
+// changing Layer 0 changes the laser range with it. Layer 0 is the close-in band: point defense
+
+// is a last-ditch screen and deliberately does NOT reach out to identification range.
 
 // =====================================================================================
 
@@ -201,7 +210,7 @@ struct DefenseLaser {
 
     u8  gate_tier          = 2;       // engagement gate: 0 = 60%, 1 = 80%, 2 = 100% of resolved range
 
-    f32 range              = 0.0f;    // 0 => use sensors.layer1_radius (live-coupled)
+    f32 range              = 0.0f;    // 0 => use sensors.layer0_radius (live-coupled)
 
     f32 damage_per_second  = 12.0f;   // damage applied to a locked projectile's HP
 
