@@ -284,11 +284,11 @@ void draw_gameplay_overlays(game_state* s) {
 
             const Weapon* w = psh.mounts[h];
 
-            if (!w || !w->def) continue;
+            if (!w) continue;
 
             if (!((psh.mount_groups[h] >> psh.active_group) & 1)) continue;
 
-            f32 reach = w->def->proj_speed * w->def->proj_life;
+            f32 reach = weapon_effective_reach(w);
 
             if (reach <= 0.0f) continue;
 

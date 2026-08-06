@@ -1,4 +1,5 @@
 #include "sim/weapon.h"
+#include "sim/weapon_def.h"   // WeaponDef (authored stats drive effective reach)
 #include <math/math_utils.h>
 #include "sim/ship.h"
 using namespace bs_math;
@@ -104,7 +105,7 @@ void MissileLauncher::fire(HierPos2 origin, Vec2 direction, Vec2 ship_velocity,
     bs_color col = bs_color{ 1.00f, 0.45f, 0.20f, 1.0f };
     projectiles->spawn_missile(origin, vel, missile_lifetime, missile_radius, col,
                                owner_faction, owner_faction_id, missile_emission, missile_hp,
-                               damage);
+                               damage, missile_speed);
     cooldown_remaining = reload_time;
 }
 void MissileLauncher::update(f32 dt) {
@@ -122,6 +123,24 @@ f32 MissileLauncher::cooldown_progress() const {
     if (t < 0.0f) t = 0.0f;
     if (t > 1.0f) t = 1.0f;
     return t;
+}
+// ---------------------------------------------------------------------------
+// Effective reach = projectile speed x lifetime: the distance a shot covers before expiring.
+// Prefers the originating def (the authored .weapon stats), falling back to the live instance
+// values for any weapon built without one, so editing a .weapon file moves BOTH the drawn range
+// ring and the distance at which the ship actually opens fire.
+// ---------------------------------------------------------------------------
+f32 weapon_effective_reach(const Weapon* w) {
+    if (!w) return 0.0f;
+    if (w->def && w->def->proj_speed > 0.0f && w->def->proj_life > 0.0f)
+        return w->def->proj_speed * w->def->proj_life;
+    // No def (legacy/bespoke instance): derive from the concrete weapon's own stats.
+    if (w->wkind == WEAPON_KIND_MISSILE) {
+        const MissileLauncher* ml = static_cast<const MissileLauncher*>(w);
+        return ml->missile_speed * ml->missile_lifetime;
+    }
+    const BallisticWeapon* bw = static_cast<const BallisticWeapon*>(w);
+    return bw->projectile_speed_value * bw->projectile_lifetime;
 }
 // ---------------------------------------------------------------------------
 // Instances are built from `.weapon` defs by weapon_instantiate (weapon_def.cpp);

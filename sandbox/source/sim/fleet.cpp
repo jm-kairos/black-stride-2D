@@ -9,7 +9,8 @@ using namespace bs_math;
 static constexpr f32 RTS_MOVE_ARRIVE_DIST = 60.0f;   // units
 static constexpr f32 RTS_MOVE_STOP_SPEED  = 15.0f;   // units/s
 static constexpr f32 RTS_MOVE_FACE_ANGLE  = 0.3f;    // rad; must face target within this to thrust
-static constexpr f32 RTS_ATTACK_RANGE      = 10000.0f; // desired weapon engagement range
+static constexpr f32 RTS_ATTACK_RANGE      = 10000.0f; // fallback standoff for an UNARMED hull
+static constexpr f32 RTS_ATTACK_REACH_FRAC = 0.85f;  // close to this fraction of weapon reach
 static constexpr f32 RTS_ATTACK_FACE_ANGLE = 0.25f;  // rad: must face target within this to fire
 static constexpr f32 RTS_ATTACK_STOP_DIST  = 120.0f; // keep this distance from target
 static constexpr f32 RTS_ATTACK_MIN_RANGE  = 150.0f; // do not fire closer than this
@@ -114,13 +115,30 @@ void FleetShip::update_attack(game_state* s, f32 dt) {
     // Every mounted weapon turret tracks the target (visual traverse, arc-clamped).
     for (i32 hpi = 0; hpi < sh->hardpoint_count; ++hpi)
         if (sh->mounts[hpi]) ship_turret_aim_at(sh, hpi, to_target);
+    // Engagement geometry is driven by the WEAPONS THIS SHIP ACTUALLY CARRIES, not by a fixed
+    // distance. `fire_reach` is the reach of the weapon that bears on the target (it decides
+    // whether a shot can arrive at all); `approach_reach` is the longest reach aboard (it decides
+    // how close the ship needs to fly). Both come from weapon_effective_reach, the same function
+    // the HUD range ring uses, so the ring and the ship's behaviour cannot disagree.
+    i32 whp = ship_select_bearing_weapon(sh, to_target);
+    Weapon* w = (whp >= 0) ? sh->mounts[whp] : nullptr;
+    f32 fire_reach = weapon_effective_reach(w);
+    f32 approach_reach = 0.0f;
+    for (i32 hpi = 0; hpi < sh->hardpoint_count; ++hpi) {
+        f32 r = weapon_effective_reach(sh->mounts[hpi]);
+        if (r > approach_reach) approach_reach = r;
+    }
+    if (approach_reach <= 0.0f) approach_reach = RTS_ATTACK_RANGE;   // unarmed: legacy standoff
     // Only approach the target if we have no separate move order. When both orders are set,
     // movement is handled by update_move and we just track/fire here.
     if (!has_move_target) {
         if (fabsf(angle_diff) < RTS_MOVE_FACE_ANGLE) {
             Vec2 heading = vec2_rotate(Vec2{ 0.0f, 1.0f }, sh->angle);
             f32 brake_dist = (speed > 0.0f) ? (speed * speed) / (2.0f * m.decel) : 0.0f;
-            f32 desired_dist = RTS_ATTACK_RANGE;
+            // Close to a comfortable margin inside the longest weapon's reach and hold there --
+            // a ship with 4,000,000 units of missile reach should engage from range, not fly to
+            // knife-fighting distance the way the old fixed 10,000-unit standoff forced it to.
+            f32 desired_dist = approach_reach * RTS_ATTACK_REACH_FRAC;
             f32 min_standoff = RTS_ATTACK_STOP_DIST + target_r + ship_r;
             if (desired_dist < min_standoff) desired_dist = min_standoff;
             // Only close distance when too far; never actively back away from the target.
@@ -133,14 +151,13 @@ void FleetShip::update_attack(game_state* s, f32 dt) {
             fl->velocity = vec2_add(fl->velocity, vec2_scale(fl->velocity, -m.decel * 0.5f * dt / speed));
         }
     }
-    // Fire when facing the target, inside max range, and outside minimum range.
-    if (fabsf(angle_diff) < RTS_ATTACK_FACE_ANGLE && dist >= RTS_ATTACK_MIN_RANGE && dist <= RTS_ATTACK_RANGE * 1.5f) {
+    // Fire when facing the target, outside minimum range, and within the bearing weapon's OWN
+    // reach -- so a long-legged launcher engages at its full authored range instead of being
+    // capped by a hardcoded constant.
+    if (w && fabsf(angle_diff) < RTS_ATTACK_FACE_ANGLE && dist >= RTS_ATTACK_MIN_RANGE && dist <= fire_reach) {
         {
-            // Fire whichever mounted weapon bears on the target (active weapon first): each
-            // shot leaves from its own hardpoint, honoring the slot's traverse arc.
-            i32 whp   = ship_select_bearing_weapon(sh, to_target);
-            Weapon* w = (whp >= 0) ? sh->mounts[whp] : nullptr;
-            if (w) {
+            // Each shot leaves from its own hardpoint, honoring the slot's traverse arc.
+            {
                 HierPos2 fire_origin = ship_hardpoint_fire_origin(sh, whp);
                 Vec2 aim_dir = to_target;
                 Vec2 target_vel = ce->velocity;

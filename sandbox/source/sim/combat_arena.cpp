@@ -293,9 +293,18 @@ void combat_arena_update_projectiles(game_state* s, f32 sim_dt) {
                 heading = Vec2{ cosf(cur), sinf(cur) };
             }
 
-            // Thrust along the (possibly unchanged) heading up to the speed clamp.
+            // Thrust along the (possibly unchanged) heading up to the speed clamp. The clamp is
+            // the SEEKER'S OWN, stamped from its launcher's proj_speed, so a .weapon file governs
+            // how fast its missiles fly and therefore how far they reach within proj_life. It was
+            // previously a single global, which silently overrode every launcher's proj_speed the
+            // frame after launch: editing proj_speed moved the displayed range ring but not the
+            // missile, so the ring and reality disagreed.
+            f32 cap = (p->max_speed > 0.0f) ? p->max_speed : s->missile_tuning.max_speed;
+
             speed += s->missile_tuning.accel * sim_dt;
-            if (speed > s->missile_tuning.max_speed) speed = s->missile_tuning.max_speed;
+
+            if (speed > cap) speed = cap;
+
             p->velocity = vec2_scale(heading, speed);
         }
     }

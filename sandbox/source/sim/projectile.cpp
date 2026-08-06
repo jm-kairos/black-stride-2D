@@ -85,6 +85,7 @@ b8 ProjectileSystem::spawn(HierPos2 origin, Vec2 velocity,
             pool[i].hp                 = hp;
             pool[i].max_hp             = hp;
             pool[i].dmg                = dmg;
+            pool[i].max_speed          = 0.0f;   // shells are unguided: no per-projectile clamp
             ++count;
             return TRUE;
         }
@@ -93,7 +94,8 @@ b8 ProjectileSystem::spawn(HierPos2 origin, Vec2 velocity,
 }
 b8 ProjectileSystem::spawn_missile(HierPos2 origin, Vec2 velocity,
                                    f32 lifetime, f32 radius, bs_color color, VesselFaction owner,
-                                   i16 faction_id, f32 radiation_emission, f32 hp, f32 dmg)
+                                   i16 faction_id, f32 radiation_emission, f32 hp, f32 dmg,
+                                   f32 max_speed)
 {
     // Same free-slot scan as spawn(), but the slot is tagged PROJ_MISSILE so the combat-arena
     // steering pass picks it up. Kept as a separate loop (not a spawn() call) because spawn()
@@ -114,6 +116,7 @@ b8 ProjectileSystem::spawn_missile(HierPos2 origin, Vec2 velocity,
             pool[i].hp                 = hp;
             pool[i].max_hp             = hp;
             pool[i].dmg                = dmg;
+            pool[i].max_speed          = max_speed;
             ++count;
             return TRUE;
         }

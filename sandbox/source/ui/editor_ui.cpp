@@ -131,7 +131,7 @@ void build_editor_panel(game_state* s) {
         bs_ui_slider_float("Accel##msl",             &s->missile_tuning.accel,           0.0f,  8000.0f);
         bs_ui_slider_float("Max speed##msl",         &s->missile_tuning.max_speed,    1000.0f, 16000.0f);
         bs_ui_slider_float("Seeker cone (deg)##msl", &s->missile_tuning.seeker_cone_deg, 10.0f,  180.0f);
-        bs_ui_slider_float("Seeker range##msl",      &s->missile_tuning.seeker_range, 1000.0f, 40000.0f);
+        bs_ui_slider_float("Seeker range##msl",      &s->missile_tuning.seeker_range, 1000.0f, 2000000.0f);
         // ---- FLAK ------------------------------------------------------------------------------
         // Proximity-burst screen tuning (Phase D; toggled per fire group with the T key).
         bs_ui_separator();

@@ -8,8 +8,8 @@ size        M
 icon        ic-missile
 damage      40
 reload      4.0
-proj_speed  3000
-proj_life   12
+proj_speed  10000
+proj_life   400
 proj_radius 6.0
 cap_cost    25
 emission    0.9

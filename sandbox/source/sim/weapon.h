@@ -106,6 +106,14 @@ struct MissileLauncher : Weapon {
     f32  cap_cost() const override { return cap_cost_value; }
 };
 // ---------------------------------------------------------------------------
+// Effective reach: how far a shot from this weapon can actually travel before it expires
+// (projectile speed x lifetime). SINGLE SOURCE OF TRUTH for "can this weapon hit something at
+// distance d" -- the RTS attack order gates firing on it and the HUD range ring draws it, so what
+// the player sees is exactly what the ship does. Returns 0 for a weapon with no usable stats.
+// ---------------------------------------------------------------------------
+f32 weapon_effective_reach(const Weapon* w);
+
+// ---------------------------------------------------------------------------
 // Helper: instances are normally built from `.weapon` defs by weapon_instantiate
 // (sim/weapon_def.h). No hardcoded factories remain.
 // ---------------------------------------------------------------------------
