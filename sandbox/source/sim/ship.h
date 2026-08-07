@@ -485,6 +485,21 @@ void ship_capacitor_update(Ship* ship, f32 dt);
 // weapon_fire_offset_local.
 bs_math::HierPos2 ship_hardpoint_fire_origin(const Ship* ship, i32 hp_index);
 
+// THE spawn site: put this mount's shot(s) in the world, along `world_dir`, with
+// `ship_velocity` added. Every fire-control surface routes through it -- the manual
+// trigger, the RTS attack order and both NPC gunners -- which is what makes a weapon's
+// barrels a data question rather than a per-call-site one.
+//
+// A weapon whose def authors muzzles fires from those barrel tips, resolved against the
+// turret's LIVE aim so the origin sits where the art draws the barrel; MUZZLE_SEQUENTIAL
+// advances one barrel per pull, MUZZLE_SALVO empties them all on one cooldown. A weapon
+// with no authored muzzles fires one shot from ship_hardpoint_fire_origin, unchanged.
+//
+// Firing is all this does: the caller still validates with ship_weapon_fire_state and
+// commits the capacitor with ship_try_spend_cap first -- a salvo costs one charge.
+void ship_hardpoint_fire(Ship* ship, i32 hp_index, bs_math::Vec2 world_dir,
+                         bs_math::Vec2 ship_velocity, struct ProjectileSystem* projectiles);
+
 // TRUE when the world-space direction lies inside the hardpoint's traverse arc (centered
 // on its facing, rotating with the ship). Full-circle arcs and invalid indices always pass.
 b8 ship_hardpoint_can_aim(const Ship* ship, i32 hp_index, bs_math::Vec2 world_dir);

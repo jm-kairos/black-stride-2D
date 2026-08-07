@@ -1,0 +1,40 @@
+# Heavy triple-barrel artillery: the first weapon in the catalog that empties EVERY barrel on
+# one trigger pull (muzzle_pattern salvo), so its 20-damage shells land as a 60-damage volley
+# for a single 28-point charge. Tuned against longlance_rail, the other tier-2 alpha piece:
+# identical DPS (36), a third more alpha, but a third of the reach and slightly worse damage
+# per capacitor -- it has to be flown into knife range to be worth mounting. Three separate
+# shells also make it the only ballistic that SATURATES point defense: PD must burn down all
+# three, and each is tougher than a gauss shell.
+#
+# Deliberately size M, not L. The only hull with authored hardpoints (assets/ships/ship/ship.ship)
+# has three MEDIUM weapon slots and no large one, so an L weapon cannot be mounted anywhere in
+# the game today -- see longlance_rail, which currently cannot.
+id          trident_mk1
+name        "Trident Siege Battery"
+kind        ballistic
+size        M
+icon        ic-cannon
+damage      20
+fire_rate   0.6
+proj_speed  8500
+proj_life   15
+proj_radius 5.5
+cap_cost    28
+emission    0.85
+proj_hp     1.5
+price       1500
+tier        2
+desc "Three barrels, one trigger, one charge. It spends most of a fight silent and the rest of it rearranging somebody's hull - but the range band where it can do that is short enough to be a decision."
+
+# Shares the triple-barrel art with autocannon_mk1; the geometry is in hardpoint half-extents,
+# so the same numbers scale correctly on any slot size.
+mount_art       assets/weapons/assets/tier_1_cannon_triple_barrel.png
+mount_art_size  1.95 3.00
+mount_art_pivot -0.37
+
+# All three barrels at once -- the salvo IS the weapon, and the stat block above is balanced
+# around a 3-shell volley rather than a single shell.
+muzzle -0.50 1.85
+muzzle  0.00 1.85
+muzzle  0.50 1.85
+muzzle_pattern salvo

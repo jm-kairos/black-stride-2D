@@ -17,14 +17,16 @@ damage (CombatArena), and does not own drawing — `render/ship_visual` here is 
 `PdStance`/`PdPriority`, `ShipSizeClass`, `ShipMotion`; `ship_load`, `ship_recompute_stats`,
 `ship_try_spend_cap`, `ship_capacitor_update`, `ship_collider_corners`, `ship_bounding_radius`,
 `ship_local_dir`, `ships_collide`, `hardpoint_accepts`, `hardpoint_fits_module`,
-`ship_first_free_hardpoint`, `ship_hardpoint_fire_origin`, `ship_hardpoint_can_aim`,
+`ship_first_free_hardpoint`, `ship_hardpoint_fire_origin`, `ship_hardpoint_fire`,
+`ship_hardpoint_can_aim`,
 `ship_select_bearing_weapon`, `ship_turret_aim_at`, `ship_update_turrets`;
 `WeaponFireState`, `ship_weapon_fire_state`, `ship_hardpoint_in_selection`,
 `ship_select_weapon_override`, `ship_clear_weapon_override`, `ship_hardpoint_in_group`,
 `ship_nth_group_weapon`.
 `sim/weapon.h` — `Weapon`, `BallisticWeapon`, `MissileLauncher`, `WeaponKind`, `FireMode`,
 `weapon_effective_reach`. `sim/weapon_def.h` — `WeaponDef`, `WeaponRegistry`,
-`weapon_registry_load`, `weapon_registry_find`, `weapon_instantiate`.
+`weapon_registry_load`, `weapon_registry_resolve_textures`, `weapon_registry_find`,
+`weapon_instantiate`.
 `sim/module.h` — `ModuleDef`, `ModuleRegistry`, `module_registry_load`, `module_registry_find`.
 `sim/projectile.h` — `Projectile`, `ProjectileKind`, `ProjectileSystem`, `MAX_PROJECTILES`.
 `render/ship_visual.h` — `ShipVisual`, `VisualLayer`, `ship_visual_load`,
@@ -96,6 +98,23 @@ the subsystem while sitting outside `ship.h`'s seven.)*
   `ship_hardpoint_in_selection`'s no-override branch all route through it, so "what is in this
   group" has one answer. `ship_nth_group_weapon` is its enumerate form and is what makes the
   micro-selection hub offer the active group instead of the whole hull.
+- **`ship_hardpoint_fire` is the one per-shot SPAWNER, the twin of `ship_weapon_fire_state`
+  being the one per-shot validator.** The manual trigger (`game.cpp`), the RTS attack order
+  (`sim/fleet.cpp`) and both combat-arena gunners route through it, so where a weapon's shots
+  physically leave the hull is answered once. That is what makes barrels a data question: a
+  `.weapon` def listing `muzzle` offsets gets them on the player's guns, the autopilot's and
+  the NPCs' together, with no fire site aware that barrels exist. Callers still validate and
+  spend the capacitor first; the spawner only spawns.
+- **A muzzle resolves against `mount_aim`, not against the direction being fired.** The two
+  differ while a turret is still traversing, and the muzzle must sit where ShipRendering draws
+  the barrel — the shot is watched leaving the art, not leaving the aim vector. Offsets are in
+  the same hardpoint-half-extent units as `mount_art_size`, so art and shot origins scale
+  together and cannot drift apart.
+- **`Weapon::fire` is now a non-virtual composition of two virtuals** — `spawn_shot` (put one
+  projectile in the world) and `begin_cooldown` — because `fire` gated on `ready()` and set the
+  cooldown itself, so a salvo calling it per barrel would have fired exactly once. Every
+  existing caller of `fire` keeps its behaviour; only a multi-barrel salvo takes the split path,
+  checking readiness once and cooling down once.
 - **`Weapon::disabled` is declared with no producer.** There is no subsystem-damage model yet;
   the flag exists so the validator and the hub's Disabled state are correct the day one lands.
 - **Weapon instances point their `name`/`icon` into the registry's pool storage**, which
@@ -108,7 +127,17 @@ the subsystem while sitting outside `ship.h`'s seven.)*
 **Extension points:** **A new weapon is a data file** — a `.weapon` text file listed in
 `assets/weapons/weapons.list`; `weapon_instantiate` builds a `BallisticWeapon` or
 `MissileLauncher` from `def->kind`, and `sim/weapon.cpp` records that "the old hardcoded
-factories are gone". **A new module** is the same shape via `assets/modules/modules.list`.
+factories are gone". **Its in-world turret look is part of that data file too** — an optional
+`mount_art` path plus `mount_art_size` / `mount_art_pivot`, which ShipRendering draws instead of
+its procedural rectangles. Omit them and the weapon keeps the rectangles, which is why adding
+cannon art left railguns and missile racks alone. **Barrels are the same kind of edit** —
+repeatable `muzzle <right> <forward>` lines plus `muzzle_pattern sequential|salvo`. Any count up
+to `WEAPON_MAX_MUZZLES` works and no fire site changes to add a six-barrel gun; measure the
+offsets off the art's alpha rather than guessing, as `gauss_mk1` and `autocannon_mk1` record in
+their comments. Choose `salvo` only for a def tuned for it — it empties every barrel on one
+capacitor charge, multiplying damage per trigger pull by the barrel count; `trident_mk1` is the
+worked example, balanced around its 3-shell volley rather than its per-shell damage.
+**A new module** is the same shape via `assets/modules/modules.list`.
 **A new hull** is a `.ship` file with `hardpoint <id> <accepts> <size> <x> <y> <facing> <arc>`
 lines. A genuinely new weapon *behaviour* needs a `Weapon` subclass plus a `WeaponKind` tag and
 a branch in `weapon_instantiate` — note `weapon_effective_reach` downcasts on that tag rather
@@ -135,12 +164,26 @@ it reports affordability, and the caller commits via `ship_try_spend_cap`.
   which is what forced placement-new in `game_init`. `ShipVisual` alone carries 512 bytes of
   path strings per layer × 8 layers, retained after load though the paths are only needed during
   resolution.
-- **Texture resolution is a mandatory second phase.** `ship_visual_load` records only path
-  strings; `ship_visual_resolve_textures` must run later, after the renderer is live. Skipping it
-  leaves every handle at 0, which the engine silently renders as the 1×1 white texture.
+- **Texture resolution is a mandatory second phase, now in two places.** `ship_visual_load` and
+  `weapon_registry_load` both record only path strings; `ship_visual_resolve_textures` and
+  `weapon_registry_resolve_textures` must run later, after the renderer is live. Skipping the
+  first leaves every hull handle at 0, which the engine silently renders as the 1×1 white
+  texture; skipping the second is quieter — the mount just falls back to procedural art, which
+  looks like "the artist's PNG never landed" rather than like a bug.
 - `projectile.cpp`'s `init` bakes two textures on the **stack** (128×512 and 128×128, ~320 KB
   combined) — unlike `text.cpp` and `star_fx.cpp`, which use `static` buffers to avoid exactly
   this.
+- **A size-L weapon cannot be mounted anywhere in the game.** `assets/ships/ship/ship.ship` is
+  the only hull with authored hardpoints, and its three weapon slots are all MEDIUM (its one
+  LARGE slot is the engine bay). `longlance_rail` is therefore dead content today: it loads into
+  the registry, shows a stat card, and fits nothing. Any new L weapon inherits the same problem —
+  which is why `trident_mk1` is size M. The fix is a hull with an L weapon hardpoint, not a
+  change here.
+- **One fire site stays off `ship_hardpoint_fire`:** the NPC-agent gunner
+  (`sim/ai_ship.cpp:2193`) calls `Weapon::fire` with `sh->origin`, because a transient agent
+  shoots from its hull position rather than through a hardpoint. Consistent today — those hulls
+  draw no mount art either, so there is no barrel to disagree with — but a weapon's barrels are
+  silently ignored there, and that is the site to fix if agents ever grow turrets.
 - `spawn_missile` duplicates `spawn`'s entire free-slot loop, with a comment explaining the
   reason: `spawn` does not report which slot it filled.
 - `ProjectileSystem::glow_override` is a mutable pointer set by a *render* pass
@@ -163,4 +206,7 @@ it reports affordability, and the caller commits via `ship_try_spend_cap`.
 `sandbox/source/sim/projectile.{cpp,h}`, `sandbox/source/render/ship_visual.{cpp,h}`
 
 **Last verified:** 2026-08-07, commit `e83a88d` + the weapon-hub group-filter change (added
-`ship_hardpoint_in_group` / `ship_nth_group_weapon`, removed `ship_nth_mounted_weapon`)
+`ship_hardpoint_in_group` / `ship_nth_group_weapon`, removed `ship_nth_mounted_weapon`) + the
+cannon mount-art change (added the `mount_art*` fields and `weapon_registry_resolve_textures`) +
+the multi-barrel change (added `muzzle*` fields, `ship_hardpoint_fire`, the
+`fire` -> `spawn_shot` + `begin_cooldown` split, and `trident_mk1` as the first salvo weapon)

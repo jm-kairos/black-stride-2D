@@ -16,4 +16,21 @@ emission    0.5
 proj_hp     0.6
 price       250
 tier        1
+
+# In-world turret art (446x688, barrels-up). Three barrels for the rapid-fire mount; see
+# gauss_mk1 for what the size/pivot numbers mean.
+mount_art       assets/weapons/assets/tier_1_cannon_triple_barrel.png
+mount_art_size  1.95 3.00
+mount_art_pivot -0.37
+
+# Three barrels, measured off the art's alpha (cols 96..121 / 210..235 / 324..349 of 446,
+# tips at row 5). SEQUENTIAL, so the authored 12 shells/s and 1.5 cap/shot are exactly what
+# they were -- the barrels take turns rather than tripling the volley. At 12/s that is a
+# barrel every 83 ms, which reads as all three working. A heavy triple-barrel that fires all
+# three at once is `muzzle_pattern salvo`, but that is 3x the damage per capacitor charge and
+# wants its own def and its own tuning, not a one-word edit here.
+muzzle -0.50 1.85
+muzzle  0.00 1.85
+muzzle  0.50 1.85
+muzzle_pattern sequential
 desc "Cheap per shot, hungry per second. Its real trade is volume: a dozen light shells a second make the densest flak screen this side of tier two."

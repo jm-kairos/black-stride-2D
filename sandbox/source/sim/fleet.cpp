@@ -190,7 +190,7 @@ void FleetShip::update_attack(game_state* s, f32 dt) {
                 // spent only once it passes, so a weapon on cooldown never drains the bank.
                 if (ship_weapon_fire_state(sh, whp, to_target, dist) == WEAPON_FIRE_READY &&
                     ship_try_spend_cap(sh, w->cap_cost()))
-                    w->fire(fire_origin, aim_dir, fl->velocity, &s->projectiles);
+                    ship_hardpoint_fire(sh, whp, aim_dir, fl->velocity, &s->projectiles);
             }
         }
     }

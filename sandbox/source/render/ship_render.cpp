@@ -1,6 +1,7 @@
 #include "render/ship_render.h"
 #include "game.h"
 #include "sim/module.h"          // ModuleDef::type (sensor-dish mount art)
+#include "sim/weapon_def.h"      // WeaponDef::mount_art_tex (authored turret art)
 #include "core/view_transform.h" // render_from_hierpos
 #include "render/text.h"
 #include "core/render_layers.h" // LAYER_UI
@@ -316,10 +317,11 @@ void draw_hardpoint_drag_feedback(const Ship* ship, i32 hp_index, b8 fits, f32 t
         renderer_draw_line(w[i], w[(i + 1) % 4], thickness, c, LAYER_GIZMO);
 }
 
-// ---- Procedural mount art (Phase 5) ------------------------------------------------------
-// No turret PNGs exist, so mounts are drawn as flat-shaded rectangles straight from the
-// sprite batch. All extents are WORLD units (they scale with the hull under zoom), unlike
-// renderer_draw_line's screen-pixel thickness.
+// ---- Mount art (Phase 5) -----------------------------------------------------------------
+// Weapons that author `mount_art` in their `.weapon` def draw that sprite; everything else
+// (railguns, missile racks, point defense, sensor dishes) still draws as flat-shaded
+// rectangles straight from the sprite batch. All extents are WORLD units (they scale with
+// the hull under zoom), unlike renderer_draw_line's screen-pixel thickness.
 
 static const u32 LAYER_MOUNT_ART = LAYER_SHIP + 1; // just above the hull sprite
 
@@ -335,6 +337,33 @@ static void draw_solid_rect(Vec2 center, Vec2 size, f32 rotation, bs_color color
     sp.tint     = color;
     sp.custom   = bs_color{ 0.0f, 0.0f, 1.0f, 0.0f };
     sp.texture  = bs_texture{ BS_INVALID_HANDLE };
+    sp.blend    = BLEND_ALPHA;
+    sp.layer    = LAYER_MOUNT_ART;
+    renderer_draw_sprite(&sp);
+}
+
+// Authored turret art: one textured quad standing in for the whole procedural stack,
+// rotated AS A UNIT by the live turret aim (integrated base, so there is no hull-fixed
+// plate to leave behind). Geometry comes from the def in hardpoint half-extents, so the
+// art scales with the slot exactly as the rectangles did.
+//
+// `c` is the hardpoint centre and `fwd` the aim direction, both already in world space.
+static void draw_mount_art(const WeaponDef* def, Vec2 c, Vec2 fwd, f32 aim, f32 unit, f32 alpha) {
+    bs_sprite sp{};
+    // The art's rotation centre sits mount_art_pivot off its own centre along the barrel
+    // axis, so push the quad the other way to land that centre on the hardpoint — which is
+    // also where ship_hardpoint_fire_origin spawns shots and their muzzle flash.
+    sp.position = vec2_sub(c, vec2_scale(fwd, def->mount_art_pivot * unit));
+    sp.size     = Vec2{ def->mount_art_w * unit, def->mount_art_h * unit };
+    sp.origin   = Vec2{ 0.5f, 0.5f };
+    sp.rotation = aim;
+    sp.uv       = bs_rect{ 0.0f, 0.0f, 1.0f, 1.0f };
+    sp.tint     = bs_color{ 1.0f, 1.0f, 1.0f, alpha };
+    // Same flags the hull art uses: custom.x/custom.w zeroed so the ship-glow parameters
+    // can't warp the sprite, custom.z = 1 to mark it self-emissive against map-look star
+    // light (see sprite.frag.hlsl).
+    sp.custom   = bs_color{ 0.0f, 0.0f, 1.0f, 0.0f };
+    sp.texture  = def->mount_art_tex;
     sp.blend    = BLEND_ALPHA;
     sp.layer    = LAYER_MOUNT_ART;
     renderer_draw_sprite(&sp);
@@ -368,7 +397,15 @@ static void draw_turret(const Ship* ship, i32 hp_index, b8 is_pd, f32 alpha) {
         }
         return;
     }
-    // Main gun: base plate, housing, single heavy barrel with a dark muzzle block.
+    // Main gun. A weapon whose def authored mount art draws that instead of the rectangles;
+    // one with none (railgun, missile rack) or whose art failed to load falls through below.
+    const Weapon*    w  = ship->mounts[hp_index];
+    const WeaponDef* wd = w ? w->def : nullptr;
+    if (wd && wd->mount_art_tex.id) {
+        draw_mount_art(wd, c, fwd, aim, e * sc, alpha);
+        return;
+    }
+    // Base plate, housing, single heavy barrel with a dark muzzle block.
     draw_solid_rect(c, Vec2{ 1.60f * e * sc, 1.60f * e * sc }, ship->angle, base_c);
     draw_solid_rect(vec2_add(c, vec2_scale(fwd, 0.15f * e * sc)),
                     Vec2{ 1.00f * e * sc, 1.30f * e * sc }, aim, housing_c);

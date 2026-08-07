@@ -195,7 +195,7 @@ void combat_arena_update_enemy_ai(game_state* s, f32 dt) {
     // Enemy is static, so its own muzzle velocity contribution is zero.
     w->owner_faction_id = sh->faction_id;   // stamp attacker faction (the patrol hull's live civ)
     if (w->ready() && ship_try_spend_cap(sh, w->cap_cost()))   // capacitor gate
-        w->fire(fire_origin, aim_dir, Vec2{ 0.0f, 0.0f }, &s->projectiles);
+        ship_hardpoint_fire(sh, whp, aim_dir, Vec2{ 0.0f, 0.0f }, &s->projectiles);
 
     // Missile launchers fire independently of the bearing-weapon pick: any mounted, ready
     // launcher looses a seeker at the flagship whenever the hull is roughly aligned. Missiles
@@ -207,7 +207,7 @@ void combat_arena_update_enemy_ai(game_state* s, f32 dt) {
         HierPos2 ml_origin = ship_hardpoint_fire_origin(sh, hpi);
         Vec2 ml_dir = hierpos_diff(&flag->origin, &ml_origin);
         ml->owner_faction_id = sh->faction_id;
-        ml->fire(ml_origin, ml_dir, Vec2{ 0.0f, 0.0f }, &s->projectiles);
+        ship_hardpoint_fire(sh, hpi, ml_dir, Vec2{ 0.0f, 0.0f }, &s->projectiles);
     }
 }
 

@@ -15,4 +15,16 @@ emission    0.6
 proj_hp     1.0
 price       400
 tier        1
+
+# In-world turret art (407x659, barrel-up). Height 3.00 half-extents matches the axial
+# footprint of the procedural turret it replaces; width follows the art's aspect ratio.
+# The pivot is negative because the housing this thing rotates about sits aft of the
+# quad's centre -- the quad also has to contain the barrel.
+mount_art       assets/weapons/assets/tier_1_cannon_single_barrel.png
+mount_art_size  1.85 3.00
+mount_art_pivot -0.32
+
+# One barrel, measured off the art's alpha (cols 209..242 of 407, tip at row 0) and sitting
+# slightly right of centre because the art draws it that way.
+muzzle 0.10 1.82
 desc "The workhorse medium cannon of the frontier. Nothing it does is exceptional; everything it does is dependable."

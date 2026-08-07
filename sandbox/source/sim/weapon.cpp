@@ -25,9 +25,9 @@ BallisticWeapon::BallisticWeapon(const char* name,
 {
     cooldown_duration = (fire_rate > 0.0f) ? (1.0f / fire_rate) : 1.0f;
 }
-void BallisticWeapon::fire(HierPos2 origin, Vec2 direction, Vec2 ship_velocity,
-                           ProjectileSystem* projectiles) {
-    if (!projectiles || !ready()) return;
+void BallisticWeapon::spawn_shot(HierPos2 origin, Vec2 direction, Vec2 ship_velocity,
+                                 ProjectileSystem* projectiles) {
+    if (!projectiles) return;   // readiness is fire()'s gate; a salvo checks it once
     Vec2 dir = direction;
     f32 len = vec2_length(dir);
     if (len > 0.0001f)
@@ -52,7 +52,6 @@ void BallisticWeapon::fire(HierPos2 origin, Vec2 direction, Vec2 ship_velocity,
     projectiles->spawn(origin, vel, lifetime,
                        projectile_radius, col, owner_faction, owner_faction_id,
                        projectile_emission, proj_hp_value, flak ? PROJ_FLAK : PROJ_SHELL, damage);
-    cooldown_remaining = cooldown_duration;
 }
 void BallisticWeapon::update(f32 dt) {
     if (cooldown_remaining > 0.0f) {
@@ -93,9 +92,9 @@ MissileLauncher::MissileLauncher(const char* name,
     icon  = "ic-missile";
     wkind = WEAPON_KIND_MISSILE;
 }
-void MissileLauncher::fire(HierPos2 origin, Vec2 direction, Vec2 ship_velocity,
-                           ProjectileSystem* projectiles) {
-    if (!projectiles || !ready()) return;
+void MissileLauncher::spawn_shot(HierPos2 origin, Vec2 direction, Vec2 ship_velocity,
+                                 ProjectileSystem* projectiles) {
+    if (!projectiles) return;   // readiness is fire()'s gate; a salvo checks it once
     Vec2 dir = direction;
     f32 len = vec2_length(dir);
     if (len > 0.0001f)
@@ -106,7 +105,6 @@ void MissileLauncher::fire(HierPos2 origin, Vec2 direction, Vec2 ship_velocity,
     projectiles->spawn_missile(origin, vel, missile_lifetime, missile_radius, col,
                                owner_faction, owner_faction_id, missile_emission, missile_hp,
                                damage, missile_speed);
-    cooldown_remaining = reload_time;
 }
 void MissileLauncher::update(f32 dt) {
     if (cooldown_remaining > 0.0f) {

@@ -5,6 +5,7 @@
 #include "sim/weapon_def.h"
 
 #include <core/logger.h>
+#include <renderer/renderer.h>  // renderer_load_texture (mount-art resolution)
 
 #include <stdio.h>
 #include <string.h>
@@ -12,6 +13,12 @@
 static b8 weapon_kind_from_token(const char* tok, u8* out) {
     if (strcmp(tok, "ballistic") == 0) { *out = WEAPON_KIND_BALLISTIC; return TRUE; }
     if (strcmp(tok, "missile")   == 0) { *out = WEAPON_KIND_MISSILE;   return TRUE; }
+    return FALSE;
+}
+
+static b8 weapon_muzzle_pattern_from_token(const char* tok, u8* out) {
+    if (strcmp(tok, "sequential") == 0) { *out = MUZZLE_SEQUENTIAL; return TRUE; }
+    if (strcmp(tok, "salvo")      == 0) { *out = MUZZLE_SALVO;      return TRUE; }
     return FALSE;
 }
 
@@ -52,6 +59,12 @@ static b8 weapon_def_load(WeaponDef* out, const char* path) {
     out->proj_hp     = 1.0f;
     out->price       = 0;
     out->tier        = 1;
+    // Mount-art geometry defaults, only ever read when a `mount_art` path is present. The
+    // 3.0 height matches the procedural turret's own axial footprint (base plate through
+    // muzzle block, ~2.95 half-extents), so art and rectangles occupy the same slot.
+    out->mount_art_w     = 1.85f;
+    out->mount_art_h     = 3.00f;
+    out->mount_art_pivot = 0.0f;
     char line[256];
     while (fgets(line, sizeof(line), f)) {
         weapon_rstrip(line);
@@ -93,6 +106,31 @@ static b8 weapon_def_load(WeaponDef* out, const char* path) {
             continue;
         }
         if (sscanf(line, "icon %15s", out->icon) == 1) continue;
+        // The two suffixed mount_art keys MUST be tested before the bare one: "mount_art %s"
+        // happily matches "mount_art_size ..." and would capture "_size" as the path.
+        if (sscanf(line, "mount_art_size %f %f", &out->mount_art_w, &out->mount_art_h) == 2) continue;
+        if (sscanf(line, "mount_art_pivot %f", &out->mount_art_pivot) == 1) continue;
+        if (sscanf(line, "mount_art %127s", out->mount_art) == 1) continue;
+        // Suffixed key first, as with mount_art above. Here it is only convention -- "%f"
+        // cannot eat "_pattern" the way "%s" ate "_size" -- but the fall-through for an
+        // unmatched line is silent, so keeping the order uniform is what stops the next
+        // `muzzle_*` key from being quietly swallowed.
+        if (sscanf(line, "muzzle_pattern %31s", tok) == 1) {
+            if (!weapon_muzzle_pattern_from_token(tok, &out->muzzle_pattern))
+                BS_LOG_WARN("weapon_def_load: unknown muzzle_pattern '%s' in '%s'.", tok, path);
+            continue;
+        }
+        {   // Repeatable: each `muzzle <right> <forward>` line appends one barrel.
+            f32 mx = 0.0f, my = 0.0f;
+            if (sscanf(line, "muzzle %f %f", &mx, &my) == 2) {
+                if (out->muzzle_count < WEAPON_MAX_MUZZLES)
+                    out->muzzles[out->muzzle_count++] = bs_math::Vec2{ mx, my };
+                else
+                    BS_LOG_WARN("weapon_def_load: '%s' authors more than %d muzzles; extra dropped.",
+                                path, WEAPON_MAX_MUZZLES);
+                continue;
+            }
+        }
         if (sscanf(line, "damage %f",      &out->damage)      == 1) continue;
         if (sscanf(line, "fire_rate %f",   &out->fire_rate)   == 1) continue;
         if (sscanf(line, "reload %f",      &out->reload)      == 1) continue;
@@ -145,6 +183,21 @@ b8 weapon_registry_load(WeaponRegistry* reg, const char* manifest_path) {
     fclose(f);
     BS_LOG_INFO("weapon_registry_load: %d weapons loaded from '%s'.", reg->count, manifest_path);
     return TRUE;
+}
+
+void weapon_registry_resolve_textures(WeaponRegistry* reg) {
+    if (!reg) return;
+    for (i32 i = 0; i < reg->count; ++i) {
+        WeaponDef& d = reg->defs[i];
+        if (d.mount_art[0] == '\0') continue;   // no art authored: keeps the procedural mount
+        d.mount_art_tex = renderer_load_texture(d.mount_art);
+        // A failed load leaves id at BS_INVALID_HANDLE, which the draw site tests before
+        // committing to the sprite -- so the mount falls back to the rectangles rather than
+        // rendering the engine's 1x1 white stand-in.
+        if (!d.mount_art_tex.id)
+            BS_LOG_WARN("weapon_registry_resolve_textures: '%s' failed to load mount art '%s'; "
+                        "falling back to procedural art.", d.id, d.mount_art);
+    }
 }
 
 const WeaponDef* weapon_registry_find(const WeaponRegistry* reg, const char* id) {

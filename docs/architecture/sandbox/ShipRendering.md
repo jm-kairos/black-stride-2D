@@ -14,9 +14,9 @@ mirrors for drag feedback.
 `draw_ship_mounts`.
 Used from outside: `ship_render.h` by 3 subsystems, `ship_scene.h` by 2.
 
-**Depends on:** ShipCombatModel, CoordinateFrames, CelestialParallax, RenderLayerTable,
-BitmapText, CoordinateDiagnostics, GameStateModel; engine `renderer/renderer.h`,
-`renderer/camera2d.h`, `defines.h`.
+**Depends on:** ShipCombatModel (including `sim/weapon_def.h` for authored mount art),
+CoordinateFrames, CelestialParallax, RenderLayerTable, BitmapText, CoordinateDiagnostics,
+GameStateModel; engine `renderer/renderer.h`, `renderer/camera2d.h`, `defines.h`.
 **Depended on by:** SceneOrchestration, InWorldOverlays, DevPanels, FrameOrchestrator.
 
 **Key invariants:**
@@ -44,10 +44,18 @@ BitmapText, CoordinateDiagnostics, GameStateModel; engine `renderer/renderer.h`,
 
 **Extension points:** A new per-ship annotation is a function in `ship_render.h` following
 `draw_hardpoint_overlay` / `draw_collider_outline`: read `ship->render_pos`, convert ship-local
-positions with `ship_local_dir`, and draw on `LAYER_DEBUG` or `LAYER_GIZMO`. A new mount art
-kind follows `draw_turret` / `draw_radar_dish` in `ship_render.cpp` — flat-shaded rectangles via
-`draw_solid_rect`, dispatched from `draw_ship_mounts` on what occupies the hardpoint. A new hull
-layer kind is a `VisualLayerKind` in ShipCombatModel plus a branch in `draw_ship_visual_ex`.
+positions with `ship_local_dir`, and draw on `LAYER_DEBUG` or `LAYER_GIZMO`. **Giving a weapon
+authored turret art is a data edit, not a code edit** — add `mount_art` / `mount_art_size` /
+`mount_art_pivot` to its `.weapon` def and `draw_turret` picks it up through
+`Weapon::def`; the geometry is authored in hardpoint half-extents so it scales with the slot.
+A mount with no art (railguns, missile racks, point defense) keeps the rectangles, so the two
+looks coexist per weapon. A weapon's `muzzle` offsets are authored in those same units and
+resolved against the same `mount_aim` this pass draws with (in `ship_hardpoint_fire`), so shots
+leave the barrel the player is looking at; retuning `mount_art_size` means retuning the muzzles
+with it. A new *procedural* mount art kind still follows `draw_turret` /
+`draw_radar_dish` — flat-shaded rectangles via `draw_solid_rect`, dispatched from
+`draw_ship_mounts` on what occupies the hardpoint. A new hull layer kind is a
+`VisualLayerKind` in ShipCombatModel plus a branch in `draw_ship_visual_ex`.
 
 **Known limitations / tech debt:**
 - **The `render_pos` write is an undocumented cross-subsystem contract.** Nothing in either
@@ -71,7 +79,11 @@ layer kind is a `VisualLayerKind` in ShipCombatModel plus a branch in `draw_ship
 - `EMBLEM_NO_GLOW` is a file-static glow struct attached as `glow_override` to every emblem —
   which both disables glow and keeps emblems in one draw run, since the engine breaks runs on
   glow-pointer identity. A performance dependency on a static's address.
-- Mount art exists because no turret PNGs do; the rectangles are a stand-in for missing assets.
+- The procedural rectangles were a stand-in for missing turret PNGs. Cannons now have art
+  (`assets/weapons/assets/tier_1_cannon_*.png`) and go through `draw_mount_art`; everything else
+  is still the stand-in. **`mount_art_pivot` is eyeballed against the art**, not derived from it —
+  the art's rotation centre is its base, which no metadata records, so re-authoring a turret PNG
+  means re-tuning that number by looking at it.
 - Two sizing conventions sit side by side and are correct for different calls: emblem geometry
   divides by zoom, while `renderer_draw_line` thickness is passed as a plain screen-pixel
   constant because the engine divides internally.
@@ -79,4 +91,5 @@ layer kind is a `VisualLayerKind` in ShipCombatModel plus a branch in `draw_ship
 **Source paths:** `sandbox/source/render/ship_scene.{cpp,h}`,
 `sandbox/source/render/ship_render.{cpp,h}`
 
-**Last verified:** 2026-08-07, commit `812680c`
+**Last verified:** 2026-08-07, commit `812680c` + the cannon mount-art change (`draw_turret`
+now draws authored art via `draw_mount_art` when the weapon's def has one)

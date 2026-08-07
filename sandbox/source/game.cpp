@@ -397,10 +397,12 @@ b8 game_init(Game* game_inst) {
         // The flagship's weapons start UNMOUNTED in the loadout stash; the player mounts them
         // onto hardpoints from the Arsenal inspector (ship_load cleared all hardpoint mounts).
         // A deliberately diverse starting rack -- baseline gauss, rapid autocannon (flak
-        // platform), and a missile rack -- so the stat cards read differently from minute one.
+        // platform), salvo artillery, and a missile rack -- so the stat cards read differently
+        // from minute one. The rack is SHIP_MAX_WEAPONS (4) wide, so it holds one of each
+        // archetype rather than the duplicate gauss it used to carry.
         fs.ship.weapon_stash[0]     = weapon_instantiate(weapon_registry_find(&s->weapon_registry, "gauss_mk1"),      fs.ship.faction);
 
-        fs.ship.weapon_stash[1]     = weapon_instantiate(weapon_registry_find(&s->weapon_registry, "gauss_mk1"),      fs.ship.faction);
+        fs.ship.weapon_stash[1]     = weapon_instantiate(weapon_registry_find(&s->weapon_registry, "trident_mk1"),    fs.ship.faction);
 
         fs.ship.weapon_stash[2]     = weapon_instantiate(weapon_registry_find(&s->weapon_registry, "autocannon_mk1"), fs.ship.faction);
 
@@ -734,6 +736,13 @@ b8 game_init(Game* game_inst) {
     if (!s->render.emblem_drone.id)     BS_LOG_WARN("game_init: failed to load drone emblem texture.");
 
     if (!s->render.emblem_extractor.id) BS_LOG_WARN("game_init: failed to load extractor emblem texture.");
+
+    // ---- Weapon mount art -----------------------------------------------------------------
+
+    // weapon_registry_load ran before the renderer existed, so it only recorded path strings;
+    // this is the mandatory second phase that turns them into handles (cf. ship_visual).
+
+    weapon_registry_resolve_textures(&s->weapon_registry);
 
     // Initialize star visual effect system (generates procedural textures).
 
@@ -2843,7 +2852,7 @@ b8 game_update(Game* game_inst, f32 dt) {
 
                     w->owner_faction_id = psh->faction_id;   // stamp attacker faction for hit attribution
 
-                    w->fire(fire_origin, dir, pf->flight.velocity, &s->projectiles);
+                    ship_hardpoint_fire(psh, i, dir, pf->flight.velocity, &s->projectiles);
 
                     ++fired;
 

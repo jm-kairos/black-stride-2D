@@ -25,14 +25,30 @@ struct Weapon {
     // capacitor or arc. Nothing sets it yet (there is no subsystem-damage model); it exists so
     // the fire path and the micro-selection hub agree the moment a producer lands.
     b8            disabled;
-    Weapon(const char* n) : name(n), icon("ic-cannon"), def(nullptr), wkind(WEAPON_KIND_BALLISTIC), size(HARDPOINT_MEDIUM), damage(15.0f), owner_faction((VesselFaction)0), owner_faction_id(FACTION_PIRATE), disabled(FALSE) {}
+    // Which authored barrel fires next, for WeaponDef muzzles under MUZZLE_SEQUENTIAL.
+    // Per INSTANCE, so two of the same gun on one hull cycle independently. Meaningless
+    // for a weapon that authors no muzzles.
+    u8            next_muzzle;
+    Weapon(const char* n) : name(n), icon("ic-cannon"), def(nullptr), wkind(WEAPON_KIND_BALLISTIC), size(HARDPOINT_MEDIUM), damage(15.0f), owner_faction((VesselFaction)0), owner_faction_id(FACTION_PIRATE), disabled(FALSE), next_muzzle(0) {}
     virtual ~Weapon() {}
-    // fire at the given origin in the given direction (unit or non-unit).
-    // `ship_velocity` is the owning ship's current world velocity (added to projectile).
-    // `projectiles` is the global projectile manager to spawn into.
-    virtual void fire(bs_math::HierPos2 origin, bs_math::Vec2 direction,
-                      bs_math::Vec2 ship_velocity,
-                      ProjectileSystem* projectiles) = 0;
+    // Put ONE projectile in the world at `origin`, along `direction` (unit or non-unit),
+    // without touching the cooldown. `ship_velocity` is the owning ship's current world
+    // velocity (added to the projectile). Split out of fire() so a multi-barrel salvo can
+    // put one shot down each barrel on a single trigger pull; callers that want the normal
+    // one-shot-plus-cooldown behaviour call fire().
+    virtual void spawn_shot(bs_math::HierPos2 origin, bs_math::Vec2 direction,
+                            bs_math::Vec2 ship_velocity,
+                            ProjectileSystem* projectiles) = 0;
+    // Start this weapon's cooldown, as if it had just fired. Pairs with spawn_shot.
+    virtual void begin_cooldown() = 0;
+    // One shot from `origin`, then the cooldown: spawn_shot + begin_cooldown, gated on
+    // ready(). The long-standing entry point; every existing caller keeps its behaviour.
+    void fire(bs_math::HierPos2 origin, bs_math::Vec2 direction,
+              bs_math::Vec2 ship_velocity, ProjectileSystem* projectiles) {
+        if (!projectiles || !ready()) return;
+        spawn_shot(origin, direction, ship_velocity, projectiles);
+        begin_cooldown();
+    }
     // per-frame update (cooldowns, charge states, etc.)
     virtual void update(f32 dt) = 0;
     // TRUE if the weapon can fire right now (cooldown expired)
@@ -67,9 +83,10 @@ struct BallisticWeapon : Weapon {
                     f32 lifetime,
                     f32 radius,
                     f32 emission = 0.5f);
-    void fire(bs_math::HierPos2 origin, bs_math::Vec2 direction,
-              bs_math::Vec2 ship_velocity,
-              ProjectileSystem* projectiles) override;
+    void spawn_shot(bs_math::HierPos2 origin, bs_math::Vec2 direction,
+                    bs_math::Vec2 ship_velocity,
+                    ProjectileSystem* projectiles) override;
+    void begin_cooldown() override { cooldown_remaining = cooldown_duration; }
     void update(f32 dt) override;
     b8   ready() const override;
     f32  cooldown_progress() const override;
@@ -100,9 +117,10 @@ struct MissileLauncher : Weapon {
                     f32 radius,
                     f32 emission,
                     f32 hp);
-    void fire(bs_math::HierPos2 origin, bs_math::Vec2 direction,
-              bs_math::Vec2 ship_velocity,
-              ProjectileSystem* projectiles) override;
+    void spawn_shot(bs_math::HierPos2 origin, bs_math::Vec2 direction,
+                    bs_math::Vec2 ship_velocity,
+                    ProjectileSystem* projectiles) override;
+    void begin_cooldown() override { cooldown_remaining = reload_time; }
     void update(f32 dt) override;
     b8   ready() const override;
     f32  cooldown_progress() const override;

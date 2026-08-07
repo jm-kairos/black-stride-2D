@@ -3,6 +3,7 @@
 #define _CRT_SECURE_NO_WARNINGS
 #include "sim/ship.h"
 #include "sim/weapon.h"   // Weapon::ready (bearing-weapon selection)
+#include "sim/weapon_def.h" // WeaponDef muzzles (ship_hardpoint_fire)
 #include "sim/module.h"   // ModuleDef (fit test + sensor stat composition)
 #include <core/logger.h>
 #include <renderer/renderer.h>
@@ -202,6 +203,42 @@ HierPos2 ship_hardpoint_fire_origin(const Ship* ship, i32 hp_index) {
     if (hp_index < 0 || hp_index >= ship->hardpoint_count)
         return ship_local_to_world(ship, ship->weapon_fire_offset_local);
     return ship_local_to_world(ship, ship->hardpoints[hp_index].pos_local);
+}
+void ship_hardpoint_fire(Ship* ship, i32 hp_index, Vec2 world_dir, Vec2 ship_velocity,
+                         ProjectileSystem* projectiles) {
+    if (!ship || !projectiles) return;
+    if (hp_index < 0 || hp_index >= ship->hardpoint_count) return;
+    Weapon* w = ship->mounts[hp_index];
+    if (!w) return;
+
+    HierPos2 pivot = ship_hardpoint_fire_origin(ship, hp_index);
+    const WeaponDef* def = w->def;
+    const i32 n = def ? def->muzzle_count : 0;
+    if (n <= 0) {
+        w->fire(pivot, world_dir, ship_velocity, projectiles);   // no barrels authored
+        return;
+    }
+    if (!w->ready()) return;   // gate ONCE, so every barrel of a salvo gets through
+
+    // Muzzle offsets are authored in the weapon's own frame, so resolve them against
+    // mount_aim -- the SLEWED aim the turret art is drawn at -- not the direction being
+    // fired along. The two differ while a turret is still traversing, and it is the art
+    // the player is watching the shot leave.
+    const f32  unit = hardpoint_half_extent(ship->hardpoints[hp_index].size) * ship->world_scale;
+    const f32  aim  = ship->angle + ship->mount_aim[hp_index];
+    const Vec2 fwd  = vec2_rotate(Vec2{ 0.0f, 1.0f }, aim);
+    const Vec2 rgt  = vec2_rotate(Vec2{ 1.0f, 0.0f }, aim);
+
+    const i32 first = (def->muzzle_pattern == MUZZLE_SALVO) ? 0 : (i32)(w->next_muzzle % n);
+    const i32 count = (def->muzzle_pattern == MUZZLE_SALVO) ? n : 1;
+    for (i32 k = 0; k < count; ++k) {
+        const Vec2 m   = def->muzzles[(first + k) % n];
+        const Vec2 off = vec2_add(vec2_scale(rgt, m.x * unit), vec2_scale(fwd, m.y * unit));
+        HierPos2   o   = hierpos_add_vec2(&pivot, off);
+        w->spawn_shot(o, world_dir, ship_velocity, projectiles);
+    }
+    w->next_muzzle = (u8)((first + count) % n);
+    w->begin_cooldown();
 }
 b8 ship_hardpoint_can_aim(const Ship* ship, i32 hp_index, Vec2 world_dir) {
     if (!ship || hp_index < 0 || hp_index >= ship->hardpoint_count) return TRUE;
