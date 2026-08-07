@@ -2757,7 +2757,7 @@ b8 game_update(Game* game_inst, f32 dt) {
 
         }
 
-        // ---- Weapon firing (left click, gated on neither UI layer owning the cursor) ------
+        // ---- Weapon firing (left button HELD, gated on neither UI layer owning the cursor) ----
 
         // Also suppressed while the flagship inspector is open: it is a management window, so a
         // left-click anywhere (inside or outside its bounds) must never fire the weapons.
@@ -2785,9 +2785,17 @@ b8 game_update(Game* game_inst, f32 dt) {
 
             }
 
-            // left click -> fire every member of the current selection that passes validation
+            // Trigger HELD -> every frame, fire every member of the current selection that passes
+            // validation. This is a trigger change only: the loop below is unchanged, so each
+            // weapon still rate-limits itself through WEAPON_FIRE_RELOADING and nothing bypasses
+            // ship_weapon_fire_state. The press edge is kept solely to gate the feedback block,
+            // which would otherwise push an action-log line every frame the trigger is held.
 
-            if (input_is_button_down(BUTTON_LEFT) && !input_was_button_down(BUTTON_LEFT)) {
+            b8 fire_held    = input_is_button_down(BUTTON_LEFT);
+
+            b8 fire_pressed = fire_held && !input_was_button_down(BUTTON_LEFT);
+
+            if (fire_held) {
 
                 bs_math::HierPos2 mw_hp = mouse_true_hierpos(s);
 
@@ -2839,7 +2847,14 @@ b8 game_update(Game* game_inst, f32 dt) {
 
                 // Feedback. Only ever reported when the trigger produced NOTHING, and only when
                 // one cause accounts for the whole selection - a partial volley stays quiet.
-                if (members == 0) {
+                // Gated on the PRESS EDGE, not the hold: action_log_push neither dedups nor rate
+                // limits, so reporting per frame would flood the buffer and pin the HUD fade open.
+                // One press still yields at most one message, exactly as before.
+                if (!fire_pressed) {
+
+                    // held, not pressed - fire without reporting
+
+                } else if (members == 0) {
 
                     if (psh->weapon_override >= 0)
                         action_log_push(s, "Selected weapon is no longer mounted.");
