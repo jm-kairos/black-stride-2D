@@ -33,8 +33,11 @@ damage (CombatArena), and does not own drawing — `render/ship_visual` here is 
 **Depends on:** GameStateModel; engine `math/math_utils.h`, `math/bs_hierpos.h`,
 `renderer/renderer.h`, `renderer/renderer_types.h`, `core/logger.h`, `defines.h`.
 It has **out-degree 0** to other sandbox subsystems — the most self-contained large cluster.
-**Depended on by:** CombatArena, Discovery, FleetControl, InWorldOverlays, RtsControl,
-ShipRendering, LocalAgentAi, GameStateModel.
+**Depended on by:** CombatArena, CoordinateDiagnostics, Discovery, FleetControl, InWorldOverlays,
+RtsControl, ShipRendering, LocalAgentAi, FrameOrchestrator, GameStateModel.
+*(The per-header counts above are not the same question: `game.cpp` reaches this cluster through
+`weapon.h` and `projectile.h` without including `ship.h`, so FrameOrchestrator is a dependant of
+the subsystem while sitting outside `ship.h`'s seven.)*
 
 **Key invariants:**
 - **The rigid-body relation is fixed:** `world = origin + rotate(local * world_scale, angle)`,
@@ -56,7 +59,7 @@ ShipRendering, LocalAgentAi, GameStateModel.
   (`render/gameplay_overlays.cpp`), so what the player sees matches what the ship does. It
   prefers the authored `.weapon` def over live instance values so editing a data file moves both.
 - **`ship_weapon_fire_state` is the one per-shot validator**, and all three fire-control
-  surfaces go through it: the manual left-click loop in `game.cpp`, the autopilot attack order
+  surfaces go through it: the manual held-trigger loop in `game.cpp`, the autopilot attack order
   in `sim/fleet.cpp`, and the selection hub's per-tile status. It folds operational status,
   traverse arc, cooldown, reach and capacitor affordability into one `WeaponFireState` and
   spends nothing — the caller commits via `ship_try_spend_cap` only after `WEAPON_FIRE_READY`.
@@ -64,11 +67,17 @@ ShipRendering, LocalAgentAi, GameStateModel.
   beyond the drawn range ring still fired and still drained the bank.)*
 - **Manual fire control is gated on camera ATTACHMENT, not on `view.mode`.** `game_update`'s
   piloting branch has no mode test: the arena↔galaxy flip is a label over one coordinate space,
-  so flying, turret traverse, the fire-group row and left-click firing all keep working at any
+  so flying, turret traverse, the fire-group row and trigger firing all keep working at any
   zoom in either look. What separates the two control schemes is `free_camera_active`, which
   every block inside gates on — `control_ship_global` self-guards (`sim/ship_control.cpp:21`),
-  and the number row and left-click are suppressed while detached because RtsControl owns them
-  there. Detached engagement therefore runs through attack orders, which honour the override.
+  and the number row and the trigger are suppressed while detached because RtsControl owns the
+  left button there (it is box/click selection, not fire). Detached engagement therefore runs
+  through attack orders, which honour the override.
+- **The manual trigger is level-triggered, not edge-triggered.** Holding the left button
+  re-runs the whole selection loop every frame; per-weapon rate limiting comes entirely from
+  `WEAPON_FIRE_RELOADING`, so a weapon fires at its own authored rate and nothing bypasses the
+  validator. The press edge survives only to gate the action-log feedback — `action_log_push`
+  neither dedups nor rate limits, so reporting per frame would flood the buffer.
 - **`Ship::weapon_override` is the fire selection, and `ship_hardpoint_in_selection` is how you
   ask.** `-1` means "All" — the active group's members, the long-standing default. `>= 0` is a
   single hardpoint index that supersedes the group. Selecting a fire group with the number row
@@ -98,8 +107,9 @@ combat-arena steering pass, not here.
 `ship_weapon_fire_state`** — never a check bolted onto one fire site. All three fire-control
 surfaces route through that one function, so a rule added there reaches the manual trigger, the
 autopilot and the selection hub's status readout together; a rule added anywhere else silently
-applies to one of the three. The validator must stay side-effect-free (it is called every frame
-per tile by the hub): it reports affordability, and the caller commits via `ship_try_spend_cap`.
+applies to one of the three. The validator must stay side-effect-free — it is called every frame
+per tile by the hub *and* every frame per selected mount by the manual trigger while it is held:
+it reports affordability, and the caller commits via `ship_try_spend_cap`.
 
 **Known limitations / tech debt:**
 - **Two parallel faction systems coexist** mid-migration: the legacy `VesselFaction` enum (for
@@ -140,4 +150,4 @@ per tile by the hub): it reports affordability, and the caller commits via `ship
 `sandbox/source/sim/weapon.{cpp,h}`, `sandbox/source/sim/weapon_def.{cpp,h}`,
 `sandbox/source/sim/projectile.{cpp,h}`, `sandbox/source/render/ship_visual.{cpp,h}`
 
-**Last verified:** 2026-08-07, commit `e4d88d1`
+**Last verified:** 2026-08-07, commit `677f3a0`
