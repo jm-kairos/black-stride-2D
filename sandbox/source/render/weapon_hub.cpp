@@ -4,7 +4,7 @@
 #include "core/render_layers.h"   // LAYER_HUD_TEXT (no hand-copied layer constants)
 #include "core/cursor_world.h"    // mouse_true_hierpos
 #include "render/text.h"          // text_draw / text_width
-#include "sim/ship.h"             // ship_nth_mounted_weapon, ship_weapon_fire_state, ...
+#include "sim/ship.h"             // ship_nth_group_weapon, ship_weapon_fire_state, ...
 #include "sim/weapon.h"           // Weapon::name / cooldown_progress
 #include "sim/fleet.h"            // FleetShip::attack_target
 #include "sim/action_log.h"       // action_log_push
@@ -82,6 +82,10 @@ static f32 hub_look_opacity(HubLook look) {
 // Clamped so no tile leaves the viewport — a press near an edge slides the whole hub inward
 // rather than cropping a slot the player can still flick toward. When the window is too small
 // to hold the hub at all, it falls back to screen-centred.
+//
+// The 3x3 grid has the SAME bounding box the old four-tile diamond had: a corner tile sits one
+// step out on each axis, which is exactly where E/W and N/S already sat. Adding the diagonals
+// therefore did not move these half-extents.
 static Vec2 hub_center_px(const game_state* s) {
     const f32 hx  = HUB_TILE_W * 1.5f + HUB_GAP + HUB_MARGIN;   // centre -> outer edge of E/W
     const f32 hy  = HUB_TILE_H * 1.5f + HUB_GAP + HUB_MARGIN;   // centre -> outer edge of N/S
@@ -94,34 +98,77 @@ static Vec2 hub_center_px(const game_state* s) {
     return c;
 }
 
-// Tile center for slot 0=N, 1=E, 2=W, 3=S, relative to the hub center.
+#define HUB_SLOT_ALL 3   // South; owns no hardpoint
+
+// Tile center for a slot, relative to the hub center — a 3x3 grid with the deadzone ring in
+// the middle cell. Screen y is DOWN, so North subtracts.
 static Vec2 hub_slot_px(const game_state* s, i32 slot) {
     Vec2 c = hub_center_px(s);
+    const f32 dx = HUB_TILE_W + HUB_GAP;
+    const f32 dy = HUB_TILE_H + HUB_GAP;
     switch (slot) {
-        case 0: return Vec2{ c.x, c.y - (HUB_TILE_H + HUB_GAP) };   // North
-        case 1: return Vec2{ c.x + (HUB_TILE_W + HUB_GAP), c.y };   // East
-        case 2: return Vec2{ c.x - (HUB_TILE_W + HUB_GAP), c.y };   // West
-        default: return Vec2{ c.x, c.y + (HUB_TILE_H + HUB_GAP) };  // South ("All")
+        case 0:  return Vec2{ c.x,      c.y - dy };   // North
+        case 1:  return Vec2{ c.x + dx, c.y      };   // East
+        case 2:  return Vec2{ c.x - dx, c.y      };   // West
+        case 3:  return Vec2{ c.x,      c.y + dy };   // South ("All")
+        case 4:  return Vec2{ c.x + dx, c.y - dy };   // North-East
+        case 5:  return Vec2{ c.x - dx, c.y - dy };   // North-West
+        case 6:  return Vec2{ c.x + dx, c.y + dy };   // South-East
+        default: return Vec2{ c.x - dx, c.y + dy };   // South-West
     }
 }
 
 // Which slot the cursor points at, by DIRECTION from the hub center (a flick, not a click) —
 // so the player never has to land precisely inside a tile. Inside the deadzone: nothing.
+//
+// The slot whose own direction is ANGULARLY CLOSEST to the cursor wins, which puts every
+// boundary on the bisector between two tiles as they are actually drawn. A fixed 45-degree
+// sector split would not survive these tiles: they are wide and short, so a corner sits about
+// 22 degrees off the horizontal and a flick straight at the NE tile would commit East. Reusing
+// hub_slot_px keeps the one-geometry rule — what lights up is what the release commits.
 static i32 hub_hit_test(const game_state* s) {
     i32 mx = 0, my = 0;
     input_get_mouse_position(&mx, &my);
     Vec2 c = hub_center_px(s);
     f32 dx = (f32)mx - c.x;
     f32 dy = (f32)my - c.y;              // screen y is DOWN
-    if (dx * dx + dy * dy < HUB_DEADZONE * HUB_DEADZONE) return -1;
-    if (fabsf(dy) >= fabsf(dx)) return (dy < 0.0f) ? 0 : 3;   // North / South
-    return (dx > 0.0f) ? 1 : 2;                               // East / West
+    f32 len2 = dx * dx + dy * dy;
+    if (len2 < HUB_DEADZONE * HUB_DEADZONE) return -1;
+
+    f32 inv = 1.0f / sqrtf(len2);
+    dx *= inv;
+    dy *= inv;
+
+    i32 best     = -1;
+    f32 best_dot = -2.0f;                // below every possible cosine, so slot 0 always wins first
+    for (i32 slot = 0; slot < WEAPON_HUB_SLOTS; ++slot) {
+        Vec2 sc = hub_slot_px(s, slot);
+        f32  sx = sc.x - c.x;
+        f32  sy = sc.y - c.y;
+        f32  sl = sqrtf(sx * sx + sy * sy);
+        if (sl <= 1.0e-3f) continue;
+        f32 dot = (dx * sx + dy * sy) / sl;
+        if (dot > best_dot) { best_dot = dot; best = slot; }   // ties keep the lower index
+    }
+    return best;
 }
 
-// Hardpoint index behind slot 0..2, or -1 (slot 3 is "All" and owns no hardpoint).
+// Fill-order position of a directional slot (0..6), or -1 for "All". N, E, W come first so a
+// group of three or fewer lays out on the cardinals exactly as it did before the diagonals
+// existed; NE, NW, SE, SW absorb the overflow.
+static i32 hub_slot_fill_index(i32 slot) {
+    if (slot < 0 || slot >= WEAPON_HUB_SLOTS || slot == HUB_SLOT_ALL) return -1;
+    return (slot < HUB_SLOT_ALL) ? slot : slot - 1;
+}
+
+// Hardpoint index behind a directional slot, or -1 when the slot has no weapon behind it —
+// either it is "All", or the ACTIVE GROUP has fewer members than this slot's fill position.
+// Reading the group (not the hull) is what keeps the hub and the number row in agreement: a
+// weapon the active group does not contain has no slot here and cannot be committed at all.
 static i32 hub_slot_hardpoint(const Ship* ship, i32 slot) {
-    if (!ship || slot < 0 || slot > 2) return -1;
-    return ship_nth_mounted_weapon(ship, slot);
+    i32 fill = hub_slot_fill_index(slot);
+    if (!ship || fill < 0) return -1;
+    return ship_nth_group_weapon(ship, ship->active_group, fill);
 }
 
 // =====================================================================================
@@ -199,7 +246,7 @@ void weapon_hub_update(game_state* s, Ship* piloted) {
 
     if (slot < 0) return;
 
-    if (slot == 3) {
+    if (slot == HUB_SLOT_ALL) {
         if (piloted->weapon_override >= 0) {
             ship_clear_weapon_override(piloted);
             i32 n = ship_group_size(piloted, piloted->active_group);
@@ -267,13 +314,14 @@ static void hub_text_centered(const game_state* s, const char* str, f32 cx, f32 
               &s->camera_state.camera, s->fb_width, s->fb_height, HUB_LAYER_TEXT);
 }
 
-// One slot. `hp` < 0 with slot < 3 means "no weapon installed here".
+// One slot. `hp` < 0 on a directional slot means "the active group has no weapon for this
+// slot" — either the group is smaller than the slot's fill position, or it is empty.
 static void hub_draw_slot(game_state* s, const Ship* ship, i32 slot, i32 hp,
                           Vec2 dir_to_target, f32 dist, f32 reveal) {
     Vec2 c    = hub_slot_px(s, slot);
     Vec2 size = Vec2{ HUB_TILE_W * reveal, HUB_TILE_H * reveal };
 
-    const b8 is_all    = (slot == 3);
+    const b8 is_all    = (slot == HUB_SLOT_ALL);
     const b8 empty     = (!is_all && hp < 0);
     const b8 hovered   = (s->weapon_hub_hover == slot);
     // "Selected" is the ship's COMMITTED state, not the hover: All is selected when no
@@ -286,7 +334,9 @@ static void hub_draw_slot(game_state* s, const Ship* ship, i32 slot, i32 hp,
     f32         cooldown = 0.0f;
 
     if (empty) {
-        look = HUB_DISABLED; status = "NO MOUNT";
+        // Crossed out rather than hidden: the direction still exists, it just has nothing in
+        // the active group behind it. weapon_hub_update rejects the commit on the same hp < 0.
+        look = HUB_DISABLED; status = "NOT IN GROUP";
     } else if (is_all) {
         i32 n = ship_group_size(ship, ship->active_group);
         look   = (n > 0) ? HUB_READY : HUB_FADED;
@@ -383,28 +433,35 @@ void weapon_hub_draw(game_state* s) {
         Vec2 slot_c = hub_slot_px(s, s->weapon_hub_hover);
         Vec2 d = Vec2{ slot_c.x - center.x, slot_c.y - center.y };
         f32  dl = sqrtf(d.x * d.x + d.y * d.y);
-        // Stop at the tile's near EDGE, which is half a tile back along the axis this slot sits
-        // on -- East/West are a half-width away, North/South a half-height, and the two differ
-        // enough that using one for both drives the pointer well inside the tile.
-        b8  horizontal = (s->weapon_hub_hover == 1 || s->weapon_hub_hover == 2);
-        f32 stop = dl - (horizontal ? HUB_TILE_W : HUB_TILE_H) * 0.5f;
-        if (dl > 1.0e-3f && stop > HUB_DEADZONE) {
+        // Stop at the tile's near EDGE. Every tile centre lies on the ray, so the distance back
+        // from the centre to the boundary is the standard slab exit -- the nearer of "how far
+        // until this direction crosses the half-width" and the same for the half-height. On the
+        // cardinals that reduces to the old half-width / half-height pair; on a diagonal, where
+        // neither alone is right, it lands on whichever edge the ray actually meets first.
+        if (dl > 1.0e-3f) {
             d = Vec2{ d.x / dl, d.y / dl };
-            bs_color p = HUB_SELECTED; p.a = 0.75f * reveal;
-            hub_line_px(s, Vec2{ center.x + d.x * HUB_DEADZONE, center.y + d.y * HUB_DEADZONE },
-                        Vec2{ center.x + d.x * stop, center.y + d.y * stop },
-                        2.0f, p, HUB_LAYER_PANEL);
+            f32 back = dl;   // no axis wide enough to clip against: fall back to the centre
+            if (fabsf(d.x) > 1.0e-4f) back = fminf(back, (HUB_TILE_W * 0.5f) / fabsf(d.x));
+            if (fabsf(d.y) > 1.0e-4f) back = fminf(back, (HUB_TILE_H * 0.5f) / fabsf(d.y));
+            f32 stop = dl - back;
+            if (stop > HUB_DEADZONE) {
+                bs_color p = HUB_SELECTED; p.a = 0.75f * reveal;
+                hub_line_px(s, Vec2{ center.x + d.x * HUB_DEADZONE, center.y + d.y * HUB_DEADZONE },
+                            Vec2{ center.x + d.x * stop, center.y + d.y * stop },
+                            2.0f, p, HUB_LAYER_PANEL);
+            }
         }
     }
 
     for (i32 slot = 0; slot < WEAPON_HUB_SLOTS; ++slot)
         hub_draw_slot(s, ship, slot, hub_slot_hardpoint(ship, slot), to_target, dist, reveal);
 
-    // A hull with more weapons than the three directional slots can hold: say so, rather than
-    // leaving the player to wonder where the fourth cannon went.
-    if (reveal >= 0.999f && ship_nth_mounted_weapon(ship, 3) >= 0) {
+    // An active group with more weapons than the seven directional slots can hold: say so,
+    // rather than leaving the player to wonder where the eighth cannon went. Those extras are
+    // still fired by "All" -- they are in the group, they just have no tile.
+    if (reveal >= 0.999f && ship_nth_group_weapon(ship, ship->active_group, WEAPON_HUB_SLOTS - 1) >= 0) {
         bs_color hint = bs_color{ 0.70f, 0.78f, 0.90f, 0.55f };
-        hub_text_centered(s, "+more via ALL / fire groups 1-5",
+        hub_text_centered(s, "+more in this group - fire via ALL",
                           center.x, center.y + HUB_TILE_H * 1.5f + HUB_GAP + 6.0f,
                           HUB_STATUS_SCALE, hint);
     }

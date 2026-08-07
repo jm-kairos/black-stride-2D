@@ -6,10 +6,15 @@
 // Weapon micro-selection hub — a radial selector held open with the MIDDLE MOUSE BUTTON,
 // blooming AROUND THE CURSOR at the point the button went down.
 //
-//        [ N ]          N / E / W are the piloted ship's first three MOUNTED WEAPONS in
-//   [ W ][ + ][ E ]     hardpoint order; S is always "All", the default fire-the-active-
-//        [All]          group behaviour. A hull carrying more than three weapons reaches
-//                       the extras through "All" (or the number-row fire groups).
+//   [NW][ N ][NE]       The seven directional slots are the weapons of the piloted ship's
+//   [W ][ + ][ E ]      ACTIVE FIRE GROUP -- never the whole hull -- so what the hub offers
+//   [SW][All][SE]       always matches what the number row just selected. S is always "All",
+//                       the default fire-every-weapon-in-the-active-group behaviour.
+//
+// Slots FILL in the order N, E, W, NE, NW, SE, SW, so a group of three or fewer occupies the
+// cardinal directions exactly as it always has and the diagonals only appear when a group
+// needs them. A group with fewer members than slots leaves the rest crossed out and inert
+// ("NOT IN GROUP"); a group of more than seven reaches the remainder through "All".
 //
 // Press opens, the cursor direction from the hub center highlights a slot, release commits
 // it. Picking a weapon sets `Ship::weapon_override`; picking "All" clears it. The hub only
@@ -29,7 +34,10 @@
 struct game_state;
 struct Ship;
 
-#define WEAPON_HUB_SLOTS 4   // 0 = North, 1 = East, 2 = West, 3 = South ("All")
+// 0 = North, 1 = East, 2 = West, 3 = South ("All"), 4 = NE, 5 = NW, 6 = SE, 7 = SW.
+// Indices 0..3 are historical and deliberately unchanged; the diagonals were appended so the
+// cardinal numbering (and everything that reads it) stayed put.
+#define WEAPON_HUB_SLOTS 8
 
 // Poll BUTTON_MIDDLE and drive the hub for `piloted`: open on press (freezing the target the
 // range readout is judged against), track the highlighted slot while held, commit on release.

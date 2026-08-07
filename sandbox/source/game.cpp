@@ -1966,6 +1966,10 @@ static void game_push_hud(game_state* s, f32 dt) {
                     action_log_push(s, "%s must belong to at least one group.", wname);
                 } else {
                     fsh.mount_groups[h] = toggled;
+                    // Re-assert the mask invariants: dropping this weapon out of the ACTIVE
+                    // group must also drop a micro-selection override aimed at it, or it would
+                    // go on firing with no hub tile left to report it.
+                    ship_groups_sanitize(&fsh);
                     action_log_push(s, "%s ('%s') %s group %d.", wname, fsh.hardpoints[h].id,
                                     (toggled >> g) & 1 ? "added to" : "removed from", g + 1);
                 }

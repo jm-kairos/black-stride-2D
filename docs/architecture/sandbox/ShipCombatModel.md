@@ -20,7 +20,8 @@ damage (CombatArena), and does not own drawing — `render/ship_visual` here is 
 `ship_first_free_hardpoint`, `ship_hardpoint_fire_origin`, `ship_hardpoint_can_aim`,
 `ship_select_bearing_weapon`, `ship_turret_aim_at`, `ship_update_turrets`;
 `WeaponFireState`, `ship_weapon_fire_state`, `ship_hardpoint_in_selection`,
-`ship_select_weapon_override`, `ship_clear_weapon_override`, `ship_nth_mounted_weapon`.
+`ship_select_weapon_override`, `ship_clear_weapon_override`, `ship_hardpoint_in_group`,
+`ship_nth_group_weapon`.
 `sim/weapon.h` — `Weapon`, `BallisticWeapon`, `MissileLauncher`, `WeaponKind`, `FireMode`,
 `weapon_effective_reach`. `sim/weapon_def.h` — `WeaponDef`, `WeaponRegistry`,
 `weapon_registry_load`, `weapon_registry_find`, `weapon_instantiate`.
@@ -80,10 +81,21 @@ the subsystem while sitting outside `ship.h`'s seven.)*
   neither dedups nor rate limits, so reporting per frame would flood the buffer.
 - **`Ship::weapon_override` is the fire selection, and `ship_hardpoint_in_selection` is how you
   ask.** `-1` means "All" — the active group's members, the long-standing default. `>= 0` is a
-  single hardpoint index that supersedes the group. Selecting a fire group with the number row
-  clears it, and `ship_groups_sanitize` drops it if the loadout editor empties that slot. Every
-  consumer (fire loop, turret traverse, autopilot, reach ring, hull digits, hub) reads the
-  helper rather than testing the group mask, so they cannot disagree about what fires.
+  single hardpoint index *within that group*. Selecting a fire group with the number row clears
+  it, and `ship_groups_sanitize` drops it both when the loadout editor empties that slot and
+  when the fire-group matrix takes the weapon out of the active group. Every consumer (fire
+  loop, turret traverse, autopilot, reach ring, hull digits, hub) reads the helper rather than
+  testing the group mask, so they cannot disagree about what fires.
+- **The override can never point outside the active group**, and that is enforced at the three
+  *write* sites (hub commit, `ship_select_weapon_group`, `ship_groups_sanitize`) rather than by
+  re-checking membership at the fire sites — the readers still treat it as an absolute hardpoint
+  index. `ship_select_weapon_override` has exactly one caller, the hub, which is what makes a
+  write-side invariant tractable. Any second producer must uphold it.
+- **`ship_hardpoint_in_group` is the only place the group-membership bit is tested.**
+  `ship_group_size`, `ship_nth_group_weapon`, `ship_select_weapon_group`'s re-home and
+  `ship_hardpoint_in_selection`'s no-override branch all route through it, so "what is in this
+  group" has one answer. `ship_nth_group_weapon` is its enumerate form and is what makes the
+  micro-selection hub offer the active group instead of the whole hull.
 - **`Weapon::disabled` is declared with no producer.** There is no subsystem-damage model yet;
   the flag exists so the validator and the hub's Disabled state are correct the day one lands.
 - **Weapon instances point their `name`/`icon` into the registry's pool storage**, which
@@ -150,4 +162,5 @@ it reports affordability, and the caller commits via `ship_try_spend_cap`.
 `sandbox/source/sim/weapon.{cpp,h}`, `sandbox/source/sim/weapon_def.{cpp,h}`,
 `sandbox/source/sim/projectile.{cpp,h}`, `sandbox/source/render/ship_visual.{cpp,h}`
 
-**Last verified:** 2026-08-07, commit `677f3a0`
+**Last verified:** 2026-08-07, commit `e83a88d` + the weapon-hub group-filter change (added
+`ship_hardpoint_in_group` / `ship_nth_group_weapon`, removed `ship_nth_mounted_weapon`)

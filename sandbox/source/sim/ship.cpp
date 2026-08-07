@@ -108,6 +108,12 @@ void ship_capacitor_update(Ship* ship, f32 dt) {
     ship->cap_current += ship->cap_regen * dt;
     if (ship->cap_current > ship->cap_max) ship->cap_current = ship->cap_max;
 }
+b8 ship_hardpoint_in_group(const Ship* ship, i32 hp_index, i32 g) {
+    if (!ship || hp_index < 0 || hp_index >= ship->hardpoint_count) return FALSE;
+    if (g < 0 || g >= SHIP_WEAPON_GROUPS) return FALSE;
+    if (!ship->mounts[hp_index]) return FALSE;
+    return ((ship->mount_groups[hp_index] >> g) & 1) ? TRUE : FALSE;
+}
 void ship_select_weapon_group(Ship* ship, i32 g) {
     if (!ship || g < 0 || g >= SHIP_WEAPON_GROUPS) return;
     ship->active_group = (u8)g;
@@ -116,19 +122,23 @@ void ship_select_weapon_group(Ship* ship, i32 g) {
     ship->weapon_override = -1;
     // Re-home the legacy active index onto the group's first member (kept for the HUD
     // weapon bar and other single-weapon consumers); left untouched when the group is empty.
-    for (i32 i = 0; i < ship->hardpoint_count; ++i) {
-        if (ship->mounts[i] && ((ship->mount_groups[i] >> g) & 1)) {
-            ship->active_weapon_idx = i;
-            return;
-        }
-    }
+    i32 first = ship_nth_group_weapon(ship, g, 0);
+    if (first >= 0) ship->active_weapon_idx = first;
 }
 i32 ship_group_size(const Ship* ship, i32 g) {
-    if (!ship || g < 0 || g >= SHIP_WEAPON_GROUPS) return 0;
+    if (!ship) return 0;
     i32 n = 0;
     for (i32 i = 0; i < ship->hardpoint_count; ++i)
-        if (ship->mounts[i] && ((ship->mount_groups[i] >> g) & 1)) ++n;
+        if (ship_hardpoint_in_group(ship, i, g)) ++n;
     return n;
+}
+i32 ship_nth_group_weapon(const Ship* ship, i32 g, i32 n) {
+    if (!ship || n < 0) return -1;
+    for (i32 i = 0; i < ship->hardpoint_count; ++i) {
+        if (!ship_hardpoint_in_group(ship, i, g)) continue;
+        if (n-- == 0) return i;
+    }
+    return -1;
 }
 void ship_groups_sanitize(Ship* ship) {
     if (!ship) return;
@@ -140,6 +150,12 @@ void ship_groups_sanitize(Ship* ship) {
     // silently fire nothing; fall back to "All" instead.
     if (ship->weapon_override >= 0 &&
         (ship->weapon_override >= ship->hardpoint_count || !ship->mounts[ship->weapon_override]))
+        ship->weapon_override = -1;
+    // Likewise an override the fire-group matrix just took OUT of the active group. The hub
+    // only offers active-group members, so such an override has no tile left to show it as
+    // selected: one weapon would keep firing with nothing on screen saying which. Back to "All".
+    if (ship->weapon_override >= 0 &&
+        !ship_hardpoint_in_group(ship, ship->weapon_override, ship->active_group))
         ship->weapon_override = -1;
 }
 // ---- Weapon micro-selection (middle-mouse hub) -----------------------------------------
@@ -159,15 +175,7 @@ b8 ship_hardpoint_in_selection(const Ship* ship, i32 hp_index) {
     if (!ship || hp_index < 0 || hp_index >= ship->hardpoint_count) return FALSE;
     if (!ship->mounts[hp_index]) return FALSE;
     if (ship->weapon_override >= 0) return (hp_index == ship->weapon_override) ? TRUE : FALSE;
-    return ((ship->mount_groups[hp_index] >> ship->active_group) & 1) ? TRUE : FALSE;
-}
-i32 ship_nth_mounted_weapon(const Ship* ship, i32 n) {
-    if (!ship || n < 0) return -1;
-    for (i32 i = 0; i < ship->hardpoint_count; ++i) {
-        if (!ship->mounts[i]) continue;
-        if (n-- == 0) return i;
-    }
-    return -1;
+    return ship_hardpoint_in_group(ship, hp_index, ship->active_group);
 }
 // ---- Per-weapon fire validation --------------------------------------------------------
 WeaponFireState ship_weapon_fire_state(const Ship* ship, i32 hp_index, Vec2 world_dir, f32 dist) {

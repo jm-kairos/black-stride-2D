@@ -352,9 +352,13 @@ struct Ship {
 
     // ---- Weapon micro-selection override (middle-mouse hub) -----------------------------
     // -1 = "All": the fire selection is the active group's members (the default behaviour).
-    // >= 0 = a single hardpoint index that overrides the group — only that weapon fires, and
-    // it fires whether or not it belongs to the active group. Cleared by picking "All" in the
-    // hub and by any loadout mutation that empties the slot (ship_groups_sanitize).
+    // >= 0 = a single hardpoint index that narrows the selection to ONE active-group member —
+    // only that weapon fires. It is always a member of the active group: the hub is the only
+    // producer and only offers members, selecting a group clears it, and ship_groups_sanitize
+    // drops it if the fire-group matrix takes that weapon out of the group. Also cleared by
+    // picking "All" in the hub and by any loadout mutation that empties the slot.
+    // Consumers still read it as an absolute hardpoint index (no membership re-check at the
+    // fire site), so the invariant lives at the three write sites above, not in the readers.
     // Honoured by BOTH the manual fire path and the autopilot attack order.
 
     // Defaulted here as well as in ship_load: a zero-initialised Ship would otherwise read as
@@ -515,12 +519,24 @@ b8 ship_load(Ship* out_ship, const char* path);
 // the group's first member so legacy single-weapon consumers (HUD bar, gizmos) stay sane.
 void ship_select_weapon_group(Ship* ship, i32 g);
 
+// TRUE when hardpoint `hp_index` holds a weapon assigned to fire group g. SINGLE SOURCE OF
+// TRUTH for the group-membership bit -- every consumer asks this instead of shifting
+// mount_groups[] itself, so "what is in this group" cannot be answered two different ways.
+b8 ship_hardpoint_in_group(const Ship* ship, i32 hp_index, i32 g);
+
 // Number of mounted weapons whose mask has group g's bit set.
 i32 ship_group_size(const Ship* ship, i32 g);
 
+// Hardpoint index of the `n`-th member of group g in hardpoint order (n = 0,1,2,...), or -1
+// when the group holds fewer than n+1 weapons. The hub maps its directional slots through
+// this, which is what keeps the hub offering the ACTIVE GROUP rather than the whole hull.
+i32 ship_nth_group_weapon(const Ship* ship, i32 g, i32 n);
+
 // Enforce the mask invariant after any loadout mutation: empty slots carry no mask, and a
 // mounted weapon with no assignment defaults to group 1. Cheap; safe to call every frame.
-// Also drops a weapon_override pointing at a slot that no longer holds a weapon.
+// Also drops a weapon_override that has stopped being a valid single selection — either its
+// slot no longer holds a weapon, or that weapon is no longer in the ACTIVE group. Call it
+// after editing group membership, not just after mounting/unmounting.
 void ship_groups_sanitize(Ship* ship);
 
 // ---- Weapon micro-selection (middle-mouse hub) -----------------------------------------
@@ -537,10 +553,6 @@ void ship_clear_weapon_override(Ship* ship);
 // SINGLE SOURCE OF TRUTH for "does this weapon fire on the trigger" -- the manual fire loop,
 // the autopilot, the reach ring, the hull digits and the hub all ask this one function.
 b8 ship_hardpoint_in_selection(const Ship* ship, i32 hp_index);
-
-// Hardpoint index of the `n`-th mounted weapon in hardpoint order (n = 0,1,2,...), or -1 when
-// the ship carries fewer than n+1 weapons. The hub maps its N/E/W slots through this.
-i32 ship_nth_mounted_weapon(const Ship* ship, i32 n);
 
 // ---- Per-weapon fire validation --------------------------------------------------------
 // The five states a weapon can be in for a given shot, in the order the hub renders them.

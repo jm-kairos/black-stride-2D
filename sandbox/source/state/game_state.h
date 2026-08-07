@@ -3551,14 +3551,16 @@ struct game_state {
 
 
     // ---- Weapon micro-selection hub (hold middle mouse) ------------------------------------
-    // A radial selector at the bottom-center of the screen. North/East/West are the piloted
-    // ship's first three mounted weapons (hardpoint order); South is always "All", the default
-    // fire-the-active-group behaviour. Held open while BUTTON_MIDDLE is down; releasing commits
-    // whatever slot the cursor is over. Purely presentation + input state -- the committed
-    // result lives on the Ship as `weapon_override`.
+    // A radial selector blooming around the cursor. The seven directional slots are the weapons
+    // of the piloted ship's ACTIVE FIRE GROUP in hardpoint order (never the whole hull, so the
+    // hub and the number row always agree); South is always "All", the default fire-the-
+    // active-group behaviour. Held open while BUTTON_MIDDLE is down; releasing commits whatever
+    // slot the cursor is over. Purely presentation + input state -- the committed result lives
+    // on the Ship as `weapon_override`.
 
     b8               weapon_hub_open;          // TRUE while the middle mouse button holds the hub open
-    i32              weapon_hub_hover;         // highlighted slot: 0=N, 1=E, 2=W, 3=S("All"), -1 = none
+    i32              weapon_hub_hover;         // highlighted slot: 0=N, 1=E, 2=W, 3=S("All"),
+                                               // 4=NE, 5=NW, 6=SE, 7=SW, -1 = none
     f32              weapon_hub_open_time;     // elapsed_time at which the hub opened (reveal animation)
     bs_math::Vec2    weapon_hub_press_px;      // cursor screen position at the opening press. Nothing is
                                                // highlighted until the cursor has moved away from it, so a

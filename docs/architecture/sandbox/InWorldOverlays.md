@@ -47,6 +47,19 @@ all arrive through `weapon_hub.cpp`, which polls a mouse button and writes an ac
   it. Above 24 px of streak nothing is submitted at all, which is why the pass costs nothing at
   arena zoom. Every `ProjectileKind` gets the identical dot-and-tracer at the identical screen
   size; only the tint follows the shot's own colour, so friend/foe stays readable.
+- **The hub offers the ACTIVE FIRE GROUP, never the whole hull.** Its seven directional slots
+  are `ship_nth_group_weapon(ship, active_group, n)`, so switching groups with the number row
+  changes what the hub shows, and a weapon outside the active group has no tile and cannot be
+  committed — `weapon_hub_update` rejects the release on the same `hp < 0` that draws the tile
+  crossed out. Slots fill `N, E, W, NE, NW, SE, SW`, which keeps a group of three or fewer on
+  the cardinals exactly as it was before the diagonals existed; a group larger than seven
+  reaches the remainder through "All", which is what the hint under South says.
+- **The hit-test picks the angularly nearest slot, not a fixed sector.** Uniform 45° sectors
+  cannot work with 124×46 tiles: a corner sits ~22° off horizontal, so a flick straight at the
+  NE tile would land in East's sector. Comparing against each slot's own `hub_slot_px`
+  direction puts every boundary on the drawn bisector, at the cost of deliberately uneven
+  sectors (N wide, NE narrow). The 3×3 grid has the same bounding box the old four-tile diamond
+  had, so `hub_center_px`'s edge clamp did not move.
 - **The weapon hub is anchored on the press point, not a fixed screen position**, and clamped
   so a press near an edge slides the whole thing inward rather than cropping a slot. The frozen
   aim target is that same point, which is what makes the per-tile readout meaningful: the hub
@@ -124,4 +137,5 @@ pixels. A new heat source kind is an entry appended to the `MBSource` array in
 `sandbox/source/render/defense_laser_overlay.{cpp,h}`,
 `sandbox/source/render/out_sensor_detection_fx.{cpp,h}`, `sandbox/source/sim/heat_map.{cpp,h}`
 
-**Last verified:** 2026-08-07, commit `e4d88d1`
+**Last verified:** 2026-08-07, commit `e83a88d` + the weapon-hub group-filter change (hub slots
+now follow the active fire group; 4 slots → 8, nearest-direction hit-test)
