@@ -22,3 +22,7 @@ obj/
 # Root-level throwaway screenshots & ImGui layout
 /*.png
 /imgui.ini
+
+# Python bytecode from the tools/ scripts (dependency graph, cluster report)
+__pycache__/
+*.pyc

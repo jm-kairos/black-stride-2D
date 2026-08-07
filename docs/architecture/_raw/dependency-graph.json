@@ -1,0 +1,3366 @@
+{
+  "_meta": {
+    "repo_root": "C:/dev/blackstride",
+    "generated_by": "tools/dependency_graph/scan_dependencies.py",
+    "build_system": "clang++ driven by build-all.bat -> engine/build.bat, sandbox/build.bat",
+    "targets": {
+      "engine": {
+        "artifact": "bin/engine.dll",
+        "sources": "engine/source/**/*.cpp",
+        "include_dirs": [
+          "engine/source"
+        ]
+      },
+      "sandbox": {
+        "artifact": "bin/sandbox.exe",
+        "sources": "sandbox/source/**/*.cpp",
+        "include_dirs": [
+          "sandbox/source",
+          "engine/source"
+        ],
+        "links": [
+          "engine.lib"
+        ]
+      }
+    },
+    "excluded_dirs": [
+      ".git",
+      "bin",
+      "build",
+      "obj",
+      "vendor"
+    ],
+    "file_count": 175,
+    "edge_count": 645,
+    "boundary_edge_count": 209,
+    "anomaly_count": 0,
+    "unresolved_includes": {
+      "engine/source/containers/array.h": [
+        "array"
+      ],
+      "engine/source/containers/string.h": [
+        "string"
+      ],
+      "engine/source/containers/vector.h": [
+        "vector"
+      ],
+      "engine/source/core/asserts.h": [
+        "intrin.h"
+      ],
+      "engine/source/core/logger.cpp": [
+        "stdarg.h",
+        "stdio.h",
+        "string.h"
+      ],
+      "engine/source/core/memory/bs_memory.cpp": [
+        "stdio.h",
+        "string.h"
+      ],
+      "engine/source/defines.h": [
+        "TargetConditionals.h"
+      ],
+      "engine/source/math/bs_hierpos.cpp": [
+        "math.h"
+      ],
+      "engine/source/math/math_utils.cpp": [
+        "math.h"
+      ],
+      "engine/source/platform/platform_commons.cpp": [
+        "windows.h"
+      ],
+      "engine/source/platform/platform_sdl3.cpp": [
+        "SDL3/SDL.h",
+        "stdlib.h",
+        "string.h",
+        "windows.h"
+      ],
+      "engine/source/renderer/backend/renderer_backend_sdlgpu.cpp": [
+        "RmlUi/Core.h",
+        "RmlUi/Core/DataModelHandle.h",
+        "RmlUi/Debugger.h",
+        "SDL3/SDL_events.h",
+        "SDL3/SDL_filesystem.h",
+        "SDL3/SDL_gpu.h",
+        "SDL3/SDL_iostream.h",
+        "SDL3/SDL_keyboard.h",
+        "SDL3/SDL_mouse.h",
+        "SDL3/SDL_timer.h",
+        "SDL3/SDL_video.h",
+        "imgui.h",
+        "imgui_impl_sdl3.h",
+        "imgui_impl_sdlgpu3.h",
+        "math.h",
+        "stb_image.h",
+        "stdlib.h",
+        "utility"
+      ],
+      "engine/source/renderer/backend/stb_image_impl.cpp": [
+        "stb_image.h"
+      ],
+      "engine/source/renderer/bs_ui.cpp": [
+        "imgui.h"
+      ],
+      "engine/source/renderer/renderer.cpp": [
+        "math.h",
+        "stb_image.h",
+        "stdio.h"
+      ],
+      "engine/source/renderer/starfield_gpu_resources.h": [
+        "SDL3/SDL_gpu.h",
+        "vector"
+      ],
+      "sandbox/source/core/coord_diag.cpp": [
+        "cmath",
+        "cstdio"
+      ],
+      "sandbox/source/core/geom2d.cpp": [
+        "math.h"
+      ],
+      "sandbox/source/core/profiler.cpp": [
+        "chrono",
+        "stdio.h"
+      ],
+      "sandbox/source/game.cpp": [
+        "chrono",
+        "math.h",
+        "new",
+        "stdarg.h",
+        "stdio.h",
+        "string.h"
+      ],
+      "sandbox/source/jc_voronoi.h": [
+        "assert.h",
+        "float.h",
+        "math.h",
+        "memory.h",
+        "stddef.h",
+        "stdint.h",
+        "stdlib.h"
+      ],
+      "sandbox/source/render/debug_overlay.cpp": [
+        "stdio.h"
+      ],
+      "sandbox/source/render/frame_lighting.cpp": [
+        "math.h"
+      ],
+      "sandbox/source/render/galaxy_map_render.cpp": [
+        "math.h",
+        "stdio.h"
+      ],
+      "sandbox/source/render/gameplay_overlays.cpp": [
+        "math.h"
+      ],
+      "sandbox/source/render/global_background.cpp": [
+        "math.h",
+        "stdlib.h"
+      ],
+      "sandbox/source/render/mapped_system_layer.cpp": [
+        "math.h"
+      ],
+      "sandbox/source/render/out_sensor_detection_fx.cpp": [
+        "math.h"
+      ],
+      "sandbox/source/render/projectile_marker.cpp": [
+        "math.h"
+      ],
+      "sandbox/source/render/sensor_overlay.cpp": [
+        "math.h"
+      ],
+      "sandbox/source/render/ship_render.cpp": [
+        "math.h",
+        "stdio.h"
+      ],
+      "sandbox/source/render/ship_scene.cpp": [
+        "math.h"
+      ],
+      "sandbox/source/render/ship_visual.cpp": [
+        "stdio.h",
+        "string.h"
+      ],
+      "sandbox/source/render/star_fx.cpp": [
+        "cstdio"
+      ],
+      "sandbox/source/render/starfield_generator.cpp": [
+        "math.h",
+        "stdlib.h"
+      ],
+      "sandbox/source/render/starfield_generator.h": [
+        "vector"
+      ],
+      "sandbox/source/render/system_content_render.cpp": [
+        "math.h"
+      ],
+      "sandbox/source/render/weapon_hub.cpp": [
+        "math.h"
+      ],
+      "sandbox/source/sim/action_log.cpp": [
+        "stdarg.h",
+        "stdio.h",
+        "string.h"
+      ],
+      "sandbox/source/sim/ai_ship.cpp": [
+        "math.h"
+      ],
+      "sandbox/source/sim/camera_controller.cpp": [
+        "math.h"
+      ],
+      "sandbox/source/sim/combat_arena.cpp": [
+        "math.h"
+      ],
+      "sandbox/source/sim/discovery.cpp": [
+        "stdio.h",
+        "string.h"
+      ],
+      "sandbox/source/sim/editor_tools.cpp": [
+        "math.h"
+      ],
+      "sandbox/source/sim/galaxy_gen.cpp": [
+        "math.h",
+        "stdio.h",
+        "stdlib.h"
+      ],
+      "sandbox/source/sim/galaxy_history.cpp": [
+        "stdio.h"
+      ],
+      "sandbox/source/sim/galaxy_map.cpp": [
+        "math.h",
+        "stdlib.h"
+      ],
+      "sandbox/source/sim/galaxy_spatial.cpp": [
+        "math.h"
+      ],
+      "sandbox/source/sim/heat_map.cpp": [
+        "chrono",
+        "math.h"
+      ],
+      "sandbox/source/sim/module.cpp": [
+        "stdio.h",
+        "string.h"
+      ],
+      "sandbox/source/sim/projectile.cpp": [
+        "math.h"
+      ],
+      "sandbox/source/sim/ship.cpp": [
+        "math.h",
+        "new",
+        "stdio.h",
+        "string.h"
+      ],
+      "sandbox/source/sim/ship_control.cpp": [
+        "math.h"
+      ],
+      "sandbox/source/sim/ship_mission.cpp": [
+        "math.h"
+      ],
+      "sandbox/source/sim/ss_generation.cpp": [
+        "math.h"
+      ],
+      "sandbox/source/sim/station_market.cpp": [
+        "math.h"
+      ],
+      "sandbox/source/sim/steering.cpp": [
+        "math.h"
+      ],
+      "sandbox/source/sim/system_evolution.cpp": [
+        "math.h",
+        "string.h"
+      ],
+      "sandbox/source/sim/voronoi_galaxy.cpp": [
+        "new"
+      ],
+      "sandbox/source/sim/weapon_def.cpp": [
+        "stdio.h",
+        "string.h"
+      ],
+      "sandbox/source/ui/editor_ui.cpp": [
+        "math.h",
+        "stdio.h"
+      ],
+      "sandbox/source/ui/new_game_setup.cpp": [
+        "stdio.h"
+      ],
+      "sandbox/source/ui/system_inspector.cpp": [
+        "stdio.h"
+      ]
+    }
+  },
+  "files": {
+    "engine/source/containers/array.h": {
+      "side": "engine",
+      "includes": [],
+      "target": "engine",
+      "fan_in": 1,
+      "fan_out": 0
+    },
+    "engine/source/containers/string.h": {
+      "side": "engine",
+      "includes": [],
+      "target": "engine",
+      "fan_in": 0,
+      "fan_out": 0
+    },
+    "engine/source/containers/vector.h": {
+      "side": "engine",
+      "includes": [],
+      "target": "engine",
+      "fan_in": 2,
+      "fan_out": 0
+    },
+    "engine/source/core/application.cpp": {
+      "side": "engine",
+      "includes": [
+        "engine/source/core/application.h",
+        "engine/source/game_types.h",
+        "engine/source/core/logger.h",
+        "engine/source/platform/platform.h",
+        "engine/source/renderer/renderer.h",
+        "engine/source/core/memory/bs_memory.h",
+        "engine/source/core/memory/arena.h",
+        "engine/source/core/event.h",
+        "engine/source/core/input.h"
+      ],
+      "target": "engine",
+      "fan_in": 0,
+      "fan_out": 9
+    },
+    "engine/source/core/application.h": {
+      "side": "engine",
+      "includes": [
+        "engine/source/defines.h"
+      ],
+      "target": "engine",
+      "fan_in": 3,
+      "fan_out": 1
+    },
+    "engine/source/core/asserts.h": {
+      "side": "engine",
+      "includes": [
+        "engine/source/defines.h"
+      ],
+      "target": "engine",
+      "fan_in": 1,
+      "fan_out": 1
+    },
+    "engine/source/core/event.cpp": {
+      "side": "engine",
+      "includes": [
+        "engine/source/core/event.h",
+        "engine/source/core/memory/bs_memory.h",
+        "engine/source/containers/vector.h",
+        "engine/source/containers/array.h"
+      ],
+      "target": "engine",
+      "fan_in": 0,
+      "fan_out": 4
+    },
+    "engine/source/core/event.h": {
+      "side": "engine",
+      "includes": [
+        "engine/source/defines.h"
+      ],
+      "target": "engine",
+      "fan_in": 4,
+      "fan_out": 1
+    },
+    "engine/source/core/input.cpp": {
+      "side": "engine",
+      "includes": [
+        "engine/source/core/input.h",
+        "engine/source/core/event.h",
+        "engine/source/core/memory/bs_memory.h",
+        "engine/source/core/logger.h"
+      ],
+      "target": "engine",
+      "fan_in": 0,
+      "fan_out": 4
+    },
+    "engine/source/core/input.h": {
+      "side": "engine",
+      "includes": [
+        "engine/source/defines.h"
+      ],
+      "target": "engine",
+      "fan_in": 11,
+      "fan_out": 1
+    },
+    "engine/source/core/logger.cpp": {
+      "side": "engine",
+      "includes": [
+        "engine/source/core/logger.h",
+        "engine/source/core/asserts.h",
+        "engine/source/platform/platform.h"
+      ],
+      "target": "engine",
+      "fan_in": 0,
+      "fan_out": 3
+    },
+    "engine/source/core/logger.h": {
+      "side": "engine",
+      "includes": [
+        "engine/source/defines.h"
+      ],
+      "target": "engine",
+      "fan_in": 25,
+      "fan_out": 1
+    },
+    "engine/source/core/memory/arena.cpp": {
+      "side": "engine",
+      "includes": [
+        "engine/source/core/memory/arena.h",
+        "engine/source/platform/platform_commons.h"
+      ],
+      "target": "engine",
+      "fan_in": 0,
+      "fan_out": 2
+    },
+    "engine/source/core/memory/arena.h": {
+      "side": "engine",
+      "includes": [
+        "engine/source/defines.h",
+        "engine/source/core/logger.h",
+        "engine/source/core/memory/bs_memory.h"
+      ],
+      "target": "engine",
+      "fan_in": 2,
+      "fan_out": 3
+    },
+    "engine/source/core/memory/bs_memory.cpp": {
+      "side": "engine",
+      "includes": [
+        "engine/source/core/memory/bs_memory.h",
+        "engine/source/core/logger.h",
+        "engine/source/platform/platform.h"
+      ],
+      "target": "engine",
+      "fan_in": 0,
+      "fan_out": 3
+    },
+    "engine/source/core/memory/bs_memory.h": {
+      "side": "engine",
+      "includes": [
+        "engine/source/defines.h"
+      ],
+      "target": "engine",
+      "fan_in": 13,
+      "fan_out": 1
+    },
+    "engine/source/defines.h": {
+      "side": "engine",
+      "includes": [],
+      "target": "engine",
+      "fan_in": 76,
+      "fan_out": 0
+    },
+    "engine/source/entry.h": {
+      "side": "engine",
+      "includes": [
+        "engine/source/core/application.h",
+        "engine/source/core/logger.h",
+        "engine/source/core/memory/bs_memory.h",
+        "engine/source/game_types.h"
+      ],
+      "target": "engine",
+      "fan_in": 1,
+      "fan_out": 4
+    },
+    "engine/source/game_types.h": {
+      "side": "engine",
+      "includes": [
+        "engine/source/core/application.h"
+      ],
+      "target": "engine",
+      "fan_in": 3,
+      "fan_out": 1
+    },
+    "engine/source/math/bs_hierpos.cpp": {
+      "side": "engine",
+      "includes": [
+        "engine/source/math/bs_hierpos.h"
+      ],
+      "target": "engine",
+      "fan_in": 0,
+      "fan_out": 1
+    },
+    "engine/source/math/bs_hierpos.h": {
+      "side": "engine",
+      "includes": [
+        "engine/source/defines.h",
+        "engine/source/math/math_utils.h"
+      ],
+      "target": "engine",
+      "fan_in": 24,
+      "fan_out": 2
+    },
+    "engine/source/math/math_utils.cpp": {
+      "side": "engine",
+      "includes": [
+        "engine/source/math/math_utils.h"
+      ],
+      "target": "engine",
+      "fan_in": 0,
+      "fan_out": 1
+    },
+    "engine/source/math/math_utils.h": {
+      "side": "engine",
+      "includes": [
+        "engine/source/defines.h"
+      ],
+      "target": "engine",
+      "fan_in": 29,
+      "fan_out": 1
+    },
+    "engine/source/platform/platform.h": {
+      "side": "engine",
+      "includes": [
+        "engine/source/defines.h"
+      ],
+      "target": "engine",
+      "fan_in": 5,
+      "fan_out": 1
+    },
+    "engine/source/platform/platform_commons.cpp": {
+      "side": "engine",
+      "includes": [
+        "engine/source/platform/platform_commons.h",
+        "engine/source/defines.h"
+      ],
+      "target": "engine",
+      "fan_in": 0,
+      "fan_out": 2
+    },
+    "engine/source/platform/platform_commons.h": {
+      "side": "engine",
+      "includes": [],
+      "target": "engine",
+      "fan_in": 2,
+      "fan_out": 0
+    },
+    "engine/source/platform/platform_sdl3.cpp": {
+      "side": "engine",
+      "includes": [
+        "engine/source/platform/platform.h",
+        "engine/source/core/logger.h",
+        "engine/source/core/input.h",
+        "engine/source/core/event.h",
+        "engine/source/renderer/bs_imgui.h",
+        "engine/source/renderer/bs_rml.h"
+      ],
+      "target": "engine",
+      "fan_in": 0,
+      "fan_out": 6
+    },
+    "engine/source/renderer/backend/renderer_backend_sdlgpu.cpp": {
+      "side": "engine",
+      "includes": [
+        "engine/source/renderer/backend/renderer_backend_sdlgpu.h",
+        "engine/source/renderer/renderer_backend.h",
+        "engine/source/renderer/bs_imgui.h",
+        "engine/source/renderer/starfield_gpu_resources.h",
+        "engine/source/core/logger.h",
+        "engine/source/platform/platform.h",
+        "engine/source/math/math_utils.h",
+        "engine/source/renderer/camera2d.h",
+        "engine/source/renderer/bs_rml.h"
+      ],
+      "target": "engine",
+      "fan_in": 0,
+      "fan_out": 9
+    },
+    "engine/source/renderer/backend/renderer_backend_sdlgpu.h": {
+      "side": "engine",
+      "includes": [
+        "engine/source/defines.h",
+        "engine/source/renderer/renderer_types.h"
+      ],
+      "target": "engine",
+      "fan_in": 3,
+      "fan_out": 2
+    },
+    "engine/source/renderer/backend/stb_image_impl.cpp": {
+      "side": "engine",
+      "includes": [],
+      "target": "engine",
+      "fan_in": 0,
+      "fan_out": 0
+    },
+    "engine/source/renderer/bs_imgui.h": {
+      "side": "engine",
+      "includes": [
+        "engine/source/defines.h"
+      ],
+      "target": "engine",
+      "fan_in": 8,
+      "fan_out": 1
+    },
+    "engine/source/renderer/bs_rml.h": {
+      "side": "engine",
+      "includes": [
+        "engine/source/defines.h"
+      ],
+      "target": "engine",
+      "fan_in": 8,
+      "fan_out": 1
+    },
+    "engine/source/renderer/bs_ui.cpp": {
+      "side": "engine",
+      "includes": [
+        "engine/source/renderer/bs_ui.h",
+        "engine/source/renderer/bs_imgui.h"
+      ],
+      "target": "engine",
+      "fan_in": 0,
+      "fan_out": 2
+    },
+    "engine/source/renderer/bs_ui.h": {
+      "side": "engine",
+      "includes": [
+        "engine/source/defines.h",
+        "engine/source/renderer/renderer_types.h"
+      ],
+      "target": "engine",
+      "fan_in": 9,
+      "fan_out": 2
+    },
+    "engine/source/renderer/camera2d.cpp": {
+      "side": "engine",
+      "includes": [
+        "engine/source/renderer/camera2d.h",
+        "engine/source/math/math_utils.h"
+      ],
+      "target": "engine",
+      "fan_in": 0,
+      "fan_out": 2
+    },
+    "engine/source/renderer/camera2d.h": {
+      "side": "engine",
+      "includes": [
+        "engine/source/defines.h",
+        "engine/source/renderer/renderer_types.h"
+      ],
+      "target": "engine",
+      "fan_in": 21,
+      "fan_out": 2
+    },
+    "engine/source/renderer/renderer.cpp": {
+      "side": "engine",
+      "includes": [
+        "engine/source/renderer/renderer.h",
+        "engine/source/renderer/renderer_backend.h",
+        "engine/source/renderer/camera2d.h",
+        "engine/source/renderer/bs_imgui.h",
+        "engine/source/renderer/bs_rml.h",
+        "engine/source/core/logger.h",
+        "engine/source/core/memory/bs_memory.h"
+      ],
+      "target": "engine",
+      "fan_in": 0,
+      "fan_out": 7
+    },
+    "engine/source/renderer/renderer.h": {
+      "side": "engine",
+      "includes": [
+        "engine/source/defines.h",
+        "engine/source/renderer/renderer_types.h"
+      ],
+      "target": "engine",
+      "fan_in": 31,
+      "fan_out": 2
+    },
+    "engine/source/renderer/renderer_backend.cpp": {
+      "side": "engine",
+      "includes": [
+        "engine/source/renderer/renderer_backend.h",
+        "engine/source/renderer/backend/renderer_backend_sdlgpu.h",
+        "engine/source/core/logger.h"
+      ],
+      "target": "engine",
+      "fan_in": 0,
+      "fan_out": 3
+    },
+    "engine/source/renderer/renderer_backend.h": {
+      "side": "engine",
+      "includes": [
+        "engine/source/defines.h",
+        "engine/source/renderer/renderer_types.h"
+      ],
+      "target": "engine",
+      "fan_in": 3,
+      "fan_out": 2
+    },
+    "engine/source/renderer/renderer_types.h": {
+      "side": "engine",
+      "includes": [
+        "engine/source/defines.h",
+        "engine/source/math/math_utils.h"
+      ],
+      "target": "engine",
+      "fan_in": 18,
+      "fan_out": 2
+    },
+    "engine/source/renderer/starfield_gpu_resources.cpp": {
+      "side": "engine",
+      "includes": [
+        "engine/source/renderer/starfield_gpu_resources.h",
+        "engine/source/renderer/renderer_types.h",
+        "engine/source/renderer/backend/renderer_backend_sdlgpu.h",
+        "engine/source/core/logger.h",
+        "engine/source/math/math_utils.h"
+      ],
+      "target": "engine",
+      "fan_in": 0,
+      "fan_out": 5
+    },
+    "engine/source/renderer/starfield_gpu_resources.h": {
+      "side": "engine",
+      "includes": [
+        "engine/source/defines.h"
+      ],
+      "target": "engine",
+      "fan_in": 2,
+      "fan_out": 1
+    },
+    "sandbox/source/core/coord_diag.cpp": {
+      "side": "sandbox",
+      "includes": [
+        "sandbox/source/core/coord_diag.h",
+        "sandbox/source/game.h",
+        "sandbox/source/sim/fleet.h",
+        "sandbox/source/sim/projectile.h",
+        "engine/source/math/bs_hierpos.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 0,
+      "fan_out": 5
+    },
+    "sandbox/source/core/coord_diag.h": {
+      "side": "sandbox",
+      "includes": [
+        "engine/source/defines.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 3,
+      "fan_out": 1
+    },
+    "sandbox/source/core/cursor_world.cpp": {
+      "side": "sandbox",
+      "includes": [
+        "sandbox/source/core/cursor_world.h",
+        "sandbox/source/game.h",
+        "sandbox/source/core/view_transform.h",
+        "engine/source/core/input.h",
+        "engine/source/renderer/camera2d.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 0,
+      "fan_out": 5
+    },
+    "sandbox/source/core/cursor_world.h": {
+      "side": "sandbox",
+      "includes": [
+        "engine/source/math/bs_hierpos.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 9,
+      "fan_out": 1
+    },
+    "sandbox/source/core/galaxy_coords.cpp": {
+      "side": "sandbox",
+      "includes": [
+        "sandbox/source/core/galaxy_coords.h",
+        "sandbox/source/game.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 0,
+      "fan_out": 2
+    },
+    "sandbox/source/core/galaxy_coords.h": {
+      "side": "sandbox",
+      "includes": [
+        "engine/source/defines.h",
+        "engine/source/math/bs_hierpos.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 2,
+      "fan_out": 2
+    },
+    "sandbox/source/core/geom2d.cpp": {
+      "side": "sandbox",
+      "includes": [
+        "sandbox/source/core/geom2d.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 0,
+      "fan_out": 1
+    },
+    "sandbox/source/core/geom2d.h": {
+      "side": "sandbox",
+      "includes": [
+        "engine/source/defines.h",
+        "engine/source/math/math_utils.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 4,
+      "fan_out": 2
+    },
+    "sandbox/source/core/profiler.cpp": {
+      "side": "sandbox",
+      "includes": [
+        "sandbox/source/core/profiler.h",
+        "engine/source/renderer/bs_ui.h",
+        "engine/source/renderer/renderer.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 0,
+      "fan_out": 3
+    },
+    "sandbox/source/core/profiler.h": {
+      "side": "sandbox",
+      "includes": [
+        "engine/source/defines.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 2,
+      "fan_out": 1
+    },
+    "sandbox/source/core/render_layers.h": {
+      "side": "sandbox",
+      "includes": [
+        "engine/source/renderer/renderer_types.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 12,
+      "fan_out": 1
+    },
+    "sandbox/source/core/view_transform.cpp": {
+      "side": "sandbox",
+      "includes": [
+        "sandbox/source/core/view_transform.h",
+        "sandbox/source/game.h",
+        "engine/source/renderer/camera2d.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 0,
+      "fan_out": 3
+    },
+    "sandbox/source/core/view_transform.h": {
+      "side": "sandbox",
+      "includes": [
+        "engine/source/defines.h",
+        "engine/source/math/bs_hierpos.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 21,
+      "fan_out": 2
+    },
+    "sandbox/source/entry.cpp": {
+      "side": "sandbox",
+      "includes": [
+        "sandbox/source/game.h",
+        "engine/source/entry.h",
+        "engine/source/core/memory/bs_memory.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 0,
+      "fan_out": 3
+    },
+    "sandbox/source/font8x8.h": {
+      "side": "sandbox",
+      "includes": [
+        "engine/source/defines.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 1,
+      "fan_out": 1
+    },
+    "sandbox/source/game.cpp": {
+      "side": "sandbox",
+      "includes": [
+        "sandbox/source/game.h",
+        "sandbox/source/game_modules.h",
+        "sandbox/source/render/text.h",
+        "sandbox/source/sim/travel.h",
+        "sandbox/source/core/coord_diag.h",
+        "sandbox/source/sim/weapon.h",
+        "sandbox/source/sim/projectile.h",
+        "sandbox/source/sim/point_defense.h",
+        "sandbox/source/sim/ss_generation.h",
+        "sandbox/source/render/voronoi_cell_hover_effect.h",
+        "sandbox/source/render/global_background.h",
+        "sandbox/source/render/mapped_system_layer.h",
+        "engine/source/core/logger.h",
+        "engine/source/core/input.h",
+        "engine/source/math/math_utils.h",
+        "engine/source/math/bs_hierpos.h",
+        "engine/source/renderer/renderer.h",
+        "engine/source/renderer/camera2d.h",
+        "engine/source/renderer/bs_imgui.h",
+        "engine/source/renderer/bs_rml.h",
+        "sandbox/source/render/galaxy_map_render.h",
+        "sandbox/source/render/weapon_hub.h",
+        "sandbox/source/sim/celestial_parallax.h",
+        "engine/source/renderer/bs_ui.h",
+        "sandbox/source/core/render_layers.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 0,
+      "fan_out": 25
+    },
+    "sandbox/source/game.h": {
+      "side": "sandbox",
+      "includes": [
+        "sandbox/source/state/game_state.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 50,
+      "fan_out": 1
+    },
+    "sandbox/source/game_modules.h": {
+      "side": "sandbox",
+      "includes": [
+        "sandbox/source/core/galaxy_coords.h",
+        "sandbox/source/sim/galaxy_map.h",
+        "sandbox/source/sim/system_evolution.h",
+        "sandbox/source/ui/system_inspector.h",
+        "sandbox/source/sim/galaxy_history.h",
+        "sandbox/source/ui/new_game_setup.h",
+        "sandbox/source/sim/combat_arena.h",
+        "sandbox/source/sim/ai_ship.h",
+        "sandbox/source/sim/ship_mission.h",
+        "sandbox/source/sim/station_market.h",
+        "sandbox/source/sim/action_log.h",
+        "sandbox/source/sim/celestial_parallax.h",
+        "sandbox/source/core/view_transform.h",
+        "sandbox/source/render/debug_overlay.h",
+        "sandbox/source/core/cursor_world.h",
+        "sandbox/source/sim/ship_control.h",
+        "sandbox/source/core/geom2d.h",
+        "sandbox/source/sim/editor_tools.h",
+        "sandbox/source/render/ship_render.h",
+        "sandbox/source/render/gameplay_overlays.h",
+        "sandbox/source/render/galaxy_map_render.h",
+        "sandbox/source/render/frame_lighting.h",
+        "sandbox/source/render/parallax_background.h",
+        "sandbox/source/render/ship_scene.h",
+        "sandbox/source/render/scene_renderer.h",
+        "sandbox/source/sim/heat_map.h",
+        "sandbox/source/sim/camera_controller.h",
+        "sandbox/source/ui/editor_ui.h",
+        "sandbox/source/sim/discovery.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 1,
+      "fan_out": 29
+    },
+    "sandbox/source/jc_voronoi.h": {
+      "side": "sandbox",
+      "includes": [],
+      "target": "sandbox",
+      "fan_in": 1,
+      "fan_out": 0
+    },
+    "sandbox/source/render/debug_overlay.cpp": {
+      "side": "sandbox",
+      "includes": [
+        "sandbox/source/render/debug_overlay.h",
+        "sandbox/source/game.h",
+        "sandbox/source/core/view_transform.h",
+        "sandbox/source/render/text.h",
+        "sandbox/source/core/render_layers.h",
+        "engine/source/renderer/renderer.h",
+        "engine/source/renderer/camera2d.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 0,
+      "fan_out": 7
+    },
+    "sandbox/source/render/debug_overlay.h": {
+      "side": "sandbox",
+      "includes": [
+        "engine/source/defines.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 4,
+      "fan_out": 1
+    },
+    "sandbox/source/render/defense_laser_overlay.cpp": {
+      "side": "sandbox",
+      "includes": [
+        "sandbox/source/render/defense_laser_overlay.h",
+        "sandbox/source/game.h",
+        "sandbox/source/core/view_transform.h",
+        "sandbox/source/core/render_layers.h",
+        "engine/source/renderer/renderer.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 0,
+      "fan_out": 5
+    },
+    "sandbox/source/render/defense_laser_overlay.h": {
+      "side": "sandbox",
+      "includes": [
+        "engine/source/defines.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 2,
+      "fan_out": 1
+    },
+    "sandbox/source/render/frame_lighting.cpp": {
+      "side": "sandbox",
+      "includes": [
+        "sandbox/source/render/frame_lighting.h",
+        "sandbox/source/game.h",
+        "sandbox/source/sim/celestial_parallax.h",
+        "sandbox/source/render/star_fx.h",
+        "sandbox/source/core/render_layers.h",
+        "engine/source/renderer/renderer.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 0,
+      "fan_out": 6
+    },
+    "sandbox/source/render/frame_lighting.h": {
+      "side": "sandbox",
+      "includes": [],
+      "target": "sandbox",
+      "fan_in": 3,
+      "fan_out": 0
+    },
+    "sandbox/source/render/galaxy_map_render.cpp": {
+      "side": "sandbox",
+      "includes": [
+        "sandbox/source/render/galaxy_map_render.h",
+        "sandbox/source/game.h",
+        "sandbox/source/core/view_transform.h",
+        "sandbox/source/core/cursor_world.h",
+        "sandbox/source/sim/celestial_parallax.h",
+        "sandbox/source/sim/galaxy_map.h",
+        "sandbox/source/sim/ship_mission.h",
+        "sandbox/source/sim/galaxy_gen.h",
+        "sandbox/source/sim/ss_generation.h",
+        "sandbox/source/sim/galaxy_history.h",
+        "sandbox/source/sim/voronoi_galaxy.h",
+        "sandbox/source/render/voronoi_cell_hover_effect.h",
+        "sandbox/source/core/render_layers.h",
+        "engine/source/core/input.h",
+        "engine/source/core/memory/bs_memory.h",
+        "engine/source/renderer/renderer.h",
+        "engine/source/renderer/camera2d.h",
+        "engine/source/renderer/bs_ui.h",
+        "engine/source/renderer/bs_imgui.h",
+        "engine/source/renderer/bs_rml.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 0,
+      "fan_out": 20
+    },
+    "sandbox/source/render/galaxy_map_render.h": {
+      "side": "sandbox",
+      "includes": [
+        "engine/source/defines.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 5,
+      "fan_out": 1
+    },
+    "sandbox/source/render/gameplay_overlays.cpp": {
+      "side": "sandbox",
+      "includes": [
+        "sandbox/source/render/gameplay_overlays.h",
+        "sandbox/source/game.h",
+        "sandbox/source/core/view_transform.h",
+        "sandbox/source/core/cursor_world.h",
+        "sandbox/source/sim/editor_tools.h",
+        "sandbox/source/sim/heat_map.h",
+        "sandbox/source/sim/combat_arena.h",
+        "sandbox/source/render/ship_render.h",
+        "sandbox/source/render/sensor_overlay.h",
+        "sandbox/source/render/defense_laser_overlay.h",
+        "sandbox/source/render/weapon_hub.h",
+        "sandbox/source/render/projectile_marker.h",
+        "sandbox/source/core/render_layers.h",
+        "sandbox/source/sim/galaxy_history.h",
+        "sandbox/source/sim/ai_ship.h",
+        "sandbox/source/render/text.h",
+        "sandbox/source/sim/weapon_def.h",
+        "engine/source/renderer/renderer.h",
+        "engine/source/renderer/camera2d.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 0,
+      "fan_out": 19
+    },
+    "sandbox/source/render/gameplay_overlays.h": {
+      "side": "sandbox",
+      "includes": [],
+      "target": "sandbox",
+      "fan_in": 3,
+      "fan_out": 0
+    },
+    "sandbox/source/render/global_background.cpp": {
+      "side": "sandbox",
+      "includes": [
+        "sandbox/source/render/global_background.h",
+        "sandbox/source/render/mapped_system_layer.h",
+        "sandbox/source/render/nebula_layer.h",
+        "sandbox/source/render/starfield_layer.h",
+        "sandbox/source/render/starfield_generator.h",
+        "sandbox/source/game.h",
+        "sandbox/source/render/star_fx.h",
+        "engine/source/renderer/renderer.h",
+        "engine/source/renderer/camera2d.h",
+        "engine/source/core/logger.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 0,
+      "fan_out": 10
+    },
+    "sandbox/source/render/global_background.h": {
+      "side": "sandbox",
+      "includes": [
+        "engine/source/defines.h",
+        "engine/source/math/math_utils.h",
+        "engine/source/renderer/renderer_types.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 3,
+      "fan_out": 3
+    },
+    "sandbox/source/render/mapped_system_layer.cpp": {
+      "side": "sandbox",
+      "includes": [
+        "sandbox/source/render/mapped_system_layer.h",
+        "sandbox/source/game.h",
+        "sandbox/source/core/view_transform.h",
+        "sandbox/source/sim/celestial_parallax.h",
+        "sandbox/source/render/star_fx.h",
+        "engine/source/math/bs_hierpos.h",
+        "engine/source/renderer/camera2d.h",
+        "engine/source/renderer/renderer.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 0,
+      "fan_out": 8
+    },
+    "sandbox/source/render/mapped_system_layer.h": {
+      "side": "sandbox",
+      "includes": [
+        "engine/source/defines.h",
+        "engine/source/math/math_utils.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 3,
+      "fan_out": 2
+    },
+    "sandbox/source/render/nebula_layer.cpp": {
+      "side": "sandbox",
+      "includes": [
+        "sandbox/source/render/nebula_layer.h",
+        "sandbox/source/game.h",
+        "sandbox/source/core/view_transform.h",
+        "engine/source/renderer/renderer.h",
+        "engine/source/renderer/camera2d.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 0,
+      "fan_out": 5
+    },
+    "sandbox/source/render/nebula_layer.h": {
+      "side": "sandbox",
+      "includes": [
+        "engine/source/defines.h",
+        "engine/source/math/math_utils.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 2,
+      "fan_out": 2
+    },
+    "sandbox/source/render/out_sensor_detection_fx.cpp": {
+      "side": "sandbox",
+      "includes": [
+        "sandbox/source/render/out_sensor_detection_fx.h",
+        "engine/source/renderer/renderer.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 0,
+      "fan_out": 2
+    },
+    "sandbox/source/render/out_sensor_detection_fx.h": {
+      "side": "sandbox",
+      "includes": [
+        "engine/source/defines.h",
+        "engine/source/math/math_utils.h",
+        "engine/source/renderer/renderer_types.h",
+        "sandbox/source/sim/ship.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 2,
+      "fan_out": 4
+    },
+    "sandbox/source/render/parallax_background.cpp": {
+      "side": "sandbox",
+      "includes": [
+        "sandbox/source/render/parallax_background.h",
+        "sandbox/source/game.h",
+        "sandbox/source/core/view_transform.h",
+        "sandbox/source/sim/celestial_parallax.h",
+        "engine/source/renderer/renderer.h",
+        "engine/source/renderer/camera2d.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 0,
+      "fan_out": 6
+    },
+    "sandbox/source/render/parallax_background.h": {
+      "side": "sandbox",
+      "includes": [
+        "engine/source/defines.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 3,
+      "fan_out": 1
+    },
+    "sandbox/source/render/projectile_marker.cpp": {
+      "side": "sandbox",
+      "includes": [
+        "sandbox/source/render/projectile_marker.h",
+        "sandbox/source/game.h",
+        "sandbox/source/core/render_layers.h",
+        "sandbox/source/sim/projectile.h",
+        "engine/source/renderer/renderer.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 0,
+      "fan_out": 5
+    },
+    "sandbox/source/render/projectile_marker.h": {
+      "side": "sandbox",
+      "includes": [],
+      "target": "sandbox",
+      "fan_in": 2,
+      "fan_out": 0
+    },
+    "sandbox/source/render/scene_renderer.cpp": {
+      "side": "sandbox",
+      "includes": [
+        "sandbox/source/render/scene_renderer.h",
+        "sandbox/source/game.h",
+        "sandbox/source/render/galaxy_map_render.h",
+        "sandbox/source/render/parallax_background.h",
+        "sandbox/source/render/frame_lighting.h",
+        "sandbox/source/render/ship_scene.h",
+        "sandbox/source/render/system_content_render.h",
+        "sandbox/source/render/gameplay_overlays.h",
+        "engine/source/renderer/renderer.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 0,
+      "fan_out": 9
+    },
+    "sandbox/source/render/scene_renderer.h": {
+      "side": "sandbox",
+      "includes": [
+        "engine/source/defines.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 2,
+      "fan_out": 1
+    },
+    "sandbox/source/render/sensor_overlay.cpp": {
+      "side": "sandbox",
+      "includes": [
+        "sandbox/source/render/sensor_overlay.h",
+        "sandbox/source/game.h",
+        "sandbox/source/sim/sensor_system.h",
+        "sandbox/source/core/view_transform.h",
+        "sandbox/source/core/render_layers.h",
+        "engine/source/renderer/renderer.h",
+        "engine/source/renderer/camera2d.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 0,
+      "fan_out": 7
+    },
+    "sandbox/source/render/sensor_overlay.h": {
+      "side": "sandbox",
+      "includes": [
+        "engine/source/defines.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 3,
+      "fan_out": 1
+    },
+    "sandbox/source/render/ship_render.cpp": {
+      "side": "sandbox",
+      "includes": [
+        "sandbox/source/render/ship_render.h",
+        "sandbox/source/game.h",
+        "sandbox/source/sim/module.h",
+        "sandbox/source/core/view_transform.h",
+        "sandbox/source/render/text.h",
+        "sandbox/source/core/render_layers.h",
+        "engine/source/renderer/renderer.h",
+        "engine/source/renderer/camera2d.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 0,
+      "fan_out": 8
+    },
+    "sandbox/source/render/ship_render.h": {
+      "side": "sandbox",
+      "includes": [
+        "engine/source/defines.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 5,
+      "fan_out": 1
+    },
+    "sandbox/source/render/ship_scene.cpp": {
+      "side": "sandbox",
+      "includes": [
+        "sandbox/source/render/ship_scene.h",
+        "sandbox/source/game.h",
+        "sandbox/source/sim/ship.h",
+        "sandbox/source/sim/weapon.h",
+        "sandbox/source/core/view_transform.h",
+        "sandbox/source/sim/celestial_parallax.h",
+        "sandbox/source/render/debug_overlay.h",
+        "sandbox/source/render/ship_render.h",
+        "sandbox/source/core/cursor_world.h",
+        "sandbox/source/core/render_layers.h",
+        "sandbox/source/render/text.h",
+        "engine/source/renderer/renderer.h",
+        "engine/source/renderer/camera2d.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 0,
+      "fan_out": 13
+    },
+    "sandbox/source/render/ship_scene.h": {
+      "side": "sandbox",
+      "includes": [],
+      "target": "sandbox",
+      "fan_in": 3,
+      "fan_out": 0
+    },
+    "sandbox/source/render/ship_visual.cpp": {
+      "side": "sandbox",
+      "includes": [
+        "sandbox/source/render/ship_visual.h",
+        "sandbox/source/sim/ship.h",
+        "engine/source/core/logger.h",
+        "engine/source/renderer/renderer.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 0,
+      "fan_out": 4
+    },
+    "sandbox/source/render/ship_visual.h": {
+      "side": "sandbox",
+      "includes": [
+        "engine/source/defines.h",
+        "engine/source/math/math_utils.h",
+        "engine/source/renderer/renderer_types.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 3,
+      "fan_out": 3
+    },
+    "sandbox/source/render/star_fx.cpp": {
+      "side": "sandbox",
+      "includes": [
+        "sandbox/source/render/star_fx.h",
+        "sandbox/source/game.h",
+        "engine/source/core/logger.h",
+        "engine/source/renderer/renderer.h",
+        "engine/source/renderer/bs_ui.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 0,
+      "fan_out": 5
+    },
+    "sandbox/source/render/star_fx.h": {
+      "side": "sandbox",
+      "includes": [
+        "engine/source/defines.h",
+        "engine/source/math/math_utils.h",
+        "engine/source/renderer/renderer_types.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 5,
+      "fan_out": 3
+    },
+    "sandbox/source/render/starfield_generator.cpp": {
+      "side": "sandbox",
+      "includes": [
+        "sandbox/source/render/starfield_generator.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 0,
+      "fan_out": 1
+    },
+    "sandbox/source/render/starfield_generator.h": {
+      "side": "sandbox",
+      "includes": [
+        "engine/source/defines.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 2,
+      "fan_out": 1
+    },
+    "sandbox/source/render/starfield_layer.cpp": {
+      "side": "sandbox",
+      "includes": [
+        "sandbox/source/render/starfield_layer.h",
+        "sandbox/source/game.h",
+        "sandbox/source/core/view_transform.h",
+        "engine/source/renderer/renderer.h",
+        "engine/source/renderer/camera2d.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 0,
+      "fan_out": 5
+    },
+    "sandbox/source/render/starfield_layer.h": {
+      "side": "sandbox",
+      "includes": [
+        "engine/source/defines.h",
+        "engine/source/math/math_utils.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 2,
+      "fan_out": 2
+    },
+    "sandbox/source/render/system_content_render.cpp": {
+      "side": "sandbox",
+      "includes": [
+        "sandbox/source/render/system_content_render.h",
+        "sandbox/source/game.h",
+        "sandbox/source/core/view_transform.h",
+        "sandbox/source/core/render_layers.h",
+        "engine/source/math/bs_hierpos.h",
+        "engine/source/renderer/renderer.h",
+        "engine/source/renderer/camera2d.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 0,
+      "fan_out": 7
+    },
+    "sandbox/source/render/system_content_render.h": {
+      "side": "sandbox",
+      "includes": [
+        "engine/source/defines.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 2,
+      "fan_out": 1
+    },
+    "sandbox/source/render/text.cpp": {
+      "side": "sandbox",
+      "includes": [
+        "sandbox/source/render/text.h",
+        "sandbox/source/font8x8.h",
+        "engine/source/core/logger.h",
+        "engine/source/renderer/renderer.h",
+        "engine/source/renderer/camera2d.h",
+        "engine/source/math/math_utils.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 0,
+      "fan_out": 6
+    },
+    "sandbox/source/render/text.h": {
+      "side": "sandbox",
+      "includes": [
+        "engine/source/defines.h",
+        "engine/source/renderer/renderer_types.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 7,
+      "fan_out": 2
+    },
+    "sandbox/source/render/voronoi_cell_hover_effect.cpp": {
+      "side": "sandbox",
+      "includes": [
+        "sandbox/source/render/voronoi_cell_hover_effect.h",
+        "sandbox/source/sim/voronoi_galaxy.h",
+        "sandbox/source/game.h",
+        "sandbox/source/core/view_transform.h",
+        "engine/source/math/bs_hierpos.h",
+        "engine/source/math/math_utils.h",
+        "engine/source/renderer/renderer.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 0,
+      "fan_out": 7
+    },
+    "sandbox/source/render/voronoi_cell_hover_effect.h": {
+      "side": "sandbox",
+      "includes": [
+        "engine/source/defines.h",
+        "engine/source/renderer/renderer_types.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 3,
+      "fan_out": 2
+    },
+    "sandbox/source/render/weapon_hub.cpp": {
+      "side": "sandbox",
+      "includes": [
+        "sandbox/source/render/weapon_hub.h",
+        "sandbox/source/game.h",
+        "sandbox/source/core/render_layers.h",
+        "sandbox/source/core/cursor_world.h",
+        "sandbox/source/render/text.h",
+        "sandbox/source/sim/ship.h",
+        "sandbox/source/sim/weapon.h",
+        "sandbox/source/sim/fleet.h",
+        "sandbox/source/sim/action_log.h",
+        "engine/source/core/input.h",
+        "engine/source/renderer/renderer.h",
+        "engine/source/renderer/camera2d.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 0,
+      "fan_out": 12
+    },
+    "sandbox/source/render/weapon_hub.h": {
+      "side": "sandbox",
+      "includes": [
+        "engine/source/defines.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 3,
+      "fan_out": 1
+    },
+    "sandbox/source/sim/action_log.cpp": {
+      "side": "sandbox",
+      "includes": [
+        "sandbox/source/sim/action_log.h",
+        "sandbox/source/game.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 0,
+      "fan_out": 2
+    },
+    "sandbox/source/sim/action_log.h": {
+      "side": "sandbox",
+      "includes": [
+        "engine/source/defines.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 8,
+      "fan_out": 1
+    },
+    "sandbox/source/sim/ai_ship.cpp": {
+      "side": "sandbox",
+      "includes": [
+        "sandbox/source/sim/ai_ship.h",
+        "sandbox/source/game.h",
+        "sandbox/source/sim/galaxy_map.h",
+        "sandbox/source/sim/galaxy_history.h",
+        "sandbox/source/sim/ship_mission.h",
+        "sandbox/source/render/ship_visual.h",
+        "sandbox/source/sim/steering.h",
+        "sandbox/source/sim/station_market.h",
+        "sandbox/source/sim/discovery.h",
+        "sandbox/source/sim/weapon_def.h",
+        "engine/source/core/logger.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 0,
+      "fan_out": 11
+    },
+    "sandbox/source/sim/ai_ship.h": {
+      "side": "sandbox",
+      "includes": [
+        "engine/source/defines.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 7,
+      "fan_out": 1
+    },
+    "sandbox/source/sim/camera_controller.cpp": {
+      "side": "sandbox",
+      "includes": [
+        "sandbox/source/sim/camera_controller.h",
+        "sandbox/source/game.h",
+        "sandbox/source/core/view_transform.h",
+        "sandbox/source/sim/ship_control.h",
+        "engine/source/core/input.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 0,
+      "fan_out": 5
+    },
+    "sandbox/source/sim/camera_controller.h": {
+      "side": "sandbox",
+      "includes": [
+        "engine/source/defines.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 2,
+      "fan_out": 1
+    },
+    "sandbox/source/sim/celestial_parallax.cpp": {
+      "side": "sandbox",
+      "includes": [
+        "sandbox/source/sim/celestial_parallax.h",
+        "sandbox/source/game.h",
+        "sandbox/source/sim/galaxy_map.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 0,
+      "fan_out": 3
+    },
+    "sandbox/source/sim/celestial_parallax.h": {
+      "side": "sandbox",
+      "includes": [
+        "engine/source/defines.h",
+        "engine/source/math/bs_hierpos.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 8,
+      "fan_out": 2
+    },
+    "sandbox/source/sim/combat_arena.cpp": {
+      "side": "sandbox",
+      "includes": [
+        "sandbox/source/sim/combat_arena.h",
+        "sandbox/source/game.h",
+        "sandbox/source/sim/weapon.h",
+        "sandbox/source/sim/galaxy_history.h",
+        "sandbox/source/sim/ai_ship.h",
+        "sandbox/source/sim/action_log.h",
+        "sandbox/source/core/geom2d.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 0,
+      "fan_out": 7
+    },
+    "sandbox/source/sim/combat_arena.h": {
+      "side": "sandbox",
+      "includes": [
+        "engine/source/defines.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 4,
+      "fan_out": 1
+    },
+    "sandbox/source/sim/discovery.cpp": {
+      "side": "sandbox",
+      "includes": [
+        "sandbox/source/sim/discovery.h",
+        "sandbox/source/game.h",
+        "sandbox/source/sim/ai_ship.h",
+        "sandbox/source/sim/galaxy_map.h",
+        "sandbox/source/sim/action_log.h",
+        "sandbox/source/sim/ship.h",
+        "engine/source/math/bs_hierpos.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 0,
+      "fan_out": 7
+    },
+    "sandbox/source/sim/discovery.h": {
+      "side": "sandbox",
+      "includes": [
+        "engine/source/defines.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 3,
+      "fan_out": 1
+    },
+    "sandbox/source/sim/editor_tools.cpp": {
+      "side": "sandbox",
+      "includes": [
+        "sandbox/source/sim/editor_tools.h",
+        "sandbox/source/game.h",
+        "sandbox/source/core/cursor_world.h",
+        "sandbox/source/core/geom2d.h",
+        "engine/source/core/input.h",
+        "engine/source/renderer/bs_imgui.h",
+        "engine/source/renderer/bs_rml.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 0,
+      "fan_out": 7
+    },
+    "sandbox/source/sim/editor_tools.h": {
+      "side": "sandbox",
+      "includes": [
+        "engine/source/defines.h",
+        "engine/source/math/bs_hierpos.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 3,
+      "fan_out": 2
+    },
+    "sandbox/source/sim/fleet.cpp": {
+      "side": "sandbox",
+      "includes": [
+        "sandbox/source/sim/fleet.h",
+        "sandbox/source/game.h",
+        "sandbox/source/sim/weapon.h",
+        "engine/source/math/math_utils.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 0,
+      "fan_out": 4
+    },
+    "sandbox/source/sim/fleet.h": {
+      "side": "sandbox",
+      "includes": [
+        "engine/source/defines.h",
+        "engine/source/math/math_utils.h",
+        "sandbox/source/sim/ship.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 6,
+      "fan_out": 3
+    },
+    "sandbox/source/sim/galaxy_gen.cpp": {
+      "side": "sandbox",
+      "includes": [
+        "sandbox/source/sim/galaxy_gen.h",
+        "sandbox/source/game.h",
+        "sandbox/source/sim/ss_generation.h",
+        "sandbox/source/sim/galaxy_spatial.h",
+        "sandbox/source/sim/galaxy_rng.h",
+        "engine/source/core/memory/bs_memory.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 0,
+      "fan_out": 6
+    },
+    "sandbox/source/sim/galaxy_gen.h": {
+      "side": "sandbox",
+      "includes": [
+        "engine/source/defines.h",
+        "engine/source/math/bs_hierpos.h",
+        "sandbox/source/sim/galaxy_params.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 5,
+      "fan_out": 3
+    },
+    "sandbox/source/sim/galaxy_history.cpp": {
+      "side": "sandbox",
+      "includes": [
+        "sandbox/source/sim/galaxy_history.h",
+        "sandbox/source/game.h",
+        "sandbox/source/sim/galaxy_rng.h",
+        "engine/source/core/logger.h",
+        "engine/source/core/memory/bs_memory.h",
+        "engine/source/renderer/bs_ui.h",
+        "sandbox/source/sim/galaxy_map.h",
+        "sandbox/source/sim/ai_ship.h",
+        "sandbox/source/sim/action_log.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 0,
+      "fan_out": 9
+    },
+    "sandbox/source/sim/galaxy_history.h": {
+      "side": "sandbox",
+      "includes": [
+        "engine/source/defines.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 8,
+      "fan_out": 1
+    },
+    "sandbox/source/sim/galaxy_map.cpp": {
+      "side": "sandbox",
+      "includes": [
+        "sandbox/source/sim/galaxy_map.h",
+        "sandbox/source/game.h",
+        "sandbox/source/sim/ss_generation.h",
+        "sandbox/source/sim/galaxy_gen.h",
+        "sandbox/source/sim/galaxy_spatial.h",
+        "sandbox/source/sim/galaxy_history.h",
+        "engine/source/core/logger.h",
+        "engine/source/core/memory/bs_memory.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 0,
+      "fan_out": 8
+    },
+    "sandbox/source/sim/galaxy_map.h": {
+      "side": "sandbox",
+      "includes": [
+        "engine/source/defines.h",
+        "engine/source/math/bs_hierpos.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 9,
+      "fan_out": 2
+    },
+    "sandbox/source/sim/galaxy_params.h": {
+      "side": "sandbox",
+      "includes": [
+        "engine/source/defines.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 2,
+      "fan_out": 1
+    },
+    "sandbox/source/sim/galaxy_rng.h": {
+      "side": "sandbox",
+      "includes": [
+        "engine/source/defines.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 5,
+      "fan_out": 1
+    },
+    "sandbox/source/sim/galaxy_spatial.cpp": {
+      "side": "sandbox",
+      "includes": [
+        "sandbox/source/sim/galaxy_spatial.h",
+        "sandbox/source/game.h",
+        "engine/source/core/memory/bs_memory.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 0,
+      "fan_out": 3
+    },
+    "sandbox/source/sim/galaxy_spatial.h": {
+      "side": "sandbox",
+      "includes": [
+        "engine/source/defines.h",
+        "engine/source/math/bs_hierpos.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 4,
+      "fan_out": 2
+    },
+    "sandbox/source/sim/heat_map.cpp": {
+      "side": "sandbox",
+      "includes": [
+        "sandbox/source/sim/heat_map.h",
+        "sandbox/source/game.h",
+        "sandbox/source/core/view_transform.h",
+        "engine/source/renderer/renderer.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 0,
+      "fan_out": 4
+    },
+    "sandbox/source/sim/heat_map.h": {
+      "side": "sandbox",
+      "includes": [],
+      "target": "sandbox",
+      "fan_in": 3,
+      "fan_out": 0
+    },
+    "sandbox/source/sim/module.cpp": {
+      "side": "sandbox",
+      "includes": [
+        "sandbox/source/sim/module.h",
+        "engine/source/core/logger.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 0,
+      "fan_out": 2
+    },
+    "sandbox/source/sim/module.h": {
+      "side": "sandbox",
+      "includes": [
+        "engine/source/defines.h",
+        "sandbox/source/sim/ship.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 4,
+      "fan_out": 2
+    },
+    "sandbox/source/sim/point_defense.cpp": {
+      "side": "sandbox",
+      "includes": [
+        "sandbox/source/sim/point_defense.h",
+        "sandbox/source/game.h",
+        "sandbox/source/sim/action_log.h",
+        "engine/source/math/math_utils.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 0,
+      "fan_out": 4
+    },
+    "sandbox/source/sim/point_defense.h": {
+      "side": "sandbox",
+      "includes": [
+        "engine/source/defines.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 2,
+      "fan_out": 1
+    },
+    "sandbox/source/sim/projectile.cpp": {
+      "side": "sandbox",
+      "includes": [
+        "sandbox/source/sim/projectile.h",
+        "engine/source/renderer/renderer.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 0,
+      "fan_out": 2
+    },
+    "sandbox/source/sim/projectile.h": {
+      "side": "sandbox",
+      "includes": [
+        "engine/source/defines.h",
+        "engine/source/math/math_utils.h",
+        "engine/source/math/bs_hierpos.h",
+        "engine/source/renderer/renderer_types.h",
+        "sandbox/source/sim/ship.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 6,
+      "fan_out": 5
+    },
+    "sandbox/source/sim/rts_controls.cpp": {
+      "side": "sandbox",
+      "includes": [
+        "sandbox/source/sim/rts_controls.h",
+        "sandbox/source/game.h",
+        "sandbox/source/core/view_transform.h",
+        "sandbox/source/sim/ship.h",
+        "sandbox/source/sim/weapon.h",
+        "sandbox/source/sim/fleet.h",
+        "engine/source/core/input.h",
+        "engine/source/math/math_utils.h",
+        "engine/source/renderer/renderer.h",
+        "engine/source/renderer/bs_imgui.h",
+        "engine/source/renderer/bs_rml.h",
+        "sandbox/source/render/galaxy_map_render.h",
+        "engine/source/renderer/camera2d.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 0,
+      "fan_out": 13
+    },
+    "sandbox/source/sim/rts_controls.h": {
+      "side": "sandbox",
+      "includes": [
+        "engine/source/defines.h",
+        "engine/source/math/math_utils.h",
+        "engine/source/renderer/renderer_types.h",
+        "sandbox/source/sim/ship.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 2,
+      "fan_out": 4
+    },
+    "sandbox/source/sim/sensor_system.cpp": {
+      "side": "sandbox",
+      "includes": [
+        "sandbox/source/sim/sensor_system.h",
+        "sandbox/source/game.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 0,
+      "fan_out": 2
+    },
+    "sandbox/source/sim/sensor_system.h": {
+      "side": "sandbox",
+      "includes": [
+        "engine/source/defines.h",
+        "engine/source/math/math_utils.h",
+        "engine/source/math/bs_hierpos.h",
+        "sandbox/source/sim/ship.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 2,
+      "fan_out": 4
+    },
+    "sandbox/source/sim/ship.cpp": {
+      "side": "sandbox",
+      "includes": [
+        "sandbox/source/sim/ship.h",
+        "sandbox/source/sim/weapon.h",
+        "sandbox/source/sim/module.h",
+        "engine/source/core/logger.h",
+        "engine/source/renderer/renderer.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 0,
+      "fan_out": 5
+    },
+    "sandbox/source/sim/ship.h": {
+      "side": "sandbox",
+      "includes": [
+        "engine/source/defines.h",
+        "engine/source/math/math_utils.h",
+        "engine/source/math/bs_hierpos.h",
+        "engine/source/renderer/renderer_types.h",
+        "sandbox/source/render/ship_visual.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 17,
+      "fan_out": 5
+    },
+    "sandbox/source/sim/ship_control.cpp": {
+      "side": "sandbox",
+      "includes": [
+        "sandbox/source/sim/ship_control.h",
+        "sandbox/source/game.h",
+        "sandbox/source/core/cursor_world.h",
+        "engine/source/core/input.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 0,
+      "fan_out": 4
+    },
+    "sandbox/source/sim/ship_control.h": {
+      "side": "sandbox",
+      "includes": [
+        "engine/source/defines.h",
+        "engine/source/math/bs_hierpos.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 3,
+      "fan_out": 2
+    },
+    "sandbox/source/sim/ship_mission.cpp": {
+      "side": "sandbox",
+      "includes": [
+        "sandbox/source/sim/ship_mission.h",
+        "sandbox/source/game.h",
+        "sandbox/source/sim/galaxy_map.h",
+        "sandbox/source/sim/ai_ship.h",
+        "sandbox/source/sim/station_market.h",
+        "sandbox/source/sim/galaxy_history.h",
+        "engine/source/core/logger.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 0,
+      "fan_out": 7
+    },
+    "sandbox/source/sim/ship_mission.h": {
+      "side": "sandbox",
+      "includes": [
+        "engine/source/defines.h",
+        "engine/source/math/bs_hierpos.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 4,
+      "fan_out": 2
+    },
+    "sandbox/source/sim/ss_generation.cpp": {
+      "side": "sandbox",
+      "includes": [
+        "sandbox/source/sim/ss_generation.h",
+        "sandbox/source/sim/galaxy_rng.h",
+        "sandbox/source/sim/system_evolution.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 0,
+      "fan_out": 3
+    },
+    "sandbox/source/sim/ss_generation.h": {
+      "side": "sandbox",
+      "includes": [
+        "engine/source/defines.h",
+        "sandbox/source/game.h",
+        "sandbox/source/sim/galaxy_gen.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 7,
+      "fan_out": 3
+    },
+    "sandbox/source/sim/station_market.cpp": {
+      "side": "sandbox",
+      "includes": [
+        "sandbox/source/sim/station_market.h",
+        "sandbox/source/game.h",
+        "sandbox/source/sim/galaxy_map.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 0,
+      "fan_out": 3
+    },
+    "sandbox/source/sim/station_market.h": {
+      "side": "sandbox",
+      "includes": [
+        "engine/source/defines.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 4,
+      "fan_out": 1
+    },
+    "sandbox/source/sim/steering.cpp": {
+      "side": "sandbox",
+      "includes": [
+        "sandbox/source/sim/steering.h",
+        "sandbox/source/sim/ship.h",
+        "sandbox/source/sim/fleet.h",
+        "engine/source/math/bs_hierpos.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 0,
+      "fan_out": 4
+    },
+    "sandbox/source/sim/steering.h": {
+      "side": "sandbox",
+      "includes": [
+        "engine/source/defines.h",
+        "engine/source/math/math_utils.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 2,
+      "fan_out": 2
+    },
+    "sandbox/source/sim/system_evolution.cpp": {
+      "side": "sandbox",
+      "includes": [
+        "sandbox/source/sim/system_evolution.h",
+        "sandbox/source/sim/galaxy_rng.h",
+        "sandbox/source/sim/ss_generation.h",
+        "engine/source/core/logger.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 0,
+      "fan_out": 4
+    },
+    "sandbox/source/sim/system_evolution.h": {
+      "side": "sandbox",
+      "includes": [
+        "engine/source/defines.h",
+        "sandbox/source/game.h",
+        "sandbox/source/sim/galaxy_gen.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 4,
+      "fan_out": 3
+    },
+    "sandbox/source/sim/travel.cpp": {
+      "side": "sandbox",
+      "includes": [
+        "sandbox/source/sim/travel.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 0,
+      "fan_out": 1
+    },
+    "sandbox/source/sim/travel.h": {
+      "side": "sandbox",
+      "includes": [
+        "engine/source/defines.h",
+        "engine/source/math/bs_hierpos.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 3,
+      "fan_out": 2
+    },
+    "sandbox/source/sim/voronoi_galaxy.cpp": {
+      "side": "sandbox",
+      "includes": [
+        "sandbox/source/jc_voronoi.h",
+        "sandbox/source/sim/voronoi_galaxy.h",
+        "sandbox/source/game.h",
+        "sandbox/source/core/view_transform.h",
+        "engine/source/math/math_utils.h",
+        "engine/source/math/bs_hierpos.h",
+        "engine/source/renderer/renderer.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 0,
+      "fan_out": 7
+    },
+    "sandbox/source/sim/voronoi_galaxy.h": {
+      "side": "sandbox",
+      "includes": [
+        "engine/source/defines.h",
+        "engine/source/math/bs_hierpos.h",
+        "engine/source/renderer/renderer_types.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 4,
+      "fan_out": 3
+    },
+    "sandbox/source/sim/weapon.cpp": {
+      "side": "sandbox",
+      "includes": [
+        "sandbox/source/sim/weapon.h",
+        "sandbox/source/sim/weapon_def.h",
+        "engine/source/math/math_utils.h",
+        "sandbox/source/sim/ship.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 0,
+      "fan_out": 4
+    },
+    "sandbox/source/sim/weapon.h": {
+      "side": "sandbox",
+      "includes": [
+        "engine/source/defines.h",
+        "engine/source/math/math_utils.h",
+        "sandbox/source/sim/ship.h",
+        "sandbox/source/sim/projectile.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 9,
+      "fan_out": 4
+    },
+    "sandbox/source/sim/weapon_def.cpp": {
+      "side": "sandbox",
+      "includes": [
+        "sandbox/source/sim/weapon_def.h",
+        "engine/source/core/logger.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 0,
+      "fan_out": 2
+    },
+    "sandbox/source/sim/weapon_def.h": {
+      "side": "sandbox",
+      "includes": [
+        "engine/source/defines.h",
+        "sandbox/source/sim/ship.h",
+        "sandbox/source/sim/weapon.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 5,
+      "fan_out": 3
+    },
+    "sandbox/source/state/game_state.h": {
+      "side": "sandbox",
+      "includes": [
+        "engine/source/defines.h",
+        "engine/source/game_types.h",
+        "engine/source/renderer/renderer_types.h",
+        "sandbox/source/sim/ship.h",
+        "sandbox/source/sim/module.h",
+        "sandbox/source/sim/weapon_def.h",
+        "sandbox/source/sim/projectile.h",
+        "sandbox/source/render/star_fx.h",
+        "sandbox/source/render/global_background.h",
+        "sandbox/source/sim/voronoi_galaxy.h",
+        "sandbox/source/sim/galaxy_spatial.h",
+        "sandbox/source/sim/galaxy_params.h",
+        "sandbox/source/sim/travel.h",
+        "sandbox/source/sim/fleet.h",
+        "sandbox/source/sim/rts_controls.h",
+        "sandbox/source/render/out_sensor_detection_fx.h",
+        "sandbox/source/core/profiler.h",
+        "engine/source/containers/vector.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 1,
+      "fan_out": 18
+    },
+    "sandbox/source/ui/editor_ui.cpp": {
+      "side": "sandbox",
+      "includes": [
+        "sandbox/source/ui/editor_ui.h",
+        "sandbox/source/game.h",
+        "sandbox/source/render/debug_overlay.h",
+        "sandbox/source/sim/action_log.h",
+        "sandbox/source/sim/combat_arena.h",
+        "sandbox/source/core/coord_diag.h",
+        "sandbox/source/core/cursor_world.h",
+        "sandbox/source/render/ship_render.h",
+        "engine/source/renderer/bs_ui.h",
+        "engine/source/renderer/bs_rml.h",
+        "engine/source/core/logger.h",
+        "sandbox/source/core/view_transform.h",
+        "sandbox/source/render/sensor_overlay.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 0,
+      "fan_out": 13
+    },
+    "sandbox/source/ui/editor_ui.h": {
+      "side": "sandbox",
+      "includes": [],
+      "target": "sandbox",
+      "fan_in": 2,
+      "fan_out": 0
+    },
+    "sandbox/source/ui/new_game_setup.cpp": {
+      "side": "sandbox",
+      "includes": [
+        "sandbox/source/ui/new_game_setup.h",
+        "sandbox/source/game.h",
+        "sandbox/source/sim/galaxy_rng.h",
+        "engine/source/renderer/bs_ui.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 0,
+      "fan_out": 4
+    },
+    "sandbox/source/ui/new_game_setup.h": {
+      "side": "sandbox",
+      "includes": [],
+      "target": "sandbox",
+      "fan_in": 2,
+      "fan_out": 0
+    },
+    "sandbox/source/ui/system_inspector.cpp": {
+      "side": "sandbox",
+      "includes": [
+        "sandbox/source/ui/system_inspector.h",
+        "sandbox/source/game.h",
+        "sandbox/source/sim/ss_generation.h",
+        "sandbox/source/sim/system_evolution.h",
+        "engine/source/renderer/bs_ui.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 0,
+      "fan_out": 5
+    },
+    "sandbox/source/ui/system_inspector.h": {
+      "side": "sandbox",
+      "includes": [],
+      "target": "sandbox",
+      "fan_in": 2,
+      "fan_out": 0
+    }
+  },
+  "boundary_edges": [
+    {
+      "from": "sandbox/source/core/coord_diag.cpp",
+      "to": "engine/source/math/bs_hierpos.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/core/coord_diag.h",
+      "to": "engine/source/defines.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/core/cursor_world.cpp",
+      "to": "engine/source/core/input.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/core/cursor_world.cpp",
+      "to": "engine/source/renderer/camera2d.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/core/cursor_world.h",
+      "to": "engine/source/math/bs_hierpos.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/core/galaxy_coords.h",
+      "to": "engine/source/defines.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/core/galaxy_coords.h",
+      "to": "engine/source/math/bs_hierpos.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/core/geom2d.h",
+      "to": "engine/source/defines.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/core/geom2d.h",
+      "to": "engine/source/math/math_utils.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/core/profiler.cpp",
+      "to": "engine/source/renderer/bs_ui.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/core/profiler.cpp",
+      "to": "engine/source/renderer/renderer.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/core/profiler.h",
+      "to": "engine/source/defines.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/core/render_layers.h",
+      "to": "engine/source/renderer/renderer_types.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/core/view_transform.cpp",
+      "to": "engine/source/renderer/camera2d.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/core/view_transform.h",
+      "to": "engine/source/defines.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/core/view_transform.h",
+      "to": "engine/source/math/bs_hierpos.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/entry.cpp",
+      "to": "engine/source/entry.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/entry.cpp",
+      "to": "engine/source/core/memory/bs_memory.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/font8x8.h",
+      "to": "engine/source/defines.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/game.cpp",
+      "to": "engine/source/core/logger.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/game.cpp",
+      "to": "engine/source/core/input.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/game.cpp",
+      "to": "engine/source/math/math_utils.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/game.cpp",
+      "to": "engine/source/math/bs_hierpos.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/game.cpp",
+      "to": "engine/source/renderer/renderer.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/game.cpp",
+      "to": "engine/source/renderer/camera2d.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/game.cpp",
+      "to": "engine/source/renderer/bs_imgui.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/game.cpp",
+      "to": "engine/source/renderer/bs_rml.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/game.cpp",
+      "to": "engine/source/renderer/bs_ui.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/debug_overlay.cpp",
+      "to": "engine/source/renderer/renderer.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/debug_overlay.cpp",
+      "to": "engine/source/renderer/camera2d.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/debug_overlay.h",
+      "to": "engine/source/defines.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/defense_laser_overlay.cpp",
+      "to": "engine/source/renderer/renderer.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/defense_laser_overlay.h",
+      "to": "engine/source/defines.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/frame_lighting.cpp",
+      "to": "engine/source/renderer/renderer.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/galaxy_map_render.cpp",
+      "to": "engine/source/core/input.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/galaxy_map_render.cpp",
+      "to": "engine/source/core/memory/bs_memory.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/galaxy_map_render.cpp",
+      "to": "engine/source/renderer/renderer.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/galaxy_map_render.cpp",
+      "to": "engine/source/renderer/camera2d.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/galaxy_map_render.cpp",
+      "to": "engine/source/renderer/bs_ui.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/galaxy_map_render.cpp",
+      "to": "engine/source/renderer/bs_imgui.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/galaxy_map_render.cpp",
+      "to": "engine/source/renderer/bs_rml.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/galaxy_map_render.h",
+      "to": "engine/source/defines.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/gameplay_overlays.cpp",
+      "to": "engine/source/renderer/renderer.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/gameplay_overlays.cpp",
+      "to": "engine/source/renderer/camera2d.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/global_background.cpp",
+      "to": "engine/source/renderer/renderer.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/global_background.cpp",
+      "to": "engine/source/renderer/camera2d.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/global_background.cpp",
+      "to": "engine/source/core/logger.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/global_background.h",
+      "to": "engine/source/defines.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/global_background.h",
+      "to": "engine/source/math/math_utils.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/global_background.h",
+      "to": "engine/source/renderer/renderer_types.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/mapped_system_layer.cpp",
+      "to": "engine/source/math/bs_hierpos.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/mapped_system_layer.cpp",
+      "to": "engine/source/renderer/camera2d.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/mapped_system_layer.cpp",
+      "to": "engine/source/renderer/renderer.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/mapped_system_layer.h",
+      "to": "engine/source/defines.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/mapped_system_layer.h",
+      "to": "engine/source/math/math_utils.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/nebula_layer.cpp",
+      "to": "engine/source/renderer/renderer.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/nebula_layer.cpp",
+      "to": "engine/source/renderer/camera2d.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/nebula_layer.h",
+      "to": "engine/source/defines.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/nebula_layer.h",
+      "to": "engine/source/math/math_utils.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/out_sensor_detection_fx.cpp",
+      "to": "engine/source/renderer/renderer.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/out_sensor_detection_fx.h",
+      "to": "engine/source/defines.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/out_sensor_detection_fx.h",
+      "to": "engine/source/math/math_utils.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/out_sensor_detection_fx.h",
+      "to": "engine/source/renderer/renderer_types.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/parallax_background.cpp",
+      "to": "engine/source/renderer/renderer.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/parallax_background.cpp",
+      "to": "engine/source/renderer/camera2d.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/parallax_background.h",
+      "to": "engine/source/defines.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/projectile_marker.cpp",
+      "to": "engine/source/renderer/renderer.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/scene_renderer.cpp",
+      "to": "engine/source/renderer/renderer.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/scene_renderer.h",
+      "to": "engine/source/defines.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/sensor_overlay.cpp",
+      "to": "engine/source/renderer/renderer.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/sensor_overlay.cpp",
+      "to": "engine/source/renderer/camera2d.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/sensor_overlay.h",
+      "to": "engine/source/defines.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/ship_render.cpp",
+      "to": "engine/source/renderer/renderer.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/ship_render.cpp",
+      "to": "engine/source/renderer/camera2d.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/ship_render.h",
+      "to": "engine/source/defines.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/ship_scene.cpp",
+      "to": "engine/source/renderer/renderer.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/ship_scene.cpp",
+      "to": "engine/source/renderer/camera2d.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/ship_visual.cpp",
+      "to": "engine/source/core/logger.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/ship_visual.cpp",
+      "to": "engine/source/renderer/renderer.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/ship_visual.h",
+      "to": "engine/source/defines.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/ship_visual.h",
+      "to": "engine/source/math/math_utils.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/ship_visual.h",
+      "to": "engine/source/renderer/renderer_types.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/star_fx.cpp",
+      "to": "engine/source/core/logger.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/star_fx.cpp",
+      "to": "engine/source/renderer/renderer.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/star_fx.cpp",
+      "to": "engine/source/renderer/bs_ui.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/star_fx.h",
+      "to": "engine/source/defines.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/star_fx.h",
+      "to": "engine/source/math/math_utils.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/star_fx.h",
+      "to": "engine/source/renderer/renderer_types.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/starfield_generator.h",
+      "to": "engine/source/defines.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/starfield_layer.cpp",
+      "to": "engine/source/renderer/renderer.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/starfield_layer.cpp",
+      "to": "engine/source/renderer/camera2d.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/starfield_layer.h",
+      "to": "engine/source/defines.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/starfield_layer.h",
+      "to": "engine/source/math/math_utils.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/system_content_render.cpp",
+      "to": "engine/source/math/bs_hierpos.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/system_content_render.cpp",
+      "to": "engine/source/renderer/renderer.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/system_content_render.cpp",
+      "to": "engine/source/renderer/camera2d.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/system_content_render.h",
+      "to": "engine/source/defines.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/text.cpp",
+      "to": "engine/source/core/logger.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/text.cpp",
+      "to": "engine/source/renderer/renderer.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/text.cpp",
+      "to": "engine/source/renderer/camera2d.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/text.cpp",
+      "to": "engine/source/math/math_utils.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/text.h",
+      "to": "engine/source/defines.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/text.h",
+      "to": "engine/source/renderer/renderer_types.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/voronoi_cell_hover_effect.cpp",
+      "to": "engine/source/math/bs_hierpos.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/voronoi_cell_hover_effect.cpp",
+      "to": "engine/source/math/math_utils.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/voronoi_cell_hover_effect.cpp",
+      "to": "engine/source/renderer/renderer.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/voronoi_cell_hover_effect.h",
+      "to": "engine/source/defines.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/voronoi_cell_hover_effect.h",
+      "to": "engine/source/renderer/renderer_types.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/weapon_hub.cpp",
+      "to": "engine/source/core/input.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/weapon_hub.cpp",
+      "to": "engine/source/renderer/renderer.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/weapon_hub.cpp",
+      "to": "engine/source/renderer/camera2d.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/weapon_hub.h",
+      "to": "engine/source/defines.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/action_log.h",
+      "to": "engine/source/defines.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/ai_ship.cpp",
+      "to": "engine/source/core/logger.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/ai_ship.h",
+      "to": "engine/source/defines.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/camera_controller.cpp",
+      "to": "engine/source/core/input.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/camera_controller.h",
+      "to": "engine/source/defines.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/celestial_parallax.h",
+      "to": "engine/source/defines.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/celestial_parallax.h",
+      "to": "engine/source/math/bs_hierpos.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/combat_arena.h",
+      "to": "engine/source/defines.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/discovery.cpp",
+      "to": "engine/source/math/bs_hierpos.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/discovery.h",
+      "to": "engine/source/defines.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/editor_tools.cpp",
+      "to": "engine/source/core/input.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/editor_tools.cpp",
+      "to": "engine/source/renderer/bs_imgui.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/editor_tools.cpp",
+      "to": "engine/source/renderer/bs_rml.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/editor_tools.h",
+      "to": "engine/source/defines.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/editor_tools.h",
+      "to": "engine/source/math/bs_hierpos.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/fleet.cpp",
+      "to": "engine/source/math/math_utils.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/fleet.h",
+      "to": "engine/source/defines.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/fleet.h",
+      "to": "engine/source/math/math_utils.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/galaxy_gen.cpp",
+      "to": "engine/source/core/memory/bs_memory.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/galaxy_gen.h",
+      "to": "engine/source/defines.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/galaxy_gen.h",
+      "to": "engine/source/math/bs_hierpos.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/galaxy_history.cpp",
+      "to": "engine/source/core/logger.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/galaxy_history.cpp",
+      "to": "engine/source/core/memory/bs_memory.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/galaxy_history.cpp",
+      "to": "engine/source/renderer/bs_ui.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/galaxy_history.h",
+      "to": "engine/source/defines.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/galaxy_map.cpp",
+      "to": "engine/source/core/logger.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/galaxy_map.cpp",
+      "to": "engine/source/core/memory/bs_memory.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/galaxy_map.h",
+      "to": "engine/source/defines.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/galaxy_map.h",
+      "to": "engine/source/math/bs_hierpos.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/galaxy_params.h",
+      "to": "engine/source/defines.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/galaxy_rng.h",
+      "to": "engine/source/defines.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/galaxy_spatial.cpp",
+      "to": "engine/source/core/memory/bs_memory.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/galaxy_spatial.h",
+      "to": "engine/source/defines.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/galaxy_spatial.h",
+      "to": "engine/source/math/bs_hierpos.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/heat_map.cpp",
+      "to": "engine/source/renderer/renderer.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/module.cpp",
+      "to": "engine/source/core/logger.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/module.h",
+      "to": "engine/source/defines.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/point_defense.cpp",
+      "to": "engine/source/math/math_utils.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/point_defense.h",
+      "to": "engine/source/defines.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/projectile.cpp",
+      "to": "engine/source/renderer/renderer.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/projectile.h",
+      "to": "engine/source/defines.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/projectile.h",
+      "to": "engine/source/math/math_utils.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/projectile.h",
+      "to": "engine/source/math/bs_hierpos.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/projectile.h",
+      "to": "engine/source/renderer/renderer_types.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/rts_controls.cpp",
+      "to": "engine/source/core/input.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/rts_controls.cpp",
+      "to": "engine/source/math/math_utils.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/rts_controls.cpp",
+      "to": "engine/source/renderer/renderer.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/rts_controls.cpp",
+      "to": "engine/source/renderer/bs_imgui.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/rts_controls.cpp",
+      "to": "engine/source/renderer/bs_rml.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/rts_controls.cpp",
+      "to": "engine/source/renderer/camera2d.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/rts_controls.h",
+      "to": "engine/source/defines.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/rts_controls.h",
+      "to": "engine/source/math/math_utils.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/rts_controls.h",
+      "to": "engine/source/renderer/renderer_types.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/sensor_system.h",
+      "to": "engine/source/defines.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/sensor_system.h",
+      "to": "engine/source/math/math_utils.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/sensor_system.h",
+      "to": "engine/source/math/bs_hierpos.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/ship.cpp",
+      "to": "engine/source/core/logger.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/ship.cpp",
+      "to": "engine/source/renderer/renderer.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/ship.h",
+      "to": "engine/source/defines.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/ship.h",
+      "to": "engine/source/math/math_utils.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/ship.h",
+      "to": "engine/source/math/bs_hierpos.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/ship.h",
+      "to": "engine/source/renderer/renderer_types.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/ship_control.cpp",
+      "to": "engine/source/core/input.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/ship_control.h",
+      "to": "engine/source/defines.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/ship_control.h",
+      "to": "engine/source/math/bs_hierpos.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/ship_mission.cpp",
+      "to": "engine/source/core/logger.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/ship_mission.h",
+      "to": "engine/source/defines.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/ship_mission.h",
+      "to": "engine/source/math/bs_hierpos.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/ss_generation.h",
+      "to": "engine/source/defines.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/station_market.h",
+      "to": "engine/source/defines.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/steering.cpp",
+      "to": "engine/source/math/bs_hierpos.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/steering.h",
+      "to": "engine/source/defines.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/steering.h",
+      "to": "engine/source/math/math_utils.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/system_evolution.cpp",
+      "to": "engine/source/core/logger.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/system_evolution.h",
+      "to": "engine/source/defines.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/travel.h",
+      "to": "engine/source/defines.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/travel.h",
+      "to": "engine/source/math/bs_hierpos.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/voronoi_galaxy.cpp",
+      "to": "engine/source/math/math_utils.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/voronoi_galaxy.cpp",
+      "to": "engine/source/math/bs_hierpos.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/voronoi_galaxy.cpp",
+      "to": "engine/source/renderer/renderer.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/voronoi_galaxy.h",
+      "to": "engine/source/defines.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/voronoi_galaxy.h",
+      "to": "engine/source/math/bs_hierpos.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/voronoi_galaxy.h",
+      "to": "engine/source/renderer/renderer_types.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/weapon.cpp",
+      "to": "engine/source/math/math_utils.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/weapon.h",
+      "to": "engine/source/defines.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/weapon.h",
+      "to": "engine/source/math/math_utils.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/weapon_def.cpp",
+      "to": "engine/source/core/logger.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/weapon_def.h",
+      "to": "engine/source/defines.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/state/game_state.h",
+      "to": "engine/source/defines.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/state/game_state.h",
+      "to": "engine/source/game_types.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/state/game_state.h",
+      "to": "engine/source/renderer/renderer_types.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/state/game_state.h",
+      "to": "engine/source/containers/vector.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/ui/editor_ui.cpp",
+      "to": "engine/source/renderer/bs_ui.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/ui/editor_ui.cpp",
+      "to": "engine/source/renderer/bs_rml.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/ui/editor_ui.cpp",
+      "to": "engine/source/core/logger.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/ui/new_game_setup.cpp",
+      "to": "engine/source/renderer/bs_ui.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/ui/system_inspector.cpp",
+      "to": "engine/source/renderer/bs_ui.h",
+      "direction": "sandbox->engine"
+    }
+  ]
+}
