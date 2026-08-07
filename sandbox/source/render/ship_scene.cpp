@@ -51,14 +51,16 @@ static b8 arsenal_drag_fits(const Ship& fs, i32 kind, i32 src, i32 dst) {
 }
 
 // Weapon-group digits: under each mounted weapon's hardpoint box, print the group numbers
-// the weapon belongs to. Members of the ACTIVE fire group render bright (they fire on
-// click), the rest dim. Screen-anchored bitmap text so the labels stay readable at any zoom.
+// the weapon belongs to. Digits render bright on the weapons that ACTUALLY FIRE on click (the
+// active group, or the single overridden mount when the micro-selection hub has picked one),
+// dim elsewhere. Screen-anchored bitmap text so the labels stay readable at any zoom.
 static void draw_weapon_group_digits(game_state* s, const Ship* ship) {
     const Camera2D* cam = &s->camera_state.camera;
     f32 zoom = cam->zoom > 1.0e-6f ? cam->zoom : 1.0e-6f;
     const f32 scale = 1.5f;                          // 12 px glyphs
     for (i32 h = 0; h < ship->hardpoint_count; ++h) {
         if (!ship->mounts[h]) continue;
+        b8 live = ship_hardpoint_in_selection(ship, h);
         Vec2 center = vec2_add(ship->render_pos,
                                ship_local_dir(ship, ship->hardpoints[h].pos_local));
         Vec2 sc = camera2d_world_to_screen(cam, s->fb_width, s->fb_height, center);
@@ -69,9 +71,9 @@ static void draw_weapon_group_digits(game_state* s, const Ship* ship) {
         for (i32 g = 0; g < SHIP_WEAPON_GROUPS; ++g, x += step) {
             if (!((ship->mount_groups[h] >> g) & 1)) continue;
             char d[2] = { (char)('1' + g), '\0' };
-            bs_color col = (g == ship->active_group)
-                               ? bs_color{ 0.35f, 1.00f, 0.55f, 0.95f }    // active group: green
-                               : bs_color{ 0.75f, 0.85f, 1.00f, 0.55f };   // other groups: dim
+            bs_color col = (live && (ship->weapon_override >= 0 || g == ship->active_group))
+                               ? bs_color{ 0.35f, 1.00f, 0.55f, 0.95f }    // fires on click: green
+                               : bs_color{ 0.75f, 0.85f, 1.00f, 0.55f };   // not in the selection: dim
             text_draw(d, x, y, scale, col, cam, s->fb_width, s->fb_height, LAYER_GIZMO);
         }
     }

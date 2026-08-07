@@ -350,6 +350,17 @@ struct Ship {
 
     u8             active_group;      // selected fire group, 0..SHIP_WEAPON_GROUPS-1
 
+    // ---- Weapon micro-selection override (middle-mouse hub) -----------------------------
+    // -1 = "All": the fire selection is the active group's members (the default behaviour).
+    // >= 0 = a single hardpoint index that overrides the group — only that weapon fires, and
+    // it fires whether or not it belongs to the active group. Cleared by picking "All" in the
+    // hub and by any loadout mutation that empties the slot (ship_groups_sanitize).
+    // Honoured by BOTH the manual fire path and the autopilot attack order.
+
+    // Defaulted here as well as in ship_load: a zero-initialised Ship would otherwise read as
+    // "override hardpoint 0" and silently fire one gun, which is the worst possible default.
+    i8             weapon_override = -1;
+
     // ---- Mounted ship modules (Phase 4; one per hardpoint slot) -------------------------
     // module_mounts[i] is the registry ModuleDef installed in hardpoints[i] (nullptr =
     // empty). A hardpoint holds at most ONE occupant across mounts[]/point_defense_mount/
@@ -509,7 +520,47 @@ i32 ship_group_size(const Ship* ship, i32 g);
 
 // Enforce the mask invariant after any loadout mutation: empty slots carry no mask, and a
 // mounted weapon with no assignment defaults to group 1. Cheap; safe to call every frame.
+// Also drops a weapon_override pointing at a slot that no longer holds a weapon.
 void ship_groups_sanitize(Ship* ship);
+
+// ---- Weapon micro-selection (middle-mouse hub) -----------------------------------------
+
+// Override the group and fire hardpoint `hp_index` alone. Out-of-range indices and empty
+// slots are rejected (the override is left untouched). Also re-homes active_weapon_idx.
+void ship_select_weapon_override(Ship* ship, i32 hp_index);
+
+// Restore "All": the fire selection reverts to the active group's members.
+void ship_clear_weapon_override(Ship* ship);
+
+// TRUE when hardpoint `hp_index` holds a weapon that the CURRENT selection fires:
+// under an override, only the overridden slot; otherwise every active-group member.
+// SINGLE SOURCE OF TRUTH for "does this weapon fire on the trigger" -- the manual fire loop,
+// the autopilot, the reach ring, the hull digits and the hub all ask this one function.
+b8 ship_hardpoint_in_selection(const Ship* ship, i32 hp_index);
+
+// Hardpoint index of the `n`-th mounted weapon in hardpoint order (n = 0,1,2,...), or -1 when
+// the ship carries fewer than n+1 weapons. The hub maps its N/E/W slots through this.
+i32 ship_nth_mounted_weapon(const Ship* ship, i32 n);
+
+// ---- Per-weapon fire validation --------------------------------------------------------
+// The five states a weapon can be in for a given shot, in the order the hub renders them.
+// WEAPON_FIRE_READY is the only value that permits a shot.
+enum WeaponFireState : u8 {
+    WEAPON_FIRE_READY = 0,      // in arc, off cooldown, in reach, powered, operational
+    WEAPON_FIRE_RELOADING,      // cooling down
+    WEAPON_FIRE_OUT_OF_RANGE,   // target beyond weapon_effective_reach (armed, holds fire)
+    WEAPON_FIRE_NO_BEARING,     // target outside this mount's traverse arc
+    WEAPON_FIRE_STARVED,        // capacitor cannot afford the shot
+    WEAPON_FIRE_DISABLED,       // empty slot, or the mount is knocked out
+};
+
+// Validate hardpoint `hp_index` against a target: `world_dir` is the fire-origin-to-target
+// vector and `dist` its length. Checks operational status, traverse arc, cooldown, reach
+// (via weapon_effective_reach -- the single source of truth) and capacitor affordability,
+// WITHOUT spending anything. Pass dist < 0 to skip the range test (aim-only queries).
+// Both the fire sites and the hub read this, so what the player sees is what the ship does.
+WeaponFireState ship_weapon_fire_state(const Ship* ship, i32 hp_index,
+                                       bs_math::Vec2 world_dir, f32 dist);
 
 // ---- Rigid-body transforms -----------------------------------------------------------
 

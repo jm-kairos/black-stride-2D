@@ -39,6 +39,7 @@
 #include <renderer/bs_imgui.h> // bs_imgui_wants_mouse: gate world input while ImGui owns the cursor
 #include <renderer/bs_rml.h>   // bs_rml_*: in-game UI (RmlUi) documents + input gating
 #include "render/galaxy_map_render.h" // galaxy_pick_planet: hit-test a planet under the cursor
+#include "render/weapon_hub.h"      // weapon_hub_update/_close: middle-mouse micro-selection hub
 #include "sim/celestial_parallax.h" // celestial_parallax_fade: keep a followed planet screen-centered
 
 #include <renderer/bs_ui.h>
@@ -337,6 +338,11 @@ b8 game_init(Game* game_inst) {
     s->pending_weapon_drag = -1;    // Arsenal drag-drop: no source armed
     s->pending_weapon_drag_kind = 0;
     s->world_module_drag = FALSE;   // no ship-side loadout drag in flight
+    s->weapon_hub_open = FALSE;     // weapon micro-selection hub closed
+    s->weapon_hub_hover = -1;
+    s->weapon_hub_open_time = 0.0f;
+    s->weapon_hub_press_px = bs_math::Vec2{ 0.0f, 0.0f };
+    s->weapon_hub_target = bs_math::HierPos2{};
     s->ui_font_kit = 3;             // default to the "Frontier" kit (Barlow Condensed / Barlow / B612 Mono)
     s->ui_sharpen  = 0.5f;          // UI atlas unsharp-mask amount (editor-tunable)
 
@@ -2522,6 +2528,27 @@ b8 game_update(Game* game_inst, f32 dt) {
 
     if (piloted_idx < 0 || piloted_idx >= s->fleet_state.fleet.count()) piloted_idx = 0;
 
+    // ---- Weapon micro-selection hub (hold MIDDLE MOUSE) -------------------------------------
+    // Deliberately OUTSIDE the piloting branch below, and NOT gated on view.mode or the free
+    // camera. Fire control is continuous across the arena <-> galaxy-map blend: the mode flip is
+    // a label over one shared coordinate space (sim/camera_controller.cpp), and zooming out past
+    // ZOOM_MIN force-detaches the camera, so gating on either would kill the hub exactly when
+    // the player zooms out to engage something far away. That is also when it matters most --
+    // the override drives the AUTOPILOT attack order, which is how long-range engagement is
+    // actually fought. Only the editor (which owns middle-mouse for camera pan), the management
+    // inspector, and a UI layer holding the cursor suppress it.
+    if (!s->editor.edit_mode_active && !s->show_flagship_inspector &&
+        !bs_imgui_wants_mouse() && !bs_rml_wants_mouse() &&
+        s->fleet_state.fleet.count() > 0) {
+
+        weapon_hub_update(s, &s->fleet_state.fleet.at(piloted_idx).ship);
+
+    } else if (s->weapon_hub_open) {
+
+        weapon_hub_close(s);   // a gate closed mid-hold: dismiss without committing
+
+    }
+
     if (s->editor.edit_mode_active) {
 
         // Editing: freeze ALL fleet flight so dragged poses stay put. Kill residual velocity so
@@ -2608,9 +2635,23 @@ b8 game_update(Game* game_inst, f32 dt) {
 
         s->player_flight().velocity = Vec2{ 0.0f, 0.0f };
 
-    } else if (s->view.mode == MODE_GLOBAL) {
+    } else {
 
         // Pilot the manually-controlled fleet member directly.
+        //
+        // NOT gated on view.mode: the arena <-> galaxy-map flip is a label over one shared
+        // coordinate space (sim/camera_controller.cpp), so flying and shooting must not stop
+        // at the boundary -- zoom is a camera choice, not a control mode. What actually
+        // separates the two control schemes is whether the camera is DETACHED, and every
+        // block below already gates on that:
+        //   * control_ship_global returns FALSE immediately when free_camera_active
+        //     (sim/ship_control.cpp:21), so WASDQE never fights the free camera's pan;
+        //   * the fire-group number row is suppressed while detached, because there the row
+        //     belongs to RTS unit selection (sim/rts_controls.cpp);
+        //   * turret traverse and left-click firing are suppressed while detached, because
+        //     there left-click belongs to RTS box/click selection (sim/rts_controls.cpp:246).
+        // So: piloting at ANY zoom in EITHER look flies and fires; detached at any zoom is
+        // RTS, where engagement runs through attack orders (which honour weapon_override).
 
         FleetShip* pf = &s->fleet_state.fleet.at(piloted_idx);
 
@@ -2722,7 +2763,9 @@ b8 game_update(Game* game_inst, f32 dt) {
         // left-click anywhere (inside or outside its bounds) must never fire the weapons.
         if (!s->editor.edit_mode_active && !s->camera_state.free_camera_active && !s->show_flagship_inspector && !bs_imgui_wants_mouse() && !bs_rml_wants_mouse()) {
 
-            // Turret traverse: every mounted weapon in the active group tracks the cursor.
+            // Turret traverse: every weapon in the CURRENT SELECTION tracks the cursor. Under a
+            // micro-selection override that is the one chosen weapon, so the hull art shows at a
+            // glance which mount is live; the rest slew back to their rest facing.
 
             {
 
@@ -2730,7 +2773,7 @@ b8 game_update(Game* game_inst, f32 dt) {
 
                 for (i32 i = 0; i < psh->hardpoint_count; ++i) {
 
-                    if (!psh->mounts[i] || !((psh->mount_groups[i] >> psh->active_group) & 1)) continue;
+                    if (!ship_hardpoint_in_selection(psh, i)) continue;
 
                     bs_math::HierPos2 fo = ship_hardpoint_fire_origin(psh, i);
 
@@ -2742,64 +2785,92 @@ b8 game_update(Game* game_inst, f32 dt) {
 
             }
 
-            // left click -> fire every ready group member that can bear on the cursor
+            // left click -> fire every member of the current selection that passes validation
 
             if (input_is_button_down(BUTTON_LEFT) && !input_was_button_down(BUTTON_LEFT)) {
 
                 bs_math::HierPos2 mw_hp = mouse_true_hierpos(s);
 
-                i32 members = 0, blocked = 0, starved = 0;
+                i32 members = 0, blocked = 0, starved = 0, ranged = 0, dead = 0, fired = 0;
 
                 for (i32 i = 0; i < psh->hardpoint_count; ++i) {
 
-                    Weapon* w = psh->mounts[i];
+                    if (!ship_hardpoint_in_selection(psh, i)) continue;
 
-                    if (!w || !((psh->mount_groups[i] >> psh->active_group) & 1)) continue;
+                    Weapon* w = psh->mounts[i];
 
                     ++members;
 
-                    // Shots leave from each weapon's own hardpoint; aim from there too.
+                    // Shots leave from each weapon's own hardpoint; aim and measure from there.
                     bs_math::HierPos2 fire_origin = ship_hardpoint_fire_origin(psh, i);
 
-                    Vec2 dir = hierpos_diff(&mw_hp, &fire_origin, BS_HIERPOS_CELL_SIZE);
+                    Vec2 dir  = hierpos_diff(&mw_hp, &fire_origin, BS_HIERPOS_CELL_SIZE);
 
-                    if (!ship_hardpoint_can_aim(psh, i, dir)) {
+                    f32  dist = vec2_length(dir);
 
-                        // Target outside this mount's traverse arc: it holds fire.
-                        ++blocked;
+                    // One validator, shared with the hub: arc, cooldown, reach, power, status.
+                    // Whatever the hub showed for this weapon is exactly what happens here.
+                    switch (ship_weapon_fire_state(psh, i, dir, dist)) {
 
-                        continue;
+                        case WEAPON_FIRE_NO_BEARING:   ++blocked; continue;   // outside its arc
+
+                        case WEAPON_FIRE_RELOADING:              continue;   // cooling down: silent
+
+                        case WEAPON_FIRE_OUT_OF_RANGE: ++ranged;  continue;   // armed, holds fire
+
+                        case WEAPON_FIRE_STARVED:      ++starved; continue;   // cannot afford the shot
+
+                        case WEAPON_FIRE_DISABLED:     ++dead;    continue;   // knocked out
+
+                        default: break;                                       // WEAPON_FIRE_READY
 
                     }
 
-                    if (!w->ready()) continue;   // still cooling down: silent
-
-                    // Capacitor gate: a ready weapon that cannot afford its shot holds fire.
-                    if (!ship_try_spend_cap(psh, w->cap_cost())) {
-
-                        ++starved;
-
-                        continue;
-
-                    }
+                    // Validated: commit the capacitor spend, then fire.
+                    if (!ship_try_spend_cap(psh, w->cap_cost())) { ++starved; continue; }
 
                     w->owner_faction_id = psh->faction_id;   // stamp attacker faction for hit attribution
 
                     w->fire(fire_origin, dir, pf->flight.velocity, &s->projectiles);
 
+                    ++fired;
+
                 }
 
+                // Feedback. Only ever reported when the trigger produced NOTHING, and only when
+                // one cause accounts for the whole selection - a partial volley stays quiet.
                 if (members == 0) {
 
-                    action_log_push(s, "Weapon group %d is empty.", psh->active_group + 1);
+                    if (psh->weapon_override >= 0)
+                        action_log_push(s, "Selected weapon is no longer mounted.");
+                    else
+                        action_log_push(s, "Weapon group %d is empty.", psh->active_group + 1);
 
-                } else if (blocked == members) {
+                } else if (fired == 0) {
 
-                    action_log_push(s, "No weapon in group %d can bear on target.", psh->active_group + 1);
+                    const Weapon* sel = (psh->weapon_override >= 0) ? psh->mounts[psh->weapon_override] : nullptr;
 
-                } else if (starved > 0 && starved == members - blocked) {
+                    const char* sel_name = (sel && sel->name) ? sel->name : "Selected weapon";
 
-                    action_log_push(s, "Capacitor dry.");
+                    if (dead == members) {
+
+                        if (sel) action_log_push(s, "%s is disabled.", sel_name);
+                        else     action_log_push(s, "Every weapon in group %d is disabled.", psh->active_group + 1);
+
+                    } else if (blocked == members) {
+
+                        if (sel) action_log_push(s, "%s cannot bear on target.", sel_name);
+                        else     action_log_push(s, "No weapon in group %d can bear on target.", psh->active_group + 1);
+
+                    } else if (ranged > 0 && ranged + blocked == members) {
+
+                        action_log_push(s, "Target out of range - holding fire.");
+
+                    } else if (starved > 0 && starved + blocked + ranged == members) {
+
+                        action_log_push(s, "Capacitor dry.");
+
+                    }
 
                 }
 

@@ -130,8 +130,11 @@ void RtsControls::update(f32 dt) {
         CombatEntity* ce = &m_state->combat_entities[i];
         if (!ce->active || !ce->ship) continue;
         if (ce->faction == m_state->player_ship().faction) continue; // only hostile targets
-        // Discovery: ignore undiscovered NPC agents (they render as generic markers).
-        if (ce->is_npc && ce->npc_index >= 0 && !m_state->npc_ships[ce->npc_index].discovered) continue;
+        // Undiscovered contacts ARE targetable: long-range engagement means committing to a
+        // return the sensors have not identified yet. They render as generic "unidentified"
+        // markers, and the marker is what the player clicks -- an attack order on a contact
+        // beyond Layer 1 is a deliberate gamble, not something to block. (Was previously
+        // skipped here, which made anything outside identification range unclickable.)
         if (is_point_over_ship(mouse_hp, ce->ship)) {
             m_hovered_enemy_idx = i;
             break;

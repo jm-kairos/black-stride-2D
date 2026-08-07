@@ -111,6 +111,9 @@ void ship_capacitor_update(Ship* ship, f32 dt) {
 void ship_select_weapon_group(Ship* ship, i32 g) {
     if (!ship || g < 0 || g >= SHIP_WEAPON_GROUPS) return;
     ship->active_group = (u8)g;
+    // Choosing a group is an explicit return to group fire control: any single-weapon
+    // micro-selection override is dropped.
+    ship->weapon_override = -1;
     // Re-home the legacy active index onto the group's first member (kept for the HUD
     // weapon bar and other single-weapon consumers); left untouched when the group is empty.
     for (i32 i = 0; i < ship->hardpoint_count; ++i) {
@@ -133,6 +136,58 @@ void ship_groups_sanitize(Ship* ship) {
         if (!ship->mounts[i])              ship->mount_groups[i] = 0;
         else if (!ship->mount_groups[i])   ship->mount_groups[i] = 1;   // default: group 1
     }
+    // A micro-selection override pointing at a slot the loadout editor just emptied would
+    // silently fire nothing; fall back to "All" instead.
+    if (ship->weapon_override >= 0 &&
+        (ship->weapon_override >= ship->hardpoint_count || !ship->mounts[ship->weapon_override]))
+        ship->weapon_override = -1;
+}
+// ---- Weapon micro-selection (middle-mouse hub) -----------------------------------------
+void ship_select_weapon_override(Ship* ship, i32 hp_index) {
+    if (!ship || hp_index < 0 || hp_index >= ship->hardpoint_count) return;
+    if (!ship->mounts[hp_index]) return;
+    ship->weapon_override  = (i8)hp_index;
+    // Keep the legacy single-weapon consumers (HUD weapon bar, gizmos) pointing at what fires.
+    ship->active_weapon_idx = hp_index;
+}
+void ship_clear_weapon_override(Ship* ship) {
+    if (!ship) return;
+    // Reselecting the active group both drops the override and re-homes active_weapon_idx.
+    ship_select_weapon_group(ship, ship->active_group);
+}
+b8 ship_hardpoint_in_selection(const Ship* ship, i32 hp_index) {
+    if (!ship || hp_index < 0 || hp_index >= ship->hardpoint_count) return FALSE;
+    if (!ship->mounts[hp_index]) return FALSE;
+    if (ship->weapon_override >= 0) return (hp_index == ship->weapon_override) ? TRUE : FALSE;
+    return ((ship->mount_groups[hp_index] >> ship->active_group) & 1) ? TRUE : FALSE;
+}
+i32 ship_nth_mounted_weapon(const Ship* ship, i32 n) {
+    if (!ship || n < 0) return -1;
+    for (i32 i = 0; i < ship->hardpoint_count; ++i) {
+        if (!ship->mounts[i]) continue;
+        if (n-- == 0) return i;
+    }
+    return -1;
+}
+// ---- Per-weapon fire validation --------------------------------------------------------
+WeaponFireState ship_weapon_fire_state(const Ship* ship, i32 hp_index, Vec2 world_dir, f32 dist) {
+    if (!ship || hp_index < 0 || hp_index >= ship->hardpoint_count) return WEAPON_FIRE_DISABLED;
+    const Weapon* w = ship->mounts[hp_index];
+    if (!w || w->disabled) return WEAPON_FIRE_DISABLED;
+    // Traverse arc first: a mount that cannot bear will never fire whatever else is true.
+    if (!ship_hardpoint_can_aim(ship, hp_index, world_dir)) return WEAPON_FIRE_NO_BEARING;
+    if (!w->ready()) return WEAPON_FIRE_RELOADING;
+    // Range: weapon_effective_reach is the single source of truth the HUD ring also draws, so
+    // the ship never opens fire at a distance the ring says it cannot cover. A weapon with no
+    // usable stats (reach 0) is treated as unbounded rather than permanently out of range.
+    if (dist >= 0.0f) {
+        f32 reach = weapon_effective_reach(w);
+        if (reach > 0.0f && dist > reach) return WEAPON_FIRE_OUT_OF_RANGE;
+    }
+    // Affordability WITHOUT spending: the caller commits via ship_try_spend_cap.
+    f32 cost = w->cap_cost();
+    if (cost > 0.0f && ship->cap_current < cost) return WEAPON_FIRE_STARVED;
+    return WEAPON_FIRE_READY;
 }
 HierPos2 ship_hardpoint_fire_origin(const Ship* ship, i32 hp_index) {
     if (!ship) return HierPos2{};
@@ -274,6 +329,7 @@ b8 ship_load(Ship* out_ship, const char* path) {
     for (i32 i = 0; i < SHIP_MAX_HARDPOINTS; ++i) out_ship->module_mounts[i] = nullptr;
     for (i32 i = 0; i < SHIP_MAX_HARDPOINTS; ++i) out_ship->mount_groups[i] = 0;
     out_ship->active_group         = 0;
+    out_ship->weapon_override      = -1;   // "All": fire the active group (default behaviour)
     out_ship->active_weapon_idx    = -1;
     out_ship->weapon_stash_count   = 0;
     out_ship->module_stash_count   = 0;

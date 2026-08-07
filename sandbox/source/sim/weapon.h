@@ -21,7 +21,11 @@ struct Weapon {
     f32           damage;         // hull damage per hit (stamped into spawned projectiles)
     VesselFaction owner_faction;  // set at equip time (legacy binary faction; projectile visuals)
     i16           owner_faction_id; // unified faction stamped from the firing ship at each fire site
-    Weapon(const char* n) : name(n), icon("ic-cannon"), def(nullptr), wkind(WEAPON_KIND_BALLISTIC), size(HARDPOINT_MEDIUM), damage(15.0f), owner_faction((VesselFaction)0), owner_faction_id(FACTION_PIRATE) {}
+    // Operational status: TRUE = the mount is knocked out and holds fire regardless of cooldown,
+    // capacitor or arc. Nothing sets it yet (there is no subsystem-damage model); it exists so
+    // the fire path and the micro-selection hub agree the moment a producer lands.
+    b8            disabled;
+    Weapon(const char* n) : name(n), icon("ic-cannon"), def(nullptr), wkind(WEAPON_KIND_BALLISTIC), size(HARDPOINT_MEDIUM), damage(15.0f), owner_faction((VesselFaction)0), owner_faction_id(FACTION_PIRATE), disabled(FALSE) {}
     virtual ~Weapon() {}
     // fire at the given origin in the given direction (unit or non-unit).
     // `ship_velocity` is the owning ship's current world velocity (added to projectile).

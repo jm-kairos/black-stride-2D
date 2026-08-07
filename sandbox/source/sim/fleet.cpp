@@ -120,13 +120,28 @@ void FleetShip::update_attack(game_state* s, f32 dt) {
     // whether a shot can arrive at all); `approach_reach` is the longest reach aboard (it decides
     // how close the ship needs to fly). Both come from weapon_effective_reach, the same function
     // the HUD range ring uses, so the ring and the ship's behaviour cannot disagree.
-    i32 whp = ship_select_bearing_weapon(sh, to_target);
+    // Weapon choice honours the player's micro-selection override: when one is set, ONLY that
+    // mount engages, and the approach distance follows ITS reach rather than the longest reach
+    // aboard -- so picking a short cannon makes the ship close in instead of loitering at the
+    // missile standoff, firing nothing. Unset (-1: every AI hull and every escort) keeps the
+    // legacy "best weapon that bears" behaviour untouched.
+    i32 whp;
+    if (sh->weapon_override >= 0) {
+        whp = sh->weapon_override;
+        if (!sh->mounts[whp] || !ship_hardpoint_can_aim(sh, whp, to_target)) whp = -1;
+    } else {
+        whp = ship_select_bearing_weapon(sh, to_target);
+    }
     Weapon* w = (whp >= 0) ? sh->mounts[whp] : nullptr;
     f32 fire_reach = weapon_effective_reach(w);
     f32 approach_reach = 0.0f;
-    for (i32 hpi = 0; hpi < sh->hardpoint_count; ++hpi) {
-        f32 r = weapon_effective_reach(sh->mounts[hpi]);
-        if (r > approach_reach) approach_reach = r;
+    if (sh->weapon_override >= 0) {
+        approach_reach = weapon_effective_reach(sh->mounts[sh->weapon_override]);
+    } else {
+        for (i32 hpi = 0; hpi < sh->hardpoint_count; ++hpi) {
+            f32 r = weapon_effective_reach(sh->mounts[hpi]);
+            if (r > approach_reach) approach_reach = r;
+        }
     }
     if (approach_reach <= 0.0f) approach_reach = RTS_ATTACK_RANGE;   // unarmed: legacy standoff
     // Only approach the target if we have no separate move order. When both orders are set,
@@ -170,9 +185,11 @@ void FleetShip::update_attack(game_state* s, f32 dt) {
                     }
                 }
                 w->owner_faction_id = sh->faction_id;   // stamp attacker faction for hit attribution
-                // Capacitor gate: spend only when the weapon is actually ready to fire
-                // (fire() itself no-ops on cooldown, which must not drain the bank).
-                if (w->ready() && ship_try_spend_cap(sh, w->cap_cost()))
+                // One shared validator (arc / cooldown / reach / power / operational status),
+                // the same one the manual fire path and the selection hub use. The capacitor is
+                // spent only once it passes, so a weapon on cooldown never drains the bank.
+                if (ship_weapon_fire_state(sh, whp, to_target, dist) == WEAPON_FIRE_READY &&
+                    ship_try_spend_cap(sh, w->cap_cost()))
                     w->fire(fire_origin, aim_dir, fl->velocity, &s->projectiles);
             }
         }

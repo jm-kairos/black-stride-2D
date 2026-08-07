@@ -9,6 +9,8 @@
 #include "render/ship_render.h"  // draw_collider_outline
 #include "render/sensor_overlay.h" // sensor_overlay_draw
 #include "render/defense_laser_overlay.h" // defense_laser_overlay_draw
+#include "render/weapon_hub.h"    // weapon_hub_draw (middle-mouse weapon micro-selection)
+#include "render/projectile_marker.h" // projectile_markers_draw (screen-constant shot markers)
 #include "core/render_layers.h" // LAYER_UI / LAYER_GIZMO / LAYER_DEBUG
 #include "sim/galaxy_history.h"  // galaxy_history_faction_label / faction_is_hostile
 #include "sim/ai_ship.h"         // ShipArchetype (role marker shapes)
@@ -150,6 +152,9 @@ void draw_gameplay_overlays(game_state* s) {
     s->profiler.begin(PROF_PROJECTILES_DRAW);
     s->projectiles.glow_override = &s->render.bullet_glow;
     s->projectiles.render(LAYER_UI, &s->camera_state.camera_hierpos);
+    // Screen-constant visibility markers on top: the world-sized art above goes sub-pixel long
+    // before galaxy-map zoom. Cosmetic only, and self-gating to zero cost at arena zoom.
+    projectile_markers_draw(s);
     s->profiler.end(PROF_PROJECTILES_DRAW);
 
     // ---- RTS controls overlay (hover selection, etc.) ------------------------------------
@@ -286,7 +291,10 @@ void draw_gameplay_overlays(game_state* s) {
 
             if (!w) continue;
 
-            if (!((psh.mount_groups[h] >> psh.active_group) & 1)) continue;
+            // Follows the CURRENT SELECTION, not the group: under a micro-selection override
+            // the ring collapses to that one weapon's reach, so the circle always marks the
+            // distance inside which everything that fires on the trigger can land a shot.
+            if (!ship_hardpoint_in_selection(&psh, h)) continue;
 
             f32 reach = weapon_effective_reach(w);
 
@@ -298,7 +306,10 @@ void draw_gameplay_overlays(game_state* s) {
 
         if (any) {
 
-            bs_color grp_col = bs_color{ 1.00f, 0.55f, 0.30f, 0.35f };
+            // A single overridden weapon gets a brighter ring: it is now the only thing firing.
+            bs_color grp_col = (psh.weapon_override >= 0)
+                                   ? bs_color{ 0.35f, 1.00f, 0.55f, 0.45f }
+                                   : bs_color{ 1.00f, 0.55f, 0.30f, 0.35f };
 
             renderer_draw_circle(render_from_hierpos(s, &psh.origin), min_reach, 96, 1.5f,
 
@@ -306,6 +317,9 @@ void draw_gameplay_overlays(game_state* s) {
 
         }
     }
+
+    // ---- Weapon micro-selection hub (screen-space; no-op unless middle mouse holds it) ----
+    weapon_hub_draw(s);
 
     // ---- Metaball movement UI (global mode only) ------------------------------------------
     s->profiler.begin(PROF_HEAT_MAP);

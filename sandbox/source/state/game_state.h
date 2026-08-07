@@ -3550,6 +3550,27 @@ struct game_state {
 
 
 
+    // ---- Weapon micro-selection hub (hold middle mouse) ------------------------------------
+    // A radial selector at the bottom-center of the screen. North/East/West are the piloted
+    // ship's first three mounted weapons (hardpoint order); South is always "All", the default
+    // fire-the-active-group behaviour. Held open while BUTTON_MIDDLE is down; releasing commits
+    // whatever slot the cursor is over. Purely presentation + input state -- the committed
+    // result lives on the Ship as `weapon_override`.
+
+    b8               weapon_hub_open;          // TRUE while the middle mouse button holds the hub open
+    i32              weapon_hub_hover;         // highlighted slot: 0=N, 1=E, 2=W, 3=S("All"), -1 = none
+    f32              weapon_hub_open_time;     // elapsed_time at which the hub opened (reveal animation)
+    bs_math::Vec2    weapon_hub_press_px;      // cursor screen position at the opening press. Nothing is
+                                               // highlighted until the cursor has moved away from it, so a
+                                               // stray middle-click cannot commit whichever slot the cursor
+                                               // happened to already be pointing at.
+    bs_math::HierPos2 weapon_hub_target;       // what the per-weapon range/arc readout is judged against:
+                                               // the piloted ship's attack target if it has one, else the
+                                               // cursor world position frozen at the moment the hub opened
+                                               // (the cursor sits over the hub itself while it is held)
+
+
+
     // ---- Ship module registry (immutable defs loaded once from assets/modules) -------------------
 
     ModuleRegistry   module_registry;         // shared ModuleDef pool; ships mount entries by pointer
