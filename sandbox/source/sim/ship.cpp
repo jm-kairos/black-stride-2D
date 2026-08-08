@@ -301,9 +301,29 @@ void ship_update_turrets(Ship* ship, f32 dt) {
         const HardpointDef& hp = ship->hardpoints[i];
         // Idle turrets return to the hardpoint's rest facing.
         f32 target = ship->mount_aim_engaged[i] ? ship->mount_aim_goal[i] : hp.facing;
-        f32 diff   = wrap_pi(target - ship->mount_aim[i]);
         f32 step   = turret_slew_rate(hp.size) * dt;
-        ship->mount_aim[i]         = wrap_pi(ship->mount_aim[i] + clampf(diff, -step, step));
+        if (hp.arc >= 2.0f * BS_PI - 1.0e-3f) {
+            // Full-circle mount: no blocked wedge exists, so the shortest way round is both
+            // legal and what the player expects. This is the point-defense case.
+            f32 diff = wrap_pi(target - ship->mount_aim[i]);
+            ship->mount_aim[i] = wrap_pi(ship->mount_aim[i] + clampf(diff, -step, step));
+        } else {
+            // Limited traverse: slew in ARC-RELATIVE space, taking the DIRECT difference
+            // rather than the shortest way round. wrap_pi caps a turn at 180 degrees, so on
+            // an arc WIDER than 180 the two edges are further apart through the arc than
+            // around the back of it -- and the shortest route is then straight across the
+            // blocked wedge, which looked like the turret spinning the wrong way. (The 180
+            // degree bow mount never showed it: every legal pair is <= 180 apart, so the
+            // short way is always the in-arc way.) Interpolating between two clamped
+            // offsets can only pass through offsets between them, so the barrel is confined
+            // to the arc by construction. An out-of-arc current angle -- a stale save, or
+            // state left by the old path -- still walks back in rather than snapping.
+            f32 half     = hp.arc * 0.5f;
+            f32 cur_rel  = wrap_pi(ship->mount_aim[i] - hp.facing);
+            f32 goal_rel = clampf(wrap_pi(target - hp.facing), -half, half);
+            f32 new_rel  = cur_rel + clampf(goal_rel - cur_rel, -step, step);
+            ship->mount_aim[i] = wrap_pi(hp.facing + new_rel);
+        }
         ship->mount_aim_engaged[i] = FALSE; // consumed; gameplay re-asserts every frame
     }
 }

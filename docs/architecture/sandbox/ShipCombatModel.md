@@ -98,6 +98,16 @@ the subsystem while sitting outside `ship.h`'s seven.)*
   `ship_hardpoint_in_selection`'s no-override branch all route through it, so "what is in this
   group" has one answer. `ship_nth_group_weapon` is its enumerate form and is what makes the
   micro-selection hub offer the active group instead of the whole hull.
+- **A limited-traverse turret slews in ARC-RELATIVE space, never along the shortest angle.**
+  `ship_update_turrets` interpolates between two offsets already clamped to `[-arc/2, +arc/2]`,
+  which confines the barrel to the arc by construction. Using `wrap_pi` on the absolute angles
+  instead — the obvious formulation, and the one that shipped — caps a turn at 180 degrees, so
+  on an arc *wider* than 180 the two edges are further apart through the arc than around the
+  back of it and the turret cuts across its own blocked wedge. That is invisible on the 180
+  degree `bow_gun` (every legal pair is <= 180 apart) and shows on the 210 degree `port_gun` /
+  `stbd_gun` as the barrel swinging the wrong way round. Full-circle mounts keep the
+  shortest-angle path: with no blocked wedge it is both legal and what a 360 degree mount
+  should do.
 - **`ship_hardpoint_fire` is the one per-shot SPAWNER, the twin of `ship_weapon_fire_state`
   being the one per-shot validator.** The manual trigger (`game.cpp`), the RTS attack order
   (`sim/fleet.cpp`) and both combat-arena gunners route through it, so where a weapon's shots
