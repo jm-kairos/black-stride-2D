@@ -52,7 +52,9 @@ InWorldOverlays, FrameOrchestrator, GameStateModel.
   distance — so choosing a short cannon makes the ship close in rather than loitering at the
   missile standoff firing nothing. The field is `-1` on every AI hull and every escort, so their
   "best weapon that bears" behaviour is untouched. Firing goes through
-  `ship_weapon_fire_state`, the same validator the manual path uses.
+  `ship_weapon_fire_state`, the same validator the manual path uses, and spawns through
+  `ship_hardpoint_fire`, the same spawner — so an autopilot-driven ship fires a multi-barrel
+  weapon from its barrels exactly as a manually flown one does.
 
 **Extension points:** A new order type means a flag and target field on `FleetShip`, an
 `order_*` method on `Fleet`, an autopilot `update_*` invoked from `update_autopilot`, and a
@@ -92,4 +94,4 @@ characteristics without touching this code.
 **Source paths:** `sandbox/source/sim/fleet.{cpp,h}`, `sandbox/source/sim/ship_control.{cpp,h}`,
 `sandbox/source/sim/steering.{cpp,h}`
 
-**Last verified:** 2026-08-07, commit `e4d88d1`
+**Last verified:** 2026-08-08, commit `65f1ccb`

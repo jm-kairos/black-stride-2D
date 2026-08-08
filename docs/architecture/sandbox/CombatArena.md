@@ -35,6 +35,11 @@ GameStateModel; engine `math/math_utils.h`, `math/bs_hierpos.h`, `defines.h`.
   checkbox is the caller that must remember.
 - **Entities hold raw `Ship*` back-pointers**, which is why FleetControl's fixed array is
   documented as a stability guarantee.
+- **Both enemy-AI fire sites spawn through `ship_hardpoint_fire`, not `Weapon::fire`.** The
+  bearing-weapon shot and the missile loop each pass their hardpoint index, which is what lets a
+  multi-barrel weapon fire from its barrels for an NPC exactly as it does for the player.
+  Calling `Weapon::fire` directly here would still shoot, and would silently collapse every
+  barrel back onto the mount centre — see ShipCombatModel's spawner invariant.
 - **Detection is a fleet-wide union computed by max** — a contact's confidence is the strongest
   single reading over all friendly ships, so overlapping coverage widens the picture without
   double-counting (`sensor_system.h`).
@@ -92,4 +97,4 @@ configurations from one code path. A new detection rule belongs in `sensor_readi
 **Source paths:** `sandbox/source/sim/combat_arena.{cpp,h}`,
 `sandbox/source/sim/point_defense.{cpp,h}`, `sandbox/source/sim/sensor_system.{cpp,h}`
 
-**Last verified:** 2026-08-07, commit `812680c`
+**Last verified:** 2026-08-08, commit `65f1ccb`

@@ -18,15 +18,15 @@ damage (CombatArena), and does not own drawing — `render/ship_visual` here is 
 `ship_try_spend_cap`, `ship_capacitor_update`, `ship_collider_corners`, `ship_bounding_radius`,
 `ship_local_dir`, `ships_collide`, `hardpoint_accepts`, `hardpoint_fits_module`,
 `ship_first_free_hardpoint`, `ship_hardpoint_fire_origin`, `ship_hardpoint_fire`,
-`ship_hardpoint_can_aim`,
-`ship_select_bearing_weapon`, `ship_turret_aim_at`, `ship_update_turrets`;
+`ship_hardpoint_can_aim`, `ship_select_bearing_weapon`, `ship_turret_aim_at`,
+`ship_update_turrets`;
 `WeaponFireState`, `ship_weapon_fire_state`, `ship_hardpoint_in_selection`,
 `ship_select_weapon_override`, `ship_clear_weapon_override`, `ship_hardpoint_in_group`,
 `ship_nth_group_weapon`.
 `sim/weapon.h` — `Weapon`, `BallisticWeapon`, `MissileLauncher`, `WeaponKind`, `FireMode`,
-`weapon_effective_reach`. `sim/weapon_def.h` — `WeaponDef`, `WeaponRegistry`,
-`weapon_registry_load`, `weapon_registry_resolve_textures`, `weapon_registry_find`,
-`weapon_instantiate`.
+`weapon_effective_reach`. `sim/weapon_def.h` — `WeaponDef`, `WeaponRegistry`, `MuzzlePattern`,
+`WEAPON_MAX_MUZZLES`, `weapon_registry_load`, `weapon_registry_resolve_textures`,
+`weapon_registry_find`, `weapon_instantiate`.
 `sim/module.h` — `ModuleDef`, `ModuleRegistry`, `module_registry_load`, `module_registry_find`.
 `sim/projectile.h` — `Projectile`, `ProjectileKind`, `ProjectileSystem`, `MAX_PROJECTILES`.
 `render/ship_visual.h` — `ShipVisual`, `VisualLayer`, `ship_visual_load`,
@@ -150,10 +150,12 @@ worked example, balanced around its 3-shell volley rather than its per-shell dam
 **A new module** is the same shape via `assets/modules/modules.list`.
 **A new hull** is a `.ship` file with `hardpoint <id> <accepts> <size> <x> <y> <facing> <arc>`
 lines. A genuinely new weapon *behaviour* needs a `Weapon` subclass plus a `WeaponKind` tag and
-a branch in `weapon_instantiate` — note `weapon_effective_reach` downcasts on that tag rather
-than dispatching virtually, so a new subclass must be added there too or it falls into the
-ballistic branch. A new projectile behaviour needs a `ProjectileKind` and handling in the
-combat-arena steering pass, not here.
+a branch in `weapon_instantiate`. The subclass implements `spawn_shot` and `begin_cooldown`,
+**not** `fire` — `fire` is now a non-virtual composition of those two, so it cannot be
+overridden and a subclass defining only `fire` will not compile. Note also that
+`weapon_effective_reach` downcasts on the `WeaponKind` tag rather than dispatching virtually, so
+a new subclass must be added there too or it falls into the ballistic branch. A new projectile
+behaviour needs a `ProjectileKind` and handling in the combat-arena steering pass, not here.
 **A new condition on whether a weapon may fire is a `WeaponFireState` value plus a branch in
 `ship_weapon_fire_state`** — never a check bolted onto one fire site. All three fire-control
 surfaces route through that one function, so a rule added there reaches the manual trigger, the
@@ -215,8 +217,6 @@ it reports affordability, and the caller commits via `ship_try_spend_cap`.
 `sandbox/source/sim/weapon.{cpp,h}`, `sandbox/source/sim/weapon_def.{cpp,h}`,
 `sandbox/source/sim/projectile.{cpp,h}`, `sandbox/source/render/ship_visual.{cpp,h}`
 
-**Last verified:** 2026-08-07, commit `e83a88d` + the weapon-hub group-filter change (added
-`ship_hardpoint_in_group` / `ship_nth_group_weapon`, removed `ship_nth_mounted_weapon`) + the
-cannon mount-art change (added the `mount_art*` fields and `weapon_registry_resolve_textures`) +
-the multi-barrel change (added `muzzle*` fields, `ship_hardpoint_fire`, the
-`fire` -> `spawn_shot` + `begin_cooldown` split, and `trident_mk1` as the first salvo weapon)
+**Last verified:** 2026-08-08, commit `65f1ccb` (cannon mount art, data-driven muzzles, and the
+limited-traverse slew fix; supersedes the mount-art and multi-barrel notes carried inline here
+while that work was uncommitted)

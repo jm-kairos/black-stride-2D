@@ -91,5 +91,5 @@ with it. A new *procedural* mount art kind still follows `draw_turret` /
 **Source paths:** `sandbox/source/render/ship_scene.{cpp,h}`,
 `sandbox/source/render/ship_render.{cpp,h}`
 
-**Last verified:** 2026-08-07, commit `812680c` + the cannon mount-art change (`draw_turret`
-now draws authored art via `draw_mount_art` when the weapon's def has one)
+**Last verified:** 2026-08-08, commit `65f1ccb` (`draw_turret` draws authored art via
+`draw_mount_art` when the mounted weapon's def has one)
