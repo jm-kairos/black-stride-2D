@@ -30,9 +30,9 @@
       "obj",
       "vendor"
     ],
-    "file_count": 175,
-    "edge_count": 645,
-    "boundary_edge_count": 209,
+    "file_count": 179,
+    "edge_count": 664,
+    "boundary_edge_count": 217,
     "anomaly_count": 0,
     "unresolved_includes": {
       "engine/source/containers/array.h": [
@@ -120,6 +120,9 @@
         "chrono",
         "stdio.h"
       ],
+      "sandbox/source/core/projectile_fx.cpp": [
+        "math.h"
+      ],
       "sandbox/source/game.cpp": [
         "chrono",
         "math.h",
@@ -158,6 +161,9 @@
         "math.h"
       ],
       "sandbox/source/render/out_sensor_detection_fx.cpp": [
+        "math.h"
+      ],
+      "sandbox/source/render/projectile_fx.cpp": [
         "math.h"
       ],
       "sandbox/source/render/projectile_marker.cpp": [
@@ -448,7 +454,7 @@
       "side": "engine",
       "includes": [],
       "target": "engine",
-      "fan_in": 76,
+      "fan_in": 78,
       "fan_out": 0
     },
     "engine/source/entry.h": {
@@ -488,7 +494,7 @@
         "engine/source/math/math_utils.h"
       ],
       "target": "engine",
-      "fan_in": 24,
+      "fan_in": 25,
       "fan_out": 2
     },
     "engine/source/math/math_utils.cpp": {
@@ -506,7 +512,7 @@
         "engine/source/defines.h"
       ],
       "target": "engine",
-      "fan_in": 29,
+      "fan_in": 30,
       "fan_out": 1
     },
     "engine/source/platform/platform.h": {
@@ -663,7 +669,7 @@
         "engine/source/renderer/renderer_types.h"
       ],
       "target": "engine",
-      "fan_in": 31,
+      "fan_in": 33,
       "fan_out": 2
     },
     "engine/source/renderer/renderer_backend.cpp": {
@@ -694,7 +700,7 @@
         "engine/source/math/math_utils.h"
       ],
       "target": "engine",
-      "fan_in": 18,
+      "fan_in": 20,
       "fan_out": 2
     },
     "engine/source/renderer/starfield_gpu_resources.cpp": {
@@ -822,13 +828,34 @@
       "fan_in": 2,
       "fan_out": 1
     },
+    "sandbox/source/core/projectile_fx.cpp": {
+      "side": "sandbox",
+      "includes": [
+        "sandbox/source/core/projectile_fx.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 0,
+      "fan_out": 1
+    },
+    "sandbox/source/core/projectile_fx.h": {
+      "side": "sandbox",
+      "includes": [
+        "engine/source/defines.h",
+        "engine/source/math/math_utils.h",
+        "engine/source/math/bs_hierpos.h",
+        "engine/source/renderer/renderer_types.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 3,
+      "fan_out": 4
+    },
     "sandbox/source/core/render_layers.h": {
       "side": "sandbox",
       "includes": [
         "engine/source/renderer/renderer_types.h"
       ],
       "target": "sandbox",
-      "fan_in": 12,
+      "fan_in": 13,
       "fan_out": 1
     },
     "sandbox/source/core/view_transform.cpp": {
@@ -849,7 +876,7 @@
         "engine/source/math/bs_hierpos.h"
       ],
       "target": "sandbox",
-      "fan_in": 21,
+      "fan_in": 22,
       "fan_out": 2
     },
     "sandbox/source/entry.cpp": {
@@ -883,6 +910,7 @@
         "sandbox/source/sim/weapon.h",
         "sandbox/source/sim/projectile.h",
         "sandbox/source/sim/point_defense.h",
+        "sandbox/source/render/projectile_fx.h",
         "sandbox/source/sim/ss_generation.h",
         "sandbox/source/render/voronoi_cell_hover_effect.h",
         "sandbox/source/render/global_background.h",
@@ -903,7 +931,7 @@
       ],
       "target": "sandbox",
       "fan_in": 0,
-      "fan_out": 25
+      "fan_out": 26
     },
     "sandbox/source/game.h": {
       "side": "sandbox",
@@ -911,7 +939,7 @@
         "sandbox/source/state/game_state.h"
       ],
       "target": "sandbox",
-      "fan_in": 50,
+      "fan_in": 51,
       "fan_out": 1
     },
     "sandbox/source/game_modules.h": {
@@ -1077,6 +1105,7 @@
         "sandbox/source/render/defense_laser_overlay.h",
         "sandbox/source/render/weapon_hub.h",
         "sandbox/source/render/projectile_marker.h",
+        "sandbox/source/render/projectile_fx.h",
         "sandbox/source/core/render_layers.h",
         "sandbox/source/sim/galaxy_history.h",
         "sandbox/source/sim/ai_ship.h",
@@ -1087,7 +1116,7 @@
       ],
       "target": "sandbox",
       "fan_in": 0,
-      "fan_out": 19
+      "fan_out": 20
     },
     "sandbox/source/render/gameplay_overlays.h": {
       "side": "sandbox",
@@ -1219,6 +1248,30 @@
       "fan_in": 3,
       "fan_out": 1
     },
+    "sandbox/source/render/projectile_fx.cpp": {
+      "side": "sandbox",
+      "includes": [
+        "sandbox/source/render/projectile_fx.h",
+        "sandbox/source/game.h",
+        "sandbox/source/core/view_transform.h",
+        "sandbox/source/core/render_layers.h",
+        "sandbox/source/sim/weapon_def.h",
+        "sandbox/source/core/projectile_fx.h",
+        "engine/source/renderer/renderer.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 0,
+      "fan_out": 7
+    },
+    "sandbox/source/render/projectile_fx.h": {
+      "side": "sandbox",
+      "includes": [
+        "engine/source/defines.h"
+      ],
+      "target": "sandbox",
+      "fan_in": 3,
+      "fan_out": 1
+    },
     "sandbox/source/render/projectile_marker.cpp": {
       "side": "sandbox",
       "includes": [
@@ -1295,6 +1348,7 @@
         "sandbox/source/render/ship_render.h",
         "sandbox/source/game.h",
         "sandbox/source/sim/module.h",
+        "sandbox/source/sim/weapon_def.h",
         "sandbox/source/core/view_transform.h",
         "sandbox/source/render/text.h",
         "sandbox/source/core/render_layers.h",
@@ -1303,7 +1357,7 @@
       ],
       "target": "sandbox",
       "fan_in": 0,
-      "fan_out": 8
+      "fan_out": 9
     },
     "sandbox/source/render/ship_render.h": {
       "side": "sandbox",
@@ -1585,12 +1639,11 @@
         "sandbox/source/sim/camera_controller.h",
         "sandbox/source/game.h",
         "sandbox/source/core/view_transform.h",
-        "sandbox/source/sim/ship_control.h",
         "engine/source/core/input.h"
       ],
       "target": "sandbox",
       "fan_in": 0,
-      "fan_out": 5
+      "fan_out": 4
     },
     "sandbox/source/sim/camera_controller.h": {
       "side": "sandbox",
@@ -1911,11 +1964,12 @@
         "engine/source/math/math_utils.h",
         "engine/source/math/bs_hierpos.h",
         "engine/source/renderer/renderer_types.h",
-        "sandbox/source/sim/ship.h"
+        "sandbox/source/sim/ship.h",
+        "sandbox/source/core/projectile_fx.h"
       ],
       "target": "sandbox",
       "fan_in": 6,
-      "fan_out": 5
+      "fan_out": 6
     },
     "sandbox/source/sim/rts_controls.cpp": {
       "side": "sandbox",
@@ -1977,13 +2031,14 @@
       "includes": [
         "sandbox/source/sim/ship.h",
         "sandbox/source/sim/weapon.h",
+        "sandbox/source/sim/weapon_def.h",
         "sandbox/source/sim/module.h",
         "engine/source/core/logger.h",
         "engine/source/renderer/renderer.h"
       ],
       "target": "sandbox",
       "fan_in": 0,
-      "fan_out": 5
+      "fan_out": 6
     },
     "sandbox/source/sim/ship.h": {
       "side": "sandbox",
@@ -2017,7 +2072,7 @@
         "engine/source/math/bs_hierpos.h"
       ],
       "target": "sandbox",
-      "fan_in": 3,
+      "fan_in": 2,
       "fan_out": 2
     },
     "sandbox/source/sim/ship_mission.cpp": {
@@ -2205,22 +2260,24 @@
       "side": "sandbox",
       "includes": [
         "sandbox/source/sim/weapon_def.h",
-        "engine/source/core/logger.h"
+        "engine/source/core/logger.h",
+        "engine/source/renderer/renderer.h"
       ],
       "target": "sandbox",
       "fan_in": 0,
-      "fan_out": 2
+      "fan_out": 3
     },
     "sandbox/source/sim/weapon_def.h": {
       "side": "sandbox",
       "includes": [
         "engine/source/defines.h",
+        "engine/source/renderer/renderer_types.h",
         "sandbox/source/sim/ship.h",
         "sandbox/source/sim/weapon.h"
       ],
       "target": "sandbox",
-      "fan_in": 5,
-      "fan_out": 3
+      "fan_in": 8,
+      "fan_out": 4
     },
     "sandbox/source/state/game_state.h": {
       "side": "sandbox",
@@ -2375,6 +2432,26 @@
     {
       "from": "sandbox/source/core/profiler.h",
       "to": "engine/source/defines.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/core/projectile_fx.h",
+      "to": "engine/source/defines.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/core/projectile_fx.h",
+      "to": "engine/source/math/math_utils.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/core/projectile_fx.h",
+      "to": "engine/source/math/bs_hierpos.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/core/projectile_fx.h",
+      "to": "engine/source/renderer/renderer_types.h",
       "direction": "sandbox->engine"
     },
     {
@@ -2644,6 +2721,16 @@
     },
     {
       "from": "sandbox/source/render/parallax_background.h",
+      "to": "engine/source/defines.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/projectile_fx.cpp",
+      "to": "engine/source/renderer/renderer.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/render/projectile_fx.h",
       "to": "engine/source/defines.h",
       "direction": "sandbox->engine"
     },
@@ -3313,8 +3400,18 @@
       "direction": "sandbox->engine"
     },
     {
+      "from": "sandbox/source/sim/weapon_def.cpp",
+      "to": "engine/source/renderer/renderer.h",
+      "direction": "sandbox->engine"
+    },
+    {
       "from": "sandbox/source/sim/weapon_def.h",
       "to": "engine/source/defines.h",
+      "direction": "sandbox->engine"
+    },
+    {
+      "from": "sandbox/source/sim/weapon_def.h",
+      "to": "engine/source/renderer/renderer_types.h",
       "direction": "sandbox->engine"
     },
     {

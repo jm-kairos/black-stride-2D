@@ -4,6 +4,7 @@
 #include "core/view_transform.h"   // render_from_hierpos
 #include "core/render_layers.h"    // LAYER_PROJECTILE_FX
 #include "sim/weapon_def.h"        // VfxFamily (explicit peer include, not via the game.h cascade)
+#include "core/projectile_fx.h"    // ProjectileFx / ProjectileFxEvent -- likewise explicit
 
 #include <renderer/renderer.h>
 #include <math.h>

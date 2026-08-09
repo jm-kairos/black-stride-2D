@@ -114,6 +114,11 @@ SANDBOX_CLUSTERS: dict[str, list[str]] = {
     "DeterministicRng": ["sim/galaxy_rng.h"],
     "Geometry2D": ["core/geom2d.cpp", "core/geom2d.h"],
     "RenderLayerTable": ["core/render_layers.h"],
+    # Not a subsystem and deliberately has no page (see InWorldOverlays) -- but it is a real
+    # tier-0 module with zero sandbox dependencies, written by ShipCombatModel and read by
+    # InWorldOverlays. It gets its own bucket so those two edges show up as the T1 -> T0 and
+    # T4 -> T0 they actually are; folding it into either owner would hide one of them.
+    "ProjectileFxRing": ["core/projectile_fx.cpp", "core/projectile_fx.h"],
     "Profiling": ["core/profiler.cpp", "core/profiler.h"],
     "BitmapText": ["render/text.cpp", "render/text.h", "font8x8.h"],
     # tier 1 — ship and combat model
@@ -182,6 +187,12 @@ SANDBOX_CLUSTERS: dict[str, list[str]] = {
         "render/sensor_overlay.cpp", "render/sensor_overlay.h",
         "render/defense_laser_overlay.cpp", "render/defense_laser_overlay.h",
         "render/out_sensor_detection_fx.cpp", "render/out_sensor_detection_fx.h",
+        # projectile_marker and weapon_hub were missing here, which made this report refuse to
+        # run on the sandbox side long before projectile_fx existed. The subsystem page has
+        # listed all three under Source paths throughout.
+        "render/projectile_marker.cpp", "render/projectile_marker.h",
+        "render/weapon_hub.cpp", "render/weapon_hub.h",
+        "render/projectile_fx.cpp", "render/projectile_fx.h",
         "sim/heat_map.cpp", "sim/heat_map.h",
     ],
     "CoordinateDiagnostics": [

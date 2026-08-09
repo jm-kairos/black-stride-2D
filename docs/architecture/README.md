@@ -22,7 +22,7 @@ flowchart TB
   classDef dead  fill:#2a2a2a,stroke:#666,color:#888,stroke-dasharray:4 3
   classDef bar   fill:#5c1a1a,stroke:#ff6b6b,color:#fff,stroke-width:3px
 
-  subgraph SANDBOX["sandbox.exe — 132 files, 33 subsystems"]
+  subgraph SANDBOX["sandbox.exe — 136 files, 33 subsystems"]
     direction TB
     ORCH["FrameOrchestrator · game.cpp — calls everything, nothing calls it"] --> T5["Tier 5 · UI and shell"] & T4["Tier 4 · rendering"] & T3["Tier 3 · player interaction"] & T2["Tier 2 · galaxy simulation"] & T1["Tier 1 · ship and combat model"]
     T5 --> T4 --> T2 & T1 & T0["Tier 0 · shared primitives"]
@@ -31,7 +31,7 @@ flowchart TB
     HUB[("GameStateModel · game_state.h — 48 includers")] -.-> T0
   end
 
-  BOUND["D L L   B O U N D A R Y — 153 bs__api__ exports, 92 used<br/>209 sandbox to engine include edges, 0 the other way"]
+  BOUND["D L L   B O U N D A R Y — 153 bs__api__ exports, 92 used<br/>217 sandbox to engine include edges, 0 the other way"]
 
   T0 & T1 & T2 & T3 & T4 & T5 & ORCH & HUB ==> BOUND
 
@@ -127,7 +127,9 @@ Not subsystems: `containers/` (3 headers, one of which has zero includers) — s
 
 Not subsystems, so no pages: **GameStateModel** (`state/game_state.h`, 3652 lines — the hub 48
 files include) and **FrameOrchestrator** (`game.cpp`, 3403 lines — the frame loop), both
-described from the consuming side across the pages above; **DeadStarfieldGen**
+described from the consuming side across the pages above; **ProjectileFxRing**
+(`core/projectile_fx.*`) is a two-file Tier 0 POD buffer written by ShipCombatModel and read by
+InWorldOverlays, described on the latter's page; **DeadStarfieldGen**
 (`render/starfield_generator.*`) is dead code. See
 [sandbox-subsystems.md](sandbox-subsystems.md) § "Files that don't fit cleanly".
 
@@ -149,5 +151,13 @@ python tools/dependency_graph/cluster_report.py --side engine  --symbols
 python tools/dependency_graph/cluster_report.py --side sandbox --symbols
 ```
 
-**Last verified:** 2026-08-07, commit `e4d88d1` (file/edge counts re-derived from a fresh
-`scan_dependencies.py` run; the subsystem tables below are unchanged since `812680c`)
+**Last verified:** 2026-08-10, working tree on `game` (file/edge counts re-derived from a fresh
+`scan_dependencies.py` run: 179 files, 664 internal edges, 217 boundary edges. The subsystem
+tables are unchanged — the projectile-VFX work added files to existing subsystems plus one
+non-subsystem Tier 0 module, not a new subsystem. `cluster_report.py`'s sandbox map had drifted
+and refused to run; `projectile_marker` and `weapon_hub` were missing from InWorldOverlays long
+before this change.)
+
+> **Stale:** `_raw/file-summaries-{engine,sandbox}.md` are hand-authored prose, not tool output —
+> nothing regenerates them. They still describe `ProjectileSystem::glow_override`, which no
+> longer exists.

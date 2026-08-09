@@ -35,7 +35,8 @@ GameStateModel, `core/projectile_fx.h`; engine `renderer/renderer.h`, `renderer/
 *(`core/projectile_fx.h` is a Tier 0 POD ring with no sandbox dependencies of its own, shared
 with ShipCombatModel — the sim writes it, this subsystem reads it. It is deliberately not a
 subsystem page: it is one fixed-capacity event buffer and a lifetime table.)*
-**Out-degree 24 — the highest in the render tier.** FleetControl, ActionLog and `core/input.h`
+**Out-degree 37 — still the highest in the render tier by a wide margin** (next is ShipRendering
+at 15). FleetControl, ActionLog and `core/input.h`
 all arrive through `weapon_hub.cpp`, which polls a mouse button and writes an action-log line.
 **Depended on by:** SceneOrchestration, DevPanels, FrameOrchestrator, GameStateModel.
 
