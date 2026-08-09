@@ -44,6 +44,28 @@ is visible to the sandbox.
 - **The vtable must be fully populated.** `renderer_backend.cpp` assigns 31 function pointers and
   `renderer_backend_destroy` nulls 32 fields (31 + `internal_state`). Hand-maintained parallel
   lists; nothing detects a pointer added to one and forgotten in the other.
+- **`g_sdl.offscreen_format` is the single source of truth for every offscreen target AND every
+  pipeline that renders into one.** All eight targets (`scene_rt`, the bloom and aux-streak
+  ping-pongs, `nebula_rt`, `heat_rt`, `ui_backdrop_rt`) share one `SDL_GPUTextureCreateInfo` in
+  `create_bloom_targets`, and `create_postprocess_pipelines`' `offscreen_fmt` plus the two
+  offscreen sprite pipeline sets all read the same field. SDL rejects a render pass whose
+  pipeline format disagrees with its target, so these cannot be allowed to drift.
+- **The scene renders in HDR (`RGBA16F`) and is tone-mapped exactly once, in the composite.**
+  The swapchain is 8-bit, so the composite is the only place high-range values re-enter a
+  clamped buffer — which is why `pipeline_composite` alone keeps `swap_fmt`. Two consequences:
+  additive sprite stacking no longer flattens at 1.0 (three overlapping muzzle flashes stay
+  distinguishable and keep their tint), and `bloom_threshold` above 1.0 is finally *reachable*.
+  Before this the threshold's shipped default of 1.2 made `bloom_extract` output pure black on
+  every frame — the bloom pass ran and contributed nothing.
+- **The format is PROBED, not assumed.** `SDL_GPUTextureSupportsFormat` decides at init and falls
+  back to `R8G8B8A8_UNORM` with a warning; `hdr_enabled` then drives the composite's tone-map
+  flag, so the LDR fallback reproduces the old look exactly rather than shipping raw HDR into
+  8 bits.
+- **Under HDR the offscreen path is mandatory**, not one of the opportunistic conditions below:
+  the direct-to-swapchain path is 8-bit and skips the composite, so allowing it would change the
+  scene's exposure depending on whether bloom, a streak or the UI frost happened to be active.
+  In practice this costs nothing today because bloom defaults on, which already forced the path
+  every frame.
 - Per-frame submission state is cleared in `begin_frame` (`:1597-1605`), so the game must
   resubmit heat map, nebula, streak source and all effect queues **every frame**; lights,
   camera, glow and bloom settings are sticky.
@@ -57,6 +79,11 @@ SDL. **Adding an effect** follows the established shape: a `bs_*_params` struct 
 `renderer_types.h`, a `draw_*` vtable entry, a fixed-size queue in `sdlgpu_state`, a queue-push
 in the `draw_*` implementation, and a pass in `end_frame`. Every existing effect
 (nebula, heat map, sunburst, star surface, planet surface) is built that way.
+**An effect that renders into an offscreen target must build its pipeline with
+`g_sdl.offscreen_format`**, never a literal: targets and pipelines share that one field and SDL
+rejects a render pass whose formats disagree. An effect drawing straight to the swapchain uses
+`swap_fmt` as before — `pipeline_composite` is the worked example of the latter, and it is
+deliberate, because that pass is where the tone map converts HDR back to 8 bits.
 
 **Known limitations / tech debt:**
 - **It is a god object.** 4888 lines carrying three unrelated public surfaces: the backend
@@ -81,9 +108,18 @@ in the `draw_*` implementation, and a pass in `end_frame`. Every existing effect
   shader-compile and asset-staging steps.
 - A driver-specific correction is baked in: `get_corrected_swapchain_format` forces
   `B8G8R8A8_UNORM` when D3D12 misreports (`:90-101`).
-- The offscreen path is forced on by three independent conditions — bloom, an active streak, or
-  `g_rml_frost_active()` (`:2619-2627`) — so enabling the in-game UI silently changes the whole
-  render path.
+- The offscreen path is forced on by bloom, an active streak, `g_rml_frost_active()`, or HDR
+  (`:2619-2627`) — so enabling the in-game UI silently changes the whole render path. With HDR
+  supported the fourth condition is always true, which makes the other three moot; they still
+  matter on the `RGBA8` fallback.
+- **The tone-map curve is a soft knee, not Reinhard, and the reason is worth keeping.** Reinhard
+  compresses the whole range, mapping nominal white to 0.53 — correct for linear-authored HDR
+  art, wrong here, where every hull and UI sprite is authored for an LDR target and only additive
+  VFX overshoot ever exceeds 1.0. The shipped curve is identity below 0.8 and rolls off
+  rationally above it, so LDR content is bit-for-bit unchanged (measured: hull brightness 246.6
+  before, 246.5 after) and only previously-clipping pixels move. A rational tail was chosen over
+  an exponential one because the exponential saturated by ~2x nominal white, which would have
+  left a triple-barrel salvo barely brighter than a single shot.
 - The mapped-sprite pass takes its light direction from `mapped_batch[0]` for the entire batch
   (`:2437-2441`), on the stated assumption that all ships share one star direction.
 - `stb_image_impl.cpp` is a build artifact, not a module: it declares nothing, has no includers,
@@ -92,6 +128,11 @@ in the `draw_*` implementation, and a pass in `end_frame`. Every existing effect
   the vtable grew by accretion, which is why it is 31 entries wide.
 
 **Source paths:** `engine/source/renderer/backend/**`,
-`engine/source/renderer/renderer_backend.cpp`
+`engine/source/renderer/renderer_backend.cpp`, and the post-chain shaders under
+`assets/shaders/src/bloom_*.frag.hlsl`
 
-**Last verified:** 2026-08-07, commit `812680c`
+**Last verified:** 2026-08-09, working tree on `game` (offscreen targets moved to `RGBA16F`
+with a capability probe; tone-map added to `bloom_composite`; `bloom_extract`'s normaliser
+rewritten — it divided by `max(1 - threshold, 0.0001)`, which silently zeroed all bloom at the
+shipped 1.2 threshold and would have multiplied the scene by ~10,000 once HDR made that
+threshold crossable)

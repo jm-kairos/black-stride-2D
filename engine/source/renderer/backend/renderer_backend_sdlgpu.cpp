@@ -319,6 +319,12 @@ typedef struct sdlgpu_state
     bs_nebula_params         nebula_params;
     b8                       nebula_set;
 
+    // Colour format shared by EVERY offscreen target and by every pipeline that renders into
+    // one. Decided once at init by a device capability probe (RGBA16F, else RGBA8). Targets and
+    // pipelines must agree or SDL rejects the render pass, so this is the single source of both.
+    SDL_GPUTextureFormat offscreen_format;
+    b8                   hdr_enabled;   // offscreen_format is float => tone-map on composite
+
     // Bloom tuning (editor-settable; defaults give a subtle glow).
     b8  bloom_enabled;
     f32 bloom_threshold;
@@ -827,7 +833,10 @@ static b8 create_bloom_targets(u32 width, u32 height)
     SDL_GPUTextureCreateInfo info;
     SDL_zero(info);
     info.type                 = SDL_GPU_TEXTURETYPE_2D;
-    info.format               = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
+    // One format for all eight targets below (scene, bloom ping-pong, aux streak ping-pong,
+    // nebula, heat map, UI backdrop). They are sampled by each other through the post chain, so
+    // splitting formats between them would mean a pipeline per combination.
+    info.format               = g_sdl.offscreen_format;
     info.layer_count_or_depth = 1;
     info.num_levels           = 1;
 
@@ -1078,7 +1087,9 @@ static b8 create_postprocess_pipelines(void)
                                      SDL_GPU_SHADERSTAGE_VERTEX, 0, 0);
     if (!vs) return FALSE;
 
-    SDL_GPUTextureFormat offscreen_fmt = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
+    // Must match create_bloom_targets' format exactly: every pipeline below renders into one of
+    // those eight targets.
+    SDL_GPUTextureFormat offscreen_fmt = g_sdl.offscreen_format;
 
     // extract -> bloom_a (RGBA8)
     SDL_GPUShader* fs_extract = load_shader(g_sdl.device, "bloom_extract", "frag",
@@ -1379,6 +1390,27 @@ b8 sdlgpu_backend_initialize(struct renderer_backend* backend, const char* app_n
     BS_LOG_INFO("SDL GPU device created (driver: %s, shader formats: 0x%x).",
         SDL_GetGPUDeviceDriver(g_sdl.device), (u32)SDL_GetGPUShaderFormats(g_sdl.device));
 
+    // ---- Pick the offscreen (scene) colour format -----------------------------------------
+    // HDR: every intermediate target is half-float so additive sprite stacking can exceed 1.0
+    // and be tone-mapped down once, at the very end, instead of clipping per-draw. On the old
+    // 8-bit targets three overlapping muzzle flashes flattened to identical white, and the
+    // bloom threshold could never be crossed at all (luma <= 1.0 < 1.2), which made the whole
+    // bloom pass a no-op at the shipped default.
+    //
+    // Probed, not assumed. Nothing else in this backend asks the device what it supports, so a
+    // refusal here would otherwise surface as a texture-creation failure at init. Falling back
+    // to RGBA8 keeps the game running with exactly the pre-HDR look.
+    g_sdl.offscreen_format = SDL_GPU_TEXTUREFORMAT_R16G16B16A16_FLOAT;
+    if (!SDL_GPUTextureSupportsFormat(g_sdl.device, g_sdl.offscreen_format,
+                                      SDL_GPU_TEXTURETYPE_2D,
+                                      SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER))
+    {
+        BS_LOG_WARN("RGBA16F offscreen targets unsupported; falling back to RGBA8 (no HDR).");
+        g_sdl.offscreen_format = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
+    }
+    g_sdl.hdr_enabled = (g_sdl.offscreen_format == SDL_GPU_TEXTUREFORMAT_R16G16B16A16_FLOAT);
+    BS_LOG_INFO("Offscreen colour format: %s.", g_sdl.hdr_enabled ? "RGBA16F (HDR)" : "RGBA8 (LDR)");
+
     // Log the ACTUAL display refresh rate the swapchain will pace against. A 30 Hz mode
     // (4K TV over HDMI 1.4, misconfigured display) silently caps a VSYNC swapchain to 30 fps
     // and is invisible to GPU-side profiling — surface it here.
@@ -1414,7 +1446,7 @@ b8 sdlgpu_backend_initialize(struct renderer_backend* backend, const char* app_n
     if (!create_pipelines_for_format(vs, fs, swap_fmt, g_sdl.pipelines)) return FALSE;
 
     // Offscreen pipelines (bloom path targets scene_rt which is RGBA8).
-    if (!create_pipelines_for_format(vs, fs, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, g_sdl.pipelines_offscreen))
+    if (!create_pipelines_for_format(vs, fs, g_sdl.offscreen_format, g_sdl.pipelines_offscreen))
         return FALSE;
 
     // Shaders are baked into the pipelines; release the standalone handles.
@@ -1428,7 +1460,7 @@ b8 sdlgpu_backend_initialize(struct renderer_backend* backend, const char* app_n
     if (!mvs || !mfs) return FALSE;
 
     if (!create_mapped_pipeline_for_format(mvs, mfs, swap_fmt, &g_sdl.pipeline_mapped)) return FALSE;
-    if (!create_mapped_pipeline_for_format(mvs, mfs, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, &g_sdl.pipeline_mapped_offscreen)) return FALSE;
+    if (!create_mapped_pipeline_for_format(mvs, mfs, g_sdl.offscreen_format, &g_sdl.pipeline_mapped_offscreen)) return FALSE;
 
     SDL_ReleaseGPUShader(g_sdl.device, mvs);
     SDL_ReleaseGPUShader(g_sdl.device, mfs);
@@ -2624,7 +2656,13 @@ b8 sdlgpu_backend_end_frame(struct renderer_backend* backend, f32 dt)
     // bloom/streak disabled (the composite handles zero bloom/streak intensity, same as the streak path).
     b8 need_frost    = g_rml_frost_active();
 
-    if (use_offscreen && (need_bloom || need_streak || need_frost))
+    // Under HDR the offscreen path is MANDATORY, not opportunistic. The direct-to-swapchain
+    // path writes 8-bit and clips at 1.0, so leaving it selectable would mean the scene
+    // silently changed exposure and highlight rolloff depending on whether bloom, a streak or
+    // the UI frost happened to be active. The composite is also the only place the tone map
+    // runs, so skipping it would ship raw HDR values into an 8-bit swapchain and blow out
+    // every bright pixel. Cost: one extra fullscreen pass per frame even with bloom off.
+    if (use_offscreen && (g_sdl.hdr_enabled || need_bloom || need_streak || need_frost))
     {
         // ---- PASS 1: game-world sprites -> scene_rt -------------------------------------------
         SDL_GPUColorTargetInfo scene_target;
@@ -2927,7 +2965,7 @@ b8 sdlgpu_backend_end_frame(struct renderer_backend* backend, f32 dt)
         bloom_params[0] = need_bloom ? g_sdl.bloom_intensity : 0.0f;
         bloom_params[1] = (aux_count > 0) ? g_sdl.streak_intensity : 0.0f;
         bloom_params[2] = (aux_count > 0 && g_sdl.streak_enabled) ? g_sdl.streak_flare_intensity : 0.0f;
-        bloom_params[3] = 0.0f;
+        bloom_params[3] = g_sdl.hdr_enabled ? 1.0f : 0.0f;   // tone-map only a float source
         SDL_PushGPUFragmentUniformData(g_sdl.cmd, 0, bloom_params, sizeof(bloom_params));
         SDL_DrawGPUPrimitives(g_sdl.pass, 3, 1, 0, 0);
 

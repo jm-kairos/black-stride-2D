@@ -29,6 +29,11 @@ InWorldOverlays, CelestialParallax, CelestialFx, RenderLayerTable, GameStateMode
 - **Lighting is submitted exactly once per frame, from one place.** The four engine calls
   (`renderer_set_lights`, `_set_glow_params`, `_set_bloom_enabled`, `_set_bloom_params`) appear
   nowhere else in the sandbox.
+- **`bloom_threshold` is a real threshold again.** The engine's offscreen targets are `RGBA16F`,
+  so scene luminance can exceed 1.0 and the value this pass forwards actually gates something.
+  While the targets were 8-bit the shipped default of 1.2 was unreachable and bloom contributed
+  nothing on every frame — a threshold above 1.0 now means "only genuinely hot pixels bloom"
+  rather than "no pixels bloom". No code here changed; the number simply started working.
 - **Everything cross-fades on `s->view_arena_w`, not on discrete modes.** Star light and ambient
   fade in by map weight (`1 - arena_w`) while dynamic bloom fades in by arena weight — two
   effects moving in opposite directions across one band. `frame_lighting.cpp` states the
@@ -72,4 +77,5 @@ this and says so. **A new light source** is an entry appended to the `frame_ligh
 **Source paths:** `sandbox/source/render/scene_renderer.{cpp,h}`,
 `sandbox/source/render/frame_lighting.{cpp,h}`
 
-**Last verified:** 2026-08-07, commit `812680c`
+**Last verified:** 2026-08-09, working tree on `game` (no code change here; `bloom_threshold`
+became a live control once the engine's offscreen targets moved to `RGBA16F`)
