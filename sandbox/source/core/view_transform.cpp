@@ -9,10 +9,21 @@ f32 g_zoom_out_speed_gain = 2.0f;
 
 // STEP 2: arena-look weight for the current zoom. 1.0 = full arena/gameplay look, 0.0 = full
 // galaxy-map look, smoothly cross-fading across [VIEW_MAP_ZOOM, VIEW_ARENA_ZOOM]. Every render
-// site reads this (via s->view_arena_w) instead of branching on the discrete GameMode. The band
-// straddles the old hard mode-flip point (ZOOM_MIN = 0.08) so the two looks cross-fade.
-static const f32 VIEW_MAP_ZOOM   = 0.05f;  // at/below this zoom: fully galaxy-map look
-static const f32 VIEW_ARENA_ZOOM = 0.14f;  // at/above this zoom: fully arena look
+// site reads this (via s->view_arena_w) instead of branching on the discrete GameMode.
+//
+// THIS BAND MUST STRADDLE ZOOM_MIN IN sim/camera_controller.cpp. That is the hard mode-flip
+// point, and it is a DIFFERENT constant in a DIFFERENT file with nothing but this comment tying
+// the two together -- move one without the other and the label flips at a zoom where the looks
+// have already finished cross-fading, or vice versa. The band keeps its original proportions
+// around the flip point (0.625x below, 1.75x above) so the cross-fade feels unchanged.
+//
+// Widened from [0.05, 0.14] (flip 0.08) to cover the compressed ballistic engagement envelope:
+// with ballistic reach now 19k-58k units, a fight has to FRAME inside the arena look rather than
+// forcing the player out to the galaxy map to see the target. Half the screen spans 640/zoom
+// world units, so the arena look now reaches ~42,700 units at its floor -- the whole ballistic
+// catalog except the longlance sniper, which deliberately reaches past it.
+static const f32 VIEW_MAP_ZOOM   = 0.009f; // at/below this zoom: fully galaxy-map look
+static const f32 VIEW_ARENA_ZOOM = 0.026f; // at/above this zoom: fully arena look
 f32 view_arena_weight(f32 zoom) {
     if (zoom <= VIEW_MAP_ZOOM)   return 0.0f;
     if (zoom >= VIEW_ARENA_ZOOM) return 1.0f;

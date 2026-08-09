@@ -1,14 +1,22 @@
 #include "sim/camera_controller.h"
 #include "game.h"
-#include "core/view_transform.h" // game_screen_to_true_hierpos, game_camera_center_hierpos
-#include "sim/ship_control.h"    // piloted_ship_origin (on-screen test when restoring piloting)
+#include "core/view_transform.h" // game_screen_to_true_hierpos
+// sim/ship_control.h dropped with the zoom-driven control hand-off: piloted_ship_origin was only
+// needed for the on-screen test that decided whether to restore piloting on an inbound crossing.
 #include <core/input.h>          // input_get_mouse_wheel / input_get_mouse_position
 #include <math.h> // powf, logf, expf, fabsf
 
 using namespace bs_math;
 
 // ---- Camera / zoom ---- (constants used only by the zoom controller)
-static const f32 ZOOM_MIN        = 0.08f;  // most zoomed-out (global)
+// Arena <-> galaxy-map flip point. MUST stay straddled by [VIEW_MAP_ZOOM, VIEW_ARENA_ZOOM] in
+// core/view_transform.cpp -- that band is the visual cross-fade, this is the label flip and the
+// free-camera hand-off, and nothing but the comments at both sites ties them together. Widened
+// from 0.08 so the compressed ballistic engagement (19k-58k units of reach) frames INSIDE the
+// arena look: half the screen spans 640/zoom world units, so 0.015 reaches ~42,700 units.
+// Crossing this still force-detaches the camera, which is now meaningful rather than arbitrary --
+// below it you are in the long-range missile game, which is played detached.
+static const f32 ZOOM_MIN        = 0.015f; // most zoomed-out arena look (global)
 static const f32 ZOOM_MAX        = 12.00f; // most zoomed-in
 static const f32 ZOOM_STEP       = 1.12f;  // multiplicative per wheel notch
 // Most zoomed-out allowed. Positions render linearly (no cosmetic compression), so the disc renders
@@ -18,7 +26,10 @@ static const f32 ZOOM_STEP       = 1.12f;  // multiplicative per wheel notch
 static const f32 ZOOM_GLOBAL_MIN = 7.5e-10f;
 // Below this zoom the per-notch step grows (progressive zoom-out speed) so pulling all the way back
 // to the galaxy overview stays quick despite the extended range; at/above it, speed is unchanged.
-static const f32 ZOOM_SPEED_RAMP = 0.02f;
+// Kept BELOW VIEW_MAP_ZOOM (0.009): at its old 0.02 it now sat inside the widened arena band, so
+// the wheel would have accelerated while the player was still framing a ballistic fight. The ramp
+// is for traversing the empty decades out to the galaxy overview, not for combat zoom.
+static const f32 ZOOM_SPEED_RAMP = 0.005f;
 
 void update_zoom_and_mode(game_state* s, f32 dt) {
     // The wheel nudges a TARGET zoom; the actual camera zoom eases toward it each frame so zooming
@@ -65,58 +76,33 @@ void update_zoom_and_mode(game_state* s, f32 dt) {
     Vec2 cursor_view = Vec2{ cursor.x - (f32)s->fb_width * 0.5f,
                              (f32)s->fb_height * 0.5f - cursor.y };
     HierPos2 P = game_screen_to_true_hierpos(s, cursor);
-    // Crossing ZOOM_MIN flips the render "look" (arena <-> galaxy map). Both looks now share ONE
-    // coordinate space, so the flip is a pure label change plus a free-camera hand-off -- there is
-    // no re-anchor, and the zoom itself stays continuous across the boundary.
+    // Crossing ZOOM_MIN flips the render "look" (arena <-> galaxy map). Both looks share ONE
+    // coordinate space, so the flip is a PURE LABEL CHANGE -- no re-anchor, no jump, and the zoom
+    // itself stays continuous across the boundary.
     b8 was_global = (s->view.mode == MODE_GLOBAL);
     b8 now_global = (new_zoom >= ZOOM_MIN);
     s->camera_state.camera.zoom = new_zoom;
-    // Crossing the arena <-> galaxy-map threshold updates the render "look" label. Coordinates
-    // already agree across the boundary (Step 1), so this is a pure label change plus a control
-    // hand-off -- no re-anchor, no jump. The hand-off remembers the player's control INTENT so the
-    // round trip is reversible: leaving MODE_GLOBAL snapshots piloting-vs-free-camera, and re-
-    // entering restores it instead of always forcing free camera on (the old one-way behaviour).
+    // ZOOM NO LONGER DECIDES PILOT vs AUTO-PILOT. TAB (and the HUD button) are the only things
+    // that attach or detach the camera; the wheel only ever changes the wheel's business.
+    //
+    // This used to force the free camera ON when leaving the arena and then restore the remembered
+    // intent on the way back, which needed `global_free_camera_saved`, an on-screen test and two
+    // deliberately asymmetric crossing paths -- about thirty lines whose entire job was to undo the
+    // surprise the coupling created. Scrolling reads as "I want to see more", not "take the helm",
+    // and since the ballistic engagement envelope was compressed the tactical picture sits one
+    // scroll outside the arena band -- so the old behaviour handed control away mid-fight exactly
+    // when the player zoomed out to look at the fight.
+    //
+    // What the player gives up is that the galaxy map is only PANNABLE while detached (cursor-pin
+    // zoom, WASD pan and edge pan all require it, and an attached camera is pinned to the ship), so
+    // browsing costs one TAB press. That is a keypress, not a mode you have to discover.
     if (now_global != was_global) {
         s->view.mode = now_global ? MODE_GLOBAL : MODE_SYSTEM;
-        if (!now_global) {
-            // Leaving the arena for the galaxy map: force free camera on (the map is browsed with a
-            // detached, pannable camera). The control INTENT (global_free_camera_saved) is NOT
-            // snapshotted here -- it is maintained live at the deliberate toggle sites, so the
-            // temporary off-screen free-camera fallback can't overwrite a piloting intent.
-            s->camera_state.free_camera_pos    = game_camera_center_hierpos(s);
-            s->camera_state.free_camera_active = TRUE;
-        } else {
-            // Re-entering the arena from the galaxy map: restore the remembered control intent.
+        // Re-entering the arena still has to tell the backdrop which system it is drawing. This is
+        // a RENDER side effect that merely happened to live in the control hand-off; it is not part
+        // of it, and dropping it with the rest would silently leave a stale parallax backdrop.
+        if (now_global)
             s->render.global_background.notify_system_changed(s->galaxy.current_system);
-            if (s->camera_state.global_free_camera_saved) {
-                // Was in free camera / RTS -> keep it detached where the view currently sits.
-                s->camera_state.free_camera_pos    = game_camera_center_hierpos(s);
-                s->camera_state.free_camera_active = TRUE;
-            } else {
-                // Was piloting. If the piloted ship is on-screen at the crossing, glide the camera
-                // onto it (TAB-style recenter that ends in ship-follow). Otherwise drop into free
-                // camera + autopilot instead of yanking the view across space to a distant ship.
-                HierPos2 center = game_camera_center_hierpos(s);
-                HierPos2 ship   = piloted_ship_origin(s);
-                Vec2 d    = hierpos_diff(&ship, &center, BS_HIERPOS_CELL_SIZE);
-                Vec2 scr  = vec2_scale(d, new_zoom); // centered screen px (matches cursor_view)
-                b8 on_screen = (fabsf(scr.x) <= (f32)s->fb_width  * 0.5f) &&
-                               (fabsf(scr.y) <= (f32)s->fb_height * 0.5f);
-                if (on_screen) {
-                    // Reuse the recenter glide: detached during the ease, then it hands control
-                    // back to ship-follow (free_camera_active = FALSE) on completion.
-                    s->camera_state.recentering       = TRUE;
-                    s->camera_state.recenter_t        = 0.0f;
-                    s->camera_state.recenter_from_pos = center;
-                    s->camera_state.free_camera_pos    = center;
-                    s->camera_state.free_camera_active = TRUE;
-                } else {
-                    // Ship off-screen: free camera + autopilot, anchored at the current view.
-                    s->camera_state.free_camera_pos    = center;
-                    s->camera_state.free_camera_active = TRUE;
-                }
-            }
-        }
     }
     // Detached (free camera or edit) -> zoom TOWARD THE CURSOR by pinning the point under it.
     // Following the piloted ship -> zoom about the ship. While a planet is captured the approach

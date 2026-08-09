@@ -5,9 +5,14 @@ struct game_state;
 
 // Detector radius (world units) of the static enemy: it opens fire on the flagship only while
 // the flagship is within this range. Shared by the firing AI and the overlay danger ring.
-// Set well beyond the flagship's 50k sensor layer so the enemy actually fires and its
-// projectiles sweep inward across Layer 2 -> Layer 1 -> Layer 0 for detection testing.
-#define ENEMY_DETECTOR_RADIUS 120000.0f
+//
+// This MUST sit inside the ballistic engagement envelope (19k-58k units of reach after the 0.15
+// range compression -- see assets/weapons/autocannon_mk1.weapon). combat_arena_update_enemy_ai
+// gates firing on alignment and cooldown but NOT on reach, so a detector radius beyond its own
+// shells' reach makes the enemy fire continuously at a flagship it cannot hit, draining its
+// capacitor and filling the field with shells that expire short. At 40,000 it engages just
+// outside a gauss's 36,000 reach: the player must close a little, or answer with the longlance.
+#define ENEMY_DETECTOR_RADIUS 40000.0f
 
 // Combat-arena subsystem: the projectile pool, the combat-entity mirror of the fleet + enemy,
 // and the proximity "encounter" trigger. This owns the SIMULATION half only. Rendering stays

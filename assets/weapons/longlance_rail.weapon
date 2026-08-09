@@ -9,7 +9,10 @@ icon        ic-cannon
 damage      45
 fire_rate   0.8
 proj_speed  16000
-proj_life   24
+# Uniform 0.15 range compression (see autocannon_mk1): 24 -> 3.6s, 384,000 -> 57,600 units.
+# Still the longest ballistic reach in the catalog, and now the only one that reaches past
+# what the arena look frames -- which is the right shape for the sniper.
+proj_life   3.6
 proj_radius 5.0
 cap_cost    18
 emission    0.8

@@ -19,12 +19,19 @@ static constexpr f32 HOVER_DASH_ROTATION_SPEED = 1.0f;  // rad/s
 static constexpr f32 HOVER_DASH_SEGMENTS       = 16.0f; // number of dashes around the ring
 static constexpr f32 HOVER_DASH_FILL_RATIO     = 0.5f;  // fraction of each dash segment that is visible
 static constexpr f32 HOVER_CIRCLE_THICKNESS    = 1.5f;
+// Minimum hull click radius in SCREEN pixels. Matches the 22 px reticle draw_enemy_marker paints
+// over a hostile, so the drawn affordance and the hit target are the same size at every zoom.
+static constexpr f32 SHIP_PICK_FLOOR_PX        = 22.0f;
 static constexpr bs_color HOVER_CIRCLE_COLOR   = { 0.35f, 0.85f, 0.95f, 0.85f };
 static constexpr u32   HOVER_CIRCLE_LAYER        = 50; // same as LAYER_UI in game.cpp
 static constexpr f32 BOX_SELECT_THICKNESS        = 1.0f;
 static constexpr bs_color BOX_SELECT_COLOR       = { 0.35f, 0.85f, 0.95f, 0.90f };
 static constexpr bs_color SELECTION_RECT_COLOR = { 0.35f, 0.85f, 0.95f, 0.85f };
-static constexpr f32 RTS_CLICK_THRESHOLD = 4.0f; // pixels; below this a left release counts as a click
+// Pixels; below this a left release counted as a click rather than a box drag. Retained with the
+// rest of the retired box-selection machinery (see RtsControls::update) so restoring multi-unit
+// selection is a matter of re-driving it, not re-deriving it. [[maybe_unused]] because the build
+// is -Werror on unused constants and nothing references it while selection is retired.
+[[maybe_unused]] static constexpr f32 RTS_CLICK_THRESHOLD = 4.0f;
 static constexpr f32 RTS_MOVE_MARKER_SIZE      = 12.0f;  // world units
 static constexpr f32 RTS_MOVE_MARKER_THICKNESS = 1.5f;
 static constexpr bs_color RTS_MOVE_MARKER_COLOR = { 0.35f, 0.85f, 0.95f, 0.90f };
@@ -92,10 +99,23 @@ void RtsControls::clear_fleet_orders() {
     }
 }
 // =====================================================================================
-static b8 is_point_over_ship(bs_math::HierPos2 world_pos, const Ship* ship) {
+// Hull hit-test with a SCREEN-CONSTANT pick floor, so what is drawn is what can be clicked.
+//
+// The hull's own bounding radius is a WORLD quantity, so it shrinks with zoom: the cruiser's
+// ~816 units is a 2 px target once the view is pulled back far enough to frame an engagement,
+// while draw_enemy_marker draws its reticle at a screen-constant 22 px. The player aims at the
+// 22 px marker and misses the 2 px hull. `pick_floor_world` is that same 22 px converted to
+// world units by the caller (the station hit-test below already does this with its own floor),
+// so the click target never falls below the marker the player is actually looking at.
+//
+// This is on the critical path rather than a convenience: with box selection retired, this test
+// is how a target gets designated.
+static b8 is_point_over_ship(bs_math::HierPos2 world_pos, const Ship* ship, f32 pick_floor_world) {
     if (!ship) return FALSE;
     f32 dist = vec2_length(hierpos_diff(&world_pos, &ship->origin, BS_HIERPOS_CELL_SIZE));
-    return dist <= ship_bounding_radius(ship);
+    f32 r    = ship_bounding_radius(ship);
+    if (r < pick_floor_world) r = pick_floor_world;
+    return dist <= r;
 }
 // =====================================================================================
 void RtsControls::update(f32 dt) {
@@ -116,10 +136,19 @@ void RtsControls::update(f32 dt) {
 
     (void)mouse_pos;
 
+    // Screen-constant pick floor in world units: SHIP_PICK_FLOOR_PX at the current zoom. Shared
+    // by both hover tests below so friendly and hostile hulls stay equally clickable as the view
+    // pulls back (the on-screen scale is zoom, so world units are its inverse).
+    f32 hull_pick_floor;
+    {
+        f32 z = m_state->camera_state.camera.zoom;
+        hull_pick_floor = SHIP_PICK_FLOOR_PX / (z > 1.0e-9f ? z : 1.0e-9f);
+    }
+
     // ---- Hover detection over any fleet ship ------------------------------------------
     m_hovered_ship_idx = -1;
     for (i32 i = 0; i < m_state->fleet_state.fleet.count(); ++i) {
-        if (is_point_over_ship(mouse_hp, &m_state->fleet_state.fleet.at(i).ship)) {
+        if (is_point_over_ship(mouse_hp, &m_state->fleet_state.fleet.at(i).ship, hull_pick_floor)) {
             m_hovered_ship_idx = i;
             break;
         }
@@ -135,7 +164,7 @@ void RtsControls::update(f32 dt) {
         // markers, and the marker is what the player clicks -- an attack order on a contact
         // beyond Layer 1 is a deliberate gamble, not something to block. (Was previously
         // skipped here, which made anything outside identification range unclickable.)
-        if (is_point_over_ship(mouse_hp, ce->ship)) {
+        if (is_point_over_ship(mouse_hp, ce->ship, hull_pick_floor)) {
             m_hovered_enemy_idx = i;
             break;
         }
@@ -185,7 +214,13 @@ void RtsControls::update(f32 dt) {
         // Selection is stored as (system galaxy_center, planet index): the cache slot can be
         // recycled, the center cannot. The window persists until its Close box (like the
         // station inspector); clicking empty space keeps normal RTS behavior.
-        if (lclick && ui_free && m_state->view_arena_w < 1.0f) {
+        //
+        // Requires the map look to be DOMINANT (< 0.5), not merely present (< 1.0). The left
+        // button is now the ballistic trigger, and the cross-fade band was widened to cover the
+        // compressed engagement envelope -- so "map look partly visible" now overlaps the zooms
+        // where a fight is framed, and firing past a planet would have popped its inspector.
+        // Planet browsing is a map-look activity; this keeps it on the map-look side of the band.
+        if (lclick && ui_free && m_state->view_arena_w < 0.5f) {
             i32 pick_slot = -1, pick_planet = -1;
             if (galaxy_pick_planet(m_state, (f32)mx, (f32)my, &pick_slot, &pick_planet)) {
                 m_state->show_planet_inspector = true;
@@ -243,43 +278,26 @@ void RtsControls::update(f32 dt) {
     // camera path above (free_camera_pos), so there is no separate camera.position pan branch. ----
     // ---- Selection and order input (whenever the camera is detached) -----------------------
     if (detached) {
-        // ---- Box selection input -------------------------------------------------------
-        b8 left_pressed = input_is_button_down(BUTTON_LEFT) && !input_was_button_down(BUTTON_LEFT);
-        b8 left_down = input_is_button_down(BUTTON_LEFT);
-        b8 left_released = !input_is_button_down(BUTTON_LEFT) && input_was_button_down(BUTTON_LEFT);
-        if (left_pressed && !bs_imgui_wants_mouse() && !bs_rml_wants_mouse()) {
-            m_box.active = TRUE;
-            m_box.start_x = (f32)mx;
-            m_box.start_y = (f32)my;
-            m_box.end_x = (f32)mx;
-            m_box.end_y = (f32)my;
-        }
-        if (m_box.active && left_down) {
-            m_box.end_x = (f32)mx;
-            m_box.end_y = (f32)my;
-        }
-        if (m_box.active && left_released) {
-            f32 dx = m_box.end_x - m_box.start_x;
-            f32 dy = m_box.end_y - m_box.start_y;
-            if (dx * dx + dy * dy < RTS_CLICK_THRESHOLD * RTS_CLICK_THRESHOLD) {
-                // Click: select the hovered fleet ship (or none).
-                m_state->fleet_state.fleet.clear_selection();
-                if (m_hovered_ship_idx >= 0) {
-                    m_state->fleet_state.fleet.set_selected(m_hovered_ship_idx, TRUE);
-                }
-            } else {
-                // Drag: box-select all fleet ships whose origins fall inside the world box.
-                bs_math::HierPos2 p0 = game_screen_to_true_hierpos(m_state, Vec2{ m_box.start_x, m_box.start_y });
-                bs_math::HierPos2 p1 = game_screen_to_true_hierpos(m_state, Vec2{ m_box.end_x, m_box.end_y });
-                m_state->fleet_state.fleet.clear_selection();
-                for (i32 i = 0; i < m_state->fleet_state.fleet.count(); ++i) {
-                    if (ship_inside_world_box(&m_state->fleet_state.fleet.at(i).ship, p0, p1)) {
-                        m_state->fleet_state.fleet.set_selected(i, TRUE);
-                    }
-                }
-            }
-            m_box.active = FALSE;
-        }
+        // ---- Box / click selection: RETIRED ---------------------------------------------
+        // The game has ONE hull, so there was never more than one thing to select: every box
+        // drag and every click resolved to "the ship" or "nothing". Meanwhile LEFT BUTTON is
+        // the ballistic trigger in both control modes, and it could not be, because selection
+        // owned it while detached (that is exactly why game.cpp's fire gate tested
+        // free_camera_active). Retiring selection is what frees it.
+        //
+        // Kept, not deleted, following the convention the M and P keys and
+        // combat_arena_update_enemy_orbit already set: RtsSelectionBox, m_box,
+        // ship_inside_world_box, draw_rect_from_screen_box and RTS_CLICK_THRESHOLD all still
+        // compile and are still correct -- they are simply no longer driven. m_box.active stays
+        // FALSE for the process lifetime, so draw()'s drag-box branch is inert without a change
+        // there. Restoring multi-unit selection means re-driving this, not rewriting it.
+        //
+        // The hull is instead held permanently selected, so everything downstream that asks
+        // "what is selected" (the RMB order path below, jump mode's any_selected gate, X's
+        // per-selection attack clear, and draw()'s selection rect) behaves exactly as it did
+        // after a click, every frame, with no click.
+        if (m_state->fleet_state.fleet.count() > 0)
+            m_state->fleet_state.fleet.set_selected(0, TRUE);
         // ---- FTL jump mode toggle (J) --------------------------------------------------
         Fleet& fleet = m_state->fleet_state.fleet;
         if (input_is_key_down(KEY_J) && !input_was_key_down(KEY_J)) {
@@ -336,19 +354,13 @@ void RtsControls::update(f32 dt) {
                 }
             }
         }
-        // ---- Number-row piloting selection (1-4) while detached ------------------------
-        if (input_is_key_down(KEY_NUM1) && !input_was_key_down(KEY_NUM1)) {
-            if (m_state->fleet_state.fleet.count() > 0) m_state->fleet_state.fleet.set_piloted(0);
-        }
-        if (input_is_key_down(KEY_NUM2) && !input_was_key_down(KEY_NUM2)) {
-            if (m_state->fleet_state.fleet.count() > 1) m_state->fleet_state.fleet.set_piloted(1);
-        }
-        if (input_is_key_down(KEY_NUM3) && !input_was_key_down(KEY_NUM3)) {
-            if (m_state->fleet_state.fleet.count() > 2) m_state->fleet_state.fleet.set_piloted(2);
-        }
-        if (input_is_key_down(KEY_NUM4) && !input_was_key_down(KEY_NUM4)) {
-            if (m_state->fleet_state.fleet.count() > 3) m_state->fleet_state.fleet.set_piloted(3);
-        }
+        // ---- Number-row piloting selection (1-4) while detached: RETIRED ------------------
+        // The number row is the WEAPON FIRE GROUP selector in both control modes now (game.cpp),
+        // and it cannot be both. With one hull this path was already inert -- NUM2..NUM4 were
+        // guarded on fleet counts that never occur, and NUM1 re-piloted the ship that was
+        // already piloted -- so retiring it costs nothing and removes the collision. Retired in
+        // place per the same convention as the box selection above; Fleet::set_piloted is
+        // untouched and still drives the HUD path.
         m_piloted_idx = m_state->fleet_state.fleet.piloted_index();
     }
 }
@@ -451,7 +463,6 @@ void RtsControls::hud_toggle_pilot_mode() {
         m_state->camera_state.recentering       = TRUE;
         m_state->camera_state.recenter_t        = 0.0f;
         m_state->camera_state.recenter_from_pos = game_camera_center_hierpos(m_state);
-        m_state->camera_state.global_free_camera_saved = FALSE; // deliberate piloting intent (Model A)
         m_free_camera_vel = Vec2{ 0.0f, 0.0f };
         // Note: only the piloted ship's order is cleared inside set_piloted().
         // The rest of the fleet continues its current Move/Attack orders.
@@ -459,7 +470,6 @@ void RtsControls::hud_toggle_pilot_mode() {
         // Piloting -> detach to the free-camera RTS view.
         m_state->camera_state.free_camera_active = TRUE;
         m_state->camera_state.free_camera_pos = game_camera_center_hierpos(m_state);
-        m_state->camera_state.global_free_camera_saved = TRUE; // deliberate free-camera intent (Model A)
         // Existing fleet orders are preserved; the previously piloted ship
         // coasts until a new order is issued.
     }

@@ -9,7 +9,12 @@ icon        ic-cannon
 damage      6
 fire_rate   12.0
 proj_speed  10000
-proj_life   14
+# Reach is proj_speed * proj_life, and proj_life IS the flight time to maximum reach. The
+# whole ballistic catalog was scaled by 0.15 (14 -> 2.1s, 140,000 -> 21,000 units) so a shot
+# lands in about two seconds instead of fourteen, and the engagement frames on screen. The
+# factor is uniform across all four ballistics, so every authored balance relationship
+# between them is unchanged -- this compresses range, it does not re-tune the catalog.
+proj_life   2.1
 proj_radius 3.0
 cap_cost    1.5
 emission    0.5

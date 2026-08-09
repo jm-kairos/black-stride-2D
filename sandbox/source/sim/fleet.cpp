@@ -112,9 +112,10 @@ void FleetShip::update_attack(game_state* s, f32 dt) {
     f32 max_rot = m.max_turn * dt;
     sh->angle += clampf(angle_diff, -max_rot, max_rot);
     fl->angular_velocity = 0.0f;
-    // Every mounted weapon turret tracks the target (visual traverse, arc-clamped).
-    for (i32 hpi = 0; hpi < sh->hardpoint_count; ++hpi)
-        if (sh->mounts[hpi]) ship_turret_aim_at(sh, hpi, to_target);
+    // Turret tracking moved BELOW, to the engaging mount only -- see the note after `w` is
+    // resolved. It used to slew EVERY mounted turret onto the target here, which now fights the
+    // player: game_update aims the fire selection at the cursor earlier in the same frame, and
+    // update_autopilot runs after it, so this loop overwrote the player's aim every frame.
     // Engagement geometry is driven by the WEAPONS THIS SHIP ACTUALLY CARRIES, not by a fixed
     // distance. `fire_reach` is the reach of the weapon that bears on the target (it decides
     // whether a shot can arrive at all); `approach_reach` is the longest reach aboard (it decides
@@ -133,6 +134,12 @@ void FleetShip::update_attack(game_state* s, f32 dt) {
         whp = ship_select_bearing_weapon(sh, to_target);
     }
     Weapon* w = (whp >= 0) ? sh->mounts[whp] : nullptr;
+    // ONLY the engaging mount tracks the designated target. Every other turret is left alone so
+    // the weapons in the player's fire selection keep following the cursor (game_update sets that
+    // aim earlier in the same frame; this runs after it and would otherwise stomp it). The result
+    // is what the player expects while shooting under a standing designation: the launcher holds
+    // on its target, the guns go where they are pointed.
+    if (whp >= 0) ship_turret_aim_at(sh, whp, to_target);
     f32 fire_reach = weapon_effective_reach(w);
     f32 approach_reach = 0.0f;
     if (sh->weapon_override >= 0) {
@@ -169,7 +176,21 @@ void FleetShip::update_attack(game_state* s, f32 dt) {
     // Fire when facing the target, outside minimum range, and within the bearing weapon's OWN
     // reach -- so a long-legged launcher engages at its full authored range instead of being
     // capped by a hardcoded constant.
-    if (w && fabsf(angle_diff) < RTS_ATTACK_FACE_ANGLE && dist >= RTS_ATTACK_MIN_RANGE && dist <= fire_reach) {
+    //
+    // GUIDED ORDNANCE ONLY. An attack order is the MISSILE interface; unguided offence belongs to
+    // the player's left button (game.cpp's fire loop), in both control modes. Auto-firing the guns
+    // here would put the passive "designate and it shoots for you" model back into the exact mode
+    // where the player has the most attention free to aim -- and it would beat them at it, because
+    // the lead solution below is something the manual path deliberately does not do. A missile has
+    // no such asymmetry to create: it steers itself after launch, so there is no aiming skill to
+    // take away, and firing it is the whole point of issuing the order.
+    //
+    // Note this reaches ONLY the player's own fleet: update_autopilot walks Fleet::m_ships, while
+    // NPC agents fire through sim/ai_ship.cpp and the static enemy through combat_arena.cpp. Their
+    // shots still lead. So the enemy is a better marksman than an unskilled player and a worse one
+    // than a skilled player, which is the intended shape.
+    b8 guided = (w && w->wkind == WEAPON_KIND_MISSILE);
+    if (w && guided && fabsf(angle_diff) < RTS_ATTACK_FACE_ANGLE && dist >= RTS_ATTACK_MIN_RANGE && dist <= fire_reach) {
         {
             // Each shot leaves from its own hardpoint, honoring the slot's traverse arc.
             {

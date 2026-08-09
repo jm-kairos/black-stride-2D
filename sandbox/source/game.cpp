@@ -589,9 +589,6 @@ b8 game_init(Game* game_inst) {
 
     s->view.mode            = MODE_GLOBAL;
 
-    // Control-mode intent starts as piloting (matches free_camera_active's FALSE default) so the
-    // first galaxy-map round trip restores piloting.
-    s->camera_state.global_free_camera_saved = FALSE;
 
     // Camera->ship recenter glide (TAB re-pilot / HUD pilot button / galaxy on-screen re-entry).
     s->camera_state.recentering       = FALSE;
@@ -2201,7 +2198,11 @@ b8 game_update(Game* game_inst, f32 dt) {
 
     // ---- SHIFT key: toggle alternative mouse-follow movement system in global mode -----------
 
-    if (input_is_key_down(KEY_LSHIFT) && !input_was_key_down(KEY_LSHIFT) && s->view.mode == MODE_GLOBAL && !s->camera_state.free_camera_active) {
+    // Mouse-follow turning is a PILOTING control, so it follows the camera being attached, not the
+    // render look. The `view.mode == MODE_GLOBAL` term it used to carry was implied by
+    // !free_camera_active back when the zoom crossing force-detached; now that piloting persists at
+    // any zoom, keeping it would have made the toggle silently dead below ZOOM_MIN.
+    if (input_is_key_down(KEY_LSHIFT) && !input_was_key_down(KEY_LSHIFT) && !s->camera_state.free_camera_active) {
 
         s->view.alt_movement_active = !s->view.alt_movement_active;
 
@@ -2249,8 +2250,6 @@ b8 game_update(Game* game_inst, f32 dt) {
             s->camera_state.free_camera_active       = TRUE;
 
             s->camera_state.free_camera_pos          = game_camera_center_hierpos(s);
-
-            s->camera_state.global_free_camera_saved = TRUE; // deliberate free-camera intent (Model A)
 
             action_log_push(s, "Auto-pilot / RTS - free camera.");
 
@@ -2743,11 +2742,18 @@ b8 game_update(Game* game_inst, f32 dt) {
 
         // ---- Weapon-group selection (keys 1-5) ---------------------------------------------
         // Deliberately OUTSIDE the firing gate below so group selection works with the Arsenal
-        // inspector open (assign in the matrix, then test). Piloting-only: while the free
-        // camera is detached the number row belongs to RTS unit selection (rts_controls).
+        // inspector open (assign in the matrix, then test).
         // Also suppressed by the hardpoint editor and any UI layer capturing the KEYBOARD.
         // (Group ASSIGNMENT lives in the inspector's Fire groups matrix - "gm:" hud_action.)
-        if (!s->editor.edit_mode_active && !s->camera_state.free_camera_active &&
+        //
+        // NO LONGER piloting-only. The row used to be suppressed while the free camera was
+        // detached because there it belonged to RTS unit selection -- but that was a binding
+        // collision, not a design decision, and with one hull the RTS number row only ever
+        // re-selected the ship that was already piloted (now retired in rts_controls.cpp).
+        // Fire groups are combat input in BOTH control modes, and the weapon hub they drive was
+        // never mode-gated, so suppressing the row left the hub showing a group the player had
+        // no keyboard way to change while detached.
+        if (!s->editor.edit_mode_active &&
             !bs_imgui_wants_keyboard() && !bs_rml_wants_keyboard()) {
 
             ship_groups_sanitize(psh);
@@ -2774,7 +2780,17 @@ b8 game_update(Game* game_inst, f32 dt) {
 
         // Also suppressed while the flagship inspector is open: it is a management window, so a
         // left-click anywhere (inside or outside its bounds) must never fire the weapons.
-        if (!s->editor.edit_mode_active && !s->camera_state.free_camera_active && !s->show_flagship_inspector && !bs_imgui_wants_mouse() && !bs_rml_wants_mouse()) {
+        //
+        // NO LONGER gated on free_camera_active. The left button is now the ballistic trigger in
+        // BOTH control modes -- it was suppressed while detached only because RTS box/click
+        // selection owned the button there, and that selection is retired (sim/rts_controls.cpp).
+        // Detached is in fact where aiming is EASIEST: the autopilot is flying, so the player's
+        // whole attention is on the shot. Unguided offence is the player's in both modes; what
+        // stays automated is guided ordnance and point defense.
+        //
+        // control_ship_global still self-guards on free_camera_active, so freeing the trigger
+        // does not also hand back flight control -- detached still means the autopilot flies.
+        if (!s->editor.edit_mode_active && !s->show_flagship_inspector && !bs_imgui_wants_mouse() && !bs_rml_wants_mouse()) {
 
             // Turret traverse: every weapon in the CURRENT SELECTION tracks the cursor. Under a
             // micro-selection override that is the one chosen weapon, so the hull art shows at a
@@ -2948,15 +2964,20 @@ b8 game_update(Game* game_inst, f32 dt) {
 
     if (!s->editor.edit_mode_active) {
 
-        // AUTOPILOT: drive ordered ships toward their targets. Only skip the flagship when it is
-
-        // actually under manual control -- that is, in the arena look with the camera following it
-
-        // (MODE_GLOBAL && !free_camera_active). In the galaxy-map look, or with a detached free
-
-        // camera, nothing pilots the flagship, so it must obey its move/attack order like the rest.
-
-        b8  manually_piloting = (s->view.mode == MODE_GLOBAL) && !s->camera_state.free_camera_active;
+        // AUTOPILOT: drive ordered ships toward their targets. Only skip the piloted ship when it
+        // is actually under manual control -- i.e. whenever the camera is ATTACHED. Detached,
+        // nothing is flying it by hand, so it obeys its move/attack order like any other hull.
+        //
+        // The `view.mode == MODE_GLOBAL` term this used to carry is GONE, and removing it was
+        // mandatory, not tidying. It was only ever redundant belt-and-braces: the zoom crossing
+        // force-detached the camera, so `view.mode != MODE_GLOBAL` already implied
+        // free_camera_active. Now that zoom no longer touches the control mode
+        // (sim/camera_controller.cpp), piloting below ZOOM_MIN is reachable -- and with the old
+        // term still here that state read as "not manually piloting", so auto_skip would be -1 and
+        // the AUTOPILOT WOULD DRIVE THE SHIP THE PLAYER IS FLYING: control_ship_global adding
+        // thrust while update_move/update_attack writes ship->angle directly and zeroes
+        // angular_velocity. Two controllers, one hull, fighting every frame.
+        b8  manually_piloting = !s->camera_state.free_camera_active;
 
         i32 auto_skip = manually_piloting ? piloted_idx : -1;
 
@@ -3055,8 +3076,6 @@ b8 game_update(Game* game_inst, f32 dt) {
 
                 s->camera_state.free_camera_active = FALSE; // hand control back to ship-follow
 
-                s->camera_state.global_free_camera_saved = FALSE; // deliberate piloting intent (Model A)
-
             }
 
         }
@@ -3068,7 +3087,24 @@ b8 game_update(Game* game_inst, f32 dt) {
         // keep it centred. WASD is a small bounded pan (it fights the correction). Engage/release
         // ease via `weight`. PURE CAMERA: the simulation (planet positions) is untouched.
         // galaxy_map_update_orbits ran just above, so positions match this frame's render.
-        if (!s->camera_state.recentering) {
+        //
+        // DETACHED ONLY. This is a BROWSING affordance, and it used to force free_camera_active on
+        // at the moment of capture -- the third place a zoom gesture silently took the helm, and
+        // the one left over after the ZOOM_MIN hand-off was removed. Under TAB-only that has to go,
+        // or the wheel still steals control, just at a different threshold. Gating capture on the
+        // camera already being detached is the right cut rather than merely dropping the assignment:
+        // while attached the camera is pinned to the ship, so a planet follow could not take effect
+        // anyway -- the two would simply fight over the same centre every frame.
+        if (!s->camera_state.free_camera_active) {
+            // Attached: make sure a capture from a previous detached spell cannot persist. TAB
+            // already clears this, but leaving the release to one input site is what let this state
+            // survive a mode change in the first place.
+            s->planet_approach.engaged   = FALSE;
+            s->planet_approach.candidate = FALSE;
+            s->planet_approach.weight    = 0.0f;
+            s->planet_approach.leaving   = FALSE;
+        }
+        if (!s->camera_state.recentering && s->camera_state.free_camera_active) {
             static const f32 AP_SIZE_LO_PX   = 4.0f;    // apparent planet size where capture begins (also where the hold fades out)
             static const f32 AP_SIZE_HI_PX   = 16.0f;   // ...and where it is fully size-eligible
             static const f32 AP_BIG_PX       = 24.0f;   // already this big + centred -> engage w/o zooming
@@ -3185,7 +3221,8 @@ b8 game_update(Game* game_inst, f32 dt) {
                 ap.planet_abs_prev = best_target;
                 ap.weight          = 1.0f;                        // instant full follow -> no drift/lag (prevents shoot)
                 ap.settle_t        = AP_SETTLE_DUR;               // smooth ease-to-centre instead of a hard snap
-                s->camera_state.free_camera_active = TRUE;
+                // No free_camera_active = TRUE here any more: the block only runs while already
+                // detached, so capture can no longer change the control mode behind the player.
                 s->camera_state.free_camera_pos    = cam_center;  // start the ease from the CURRENT view (no jump);
                                                                   // step 4 glides it to the planet over AP_SETTLE_DUR
                 same_as_held = TRUE;

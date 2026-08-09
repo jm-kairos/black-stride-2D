@@ -2225,17 +2225,11 @@ struct game_state {
 
     bs_math::HierPos2 free_camera_pos;
 
-    // Control-mode intent (Model A): remembers whether the player deliberately wants piloting
-
-    // (FALSE) or auto-pilot / free camera (TRUE) in MODE_GLOBAL. Maintained at the deliberate
-
-    // toggle sites (TAB, HUD pilot button, recenter completion) -- NOT snapshotted on the galaxy
-
-    // round trip -- so the temporary off-screen free-camera fallback never overwrites a piloting
-
-    // intent. update_zoom_and_mode restores this on re-entry; piloting stays sticky.
-
-    b8         global_free_camera_saved;
+    // (Removed: global_free_camera_saved. It remembered piloting-vs-free-camera intent across a
+    // galaxy-map round trip, which only existed because crossing ZOOM_MIN force-detached the
+    // camera. Zoom no longer decides the control mode -- TAB and the HUD button are the only
+    // things that do -- so there is no round trip to survive and nothing to remember:
+    // free_camera_active alone is the state. See sim/camera_controller.cpp.)
 
 
 

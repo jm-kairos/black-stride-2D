@@ -8,7 +8,8 @@ icon        ic-cannon
 damage      15
 fire_rate   5.0
 proj_speed  12000
-proj_life   20
+# Uniform 0.15 range compression (see autocannon_mk1): 20 -> 3.0s, 240,000 -> 36,000 units.
+proj_life   3.0
 proj_radius 4.0
 cap_cost    4
 emission    0.6
