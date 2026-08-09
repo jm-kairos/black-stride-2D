@@ -67,14 +67,16 @@ all arrive through `weapon_hub.cpp`, which polls a mouse button and writes an ac
   opacity is per-state (`hub_look_opacity`), so an out-of-range slot recedes as a whole instead
   of just losing its border — but a *selected* slot keeps a high-opacity border and label,
   because out-of-range weapons stay selectable and the player must see which one is armed.
-- **The weapon hub is NOT mode-gated either**, for the same reason and one more: zooming past
-  `ZOOM_MIN` both flips `view.mode` and force-detaches the camera
-  (`sim/camera_controller.cpp`), so gating the hub's *input* on `view.mode` or
-  `free_camera_active` would kill it exactly when the player zooms out to engage something far
-  away — and the override drives the autopilot attack order, which is how that fight is
-  actually run. `game_update` calls `weapon_hub_update` above the piloting branch, gated only
-  on the editor (which owns middle-mouse for camera pan), the flagship inspector, and the two
-  UI cursor-capture checks. It survives an arena↔map crossing mid-hold.
+- **The weapon hub is NOT mode-gated either**, for the same reason and one more: the override it
+  commits is read by *both* fire paths — the player's left-button ballistic trigger, which now
+  runs in both control modes, and the autopilot's guided-ordnance engagement — so gating the
+  hub's *input* on `view.mode` or `free_camera_active` would kill it in a mode where it is still
+  load-bearing. `game_update` calls `weapon_hub_update` above the piloting branch, gated only on
+  the editor (which owns middle-mouse for camera pan), the flagship inspector, and the two UI
+  cursor-capture checks. It survives an arena↔map crossing mid-hold.
+  *(The older form of this argument leaned on zoom force-detaching the camera past `ZOOM_MIN`.
+  It no longer does — zoom and the control mode are decoupled — but the conclusion is unchanged
+  and now rests on the override mattering in both modes rather than on a coupling.)*
 - **Radar blips are back-projected to the last sweep tick.** `snapshot_contacts_to_last_sweep`
   rewrites each unidentified contact's position along its velocity so blips step rather than
   slide; the comment explains this works without history because ballistic contacts move at
@@ -137,5 +139,6 @@ pixels. A new heat source kind is an entry appended to the `MBSource` array in
 `sandbox/source/render/defense_laser_overlay.{cpp,h}`,
 `sandbox/source/render/out_sensor_detection_fx.{cpp,h}`, `sandbox/source/sim/heat_map.{cpp,h}`
 
-**Last verified:** 2026-08-07, commit `e83a88d` + the weapon-hub group-filter change (hub slots
-now follow the active fire group; 4 slots → 8, nearest-direction hit-test)
+**Last verified:** 2026-08-09, commit `b1baf31` (hub rationale no longer rests on
+the zoom/detach coupling; the reach ring is on-screen at combat framing for the first time now
+that ballistic reach is 19k–58k units)

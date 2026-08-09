@@ -47,14 +47,28 @@ InWorldOverlays, FrameOrchestrator, GameStateModel.
 - Attack range is `weapon_effective_reach * RTS_ATTACK_REACH_FRAC` (0.85) with a 10000-unit
   fallback for an unarmed hull — the RTS half of ShipCombatModel's single-source-of-truth
   guarantee.
+- **An attack order is the MISSILE interface: `update_attack` fires GUIDED ORDNANCE ONLY.**
+  Unguided offence belongs to the player's left button (`game.cpp`'s fire loop) in *both* control
+  modes. Auto-firing the guns here would restore the passive "designate and it shoots for you"
+  model in the exact mode where the player has the most attention free to aim — and would beat
+  them at it, because the first-order lead solution below is something the manual path
+  deliberately does not do. A missile creates no such asymmetry: it steers itself after launch,
+  so there is no aiming skill to take away. The gate is `w->wkind == WEAPON_KIND_MISSILE`.
+- **This reaches only the PLAYER's own fleet.** `update_autopilot` walks `Fleet::m_ships`; NPC
+  agents fire through `sim/ai_ship.cpp` and the static enemy through `sim/combat_arena.cpp`.
+  Their shots still lead. So the enemy out-shoots an unskilled player and loses to a skilled one,
+  which is the intended shape — and no player-vs-NPC branch was needed to get it.
+- **Only the ENGAGING mount tracks the designated target.** `update_attack` used to slew every
+  mounted turret onto the target, which now fights the player: `game_update` aims the fire
+  selection at the cursor earlier in the same frame and `update_autopilot` runs after it, so the
+  loop overwrote that aim every frame. Narrowing it to `whp` leaves the launcher holding its
+  target while the guns go where they are pointed.
 - **The autopilot honours `Ship::weapon_override`.** When the player has micro-selected a single
   weapon, `update_attack` engages with that mount alone *and* takes its reach as the approach
-  distance — so choosing a short cannon makes the ship close in rather than loitering at the
-  missile standoff firing nothing. The field is `-1` on every AI hull and every escort, so their
-  "best weapon that bears" behaviour is untouched. Firing goes through
-  `ship_weapon_fire_state`, the same validator the manual path uses, and spawns through
-  `ship_hardpoint_fire`, the same spawner — so an autopilot-driven ship fires a multi-barrel
-  weapon from its barrels exactly as a manually flown one does.
+  distance — so the hub choice decides both what fires and where the ship parks. The field is
+  `-1` on every AI hull and every escort, so their "best weapon that bears" behaviour is
+  untouched. Firing goes through `ship_weapon_fire_state`, the same validator the manual path
+  uses, and spawns through `ship_hardpoint_fire`, the same spawner.
 
 **Extension points:** A new order type means a flag and target field on `FleetShip`, an
 `order_*` method on `Fleet`, an autopilot `update_*` invoked from `update_autopilot`, and a
@@ -94,4 +108,5 @@ characteristics without touching this code.
 **Source paths:** `sandbox/source/sim/fleet.{cpp,h}`, `sandbox/source/sim/ship_control.{cpp,h}`,
 `sandbox/source/sim/steering.{cpp,h}`
 
-**Last verified:** 2026-08-08, commit `65f1ccb`
+**Last verified:** 2026-08-09, commit `b1baf31` (attack orders fire guided ordnance
+only; turret tracking narrowed to the engaging mount)

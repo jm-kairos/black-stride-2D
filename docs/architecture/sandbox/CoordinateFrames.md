@@ -38,8 +38,12 @@ SystemContentRendering, Territory, FleetControl, WorldEditor.
   `render_from_hierpos` subtracts in integer cell space. Both are offered and picking the wrong
   one silently reintroduces the precision loss the coordinate refactor removed. **No
   compile-time distinction.**
-- `view_arena_weight` smoothsteps across `[VIEW_MAP_ZOOM 0.05, VIEW_ARENA_ZOOM 0.14]`, a band
-  chosen to straddle the old hard mode-flip point (`ZOOM_MIN` 0.08) so the two looks cross-fade.
+- **`view_arena_weight` smoothsteps across `[VIEW_MAP_ZOOM 0.009, VIEW_ARENA_ZOOM 0.026]`, and
+  the band MUST straddle `ZOOM_MIN` (0.015) in `sim/camera_controller.cpp`** so the two looks
+  cross-fade around the label flip. That is a different constant in a different file with nothing
+  but the comments at both sites tying them: move one without the other and the label flips at a
+  zoom where the looks have already finished cross-fading, or vice versa. Widened from
+  `[0.05, 0.14]` so the compressed ballistic engagement envelope frames inside the arena look.
 - **`get_system_zone` hardcodes the player as `s->galaxy.map_entities[0]`** — index 0 is assumed
   to be the player fleet. Stated nowhere and invisible at the call site.
 - Zone numbering is outside-in (0 = beyond the outermost orbit), the inverse of the intuitive
@@ -79,4 +83,5 @@ place for anything that needs no `game_state`.
 **Source paths:** `sandbox/source/core/view_transform.{cpp,h}`,
 `sandbox/source/core/cursor_world.{cpp,h}`, `sandbox/source/core/galaxy_coords.{cpp,h}`
 
-**Last verified:** 2026-08-07, commit `812680c`
+**Last verified:** 2026-08-09, commit `b1baf31` (cross-fade band widened with
+`ZOOM_MIN`)

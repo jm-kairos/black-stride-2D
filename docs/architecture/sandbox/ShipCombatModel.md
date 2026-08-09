@@ -68,14 +68,26 @@ the subsystem while sitting outside `ship.h`'s seven.)*
   spends nothing — the caller commits via `ship_try_spend_cap` only after `WEAPON_FIRE_READY`.
   *(Until the micro-selection work the manual path never checked reach at all, so a click far
   beyond the drawn range ring still fired and still drained the bank.)*
-- **Manual fire control is gated on camera ATTACHMENT, not on `view.mode`.** `game_update`'s
-  piloting branch has no mode test: the arena↔galaxy flip is a label over one coordinate space,
-  so flying, turret traverse, the fire-group row and trigger firing all keep working at any
-  zoom in either look. What separates the two control schemes is `free_camera_active`, which
-  every block inside gates on — `control_ship_global` self-guards (`sim/ship_control.cpp:21`),
-  and the number row and the trigger are suppressed while detached because RtsControl owns the
-  left button there (it is box/click selection, not fire). Detached engagement therefore runs
-  through attack orders, which honour the override.
+- **The trigger is mode-independent; only FLIGHT is gated on camera attachment.** `game_update`'s
+  piloting branch has no mode test and no longer has a detach test either: turret traverse, the
+  fire-group number row and trigger firing all run at any zoom, in either look, attached or
+  detached. The left button is the ballistic trigger in **both** control modes — it was
+  previously suppressed while detached only because RtsControl's box/click selection owned the
+  button there, and that selection is retired. Detached is in fact where aiming is *easiest*: the
+  autopilot is flying, so the player's whole attention is on the shot. What still separates the
+  two schemes is that `control_ship_global` self-guards on `free_camera_active`
+  (`sim/ship_control.cpp:21`), so detached still means the autopilot flies.
+- **Unguided offence is the player's; guided ordnance and defences are automated.** That one rule
+  decides every fire site: ballistics require the trigger, missiles fire from an attack order
+  (`sim/fleet.cpp`), point defense engages on its own doctrine. `WeaponKind` already expresses
+  the distinction, so a new weapon inherits the answer without reopening it.
+- **`proj_life` IS the flight time to maximum reach**, because `weapon_effective_reach` is
+  `proj_speed * proj_life`. Tuning engagement distance and tuning shot travel time are therefore
+  the same edit, and the whole ballistic catalog was scaled by a uniform 0.15 (reach 19k–58k,
+  flight 2.1–3.6 s) precisely so every authored balance relationship between the four ballistics
+  survived — `trident_mk1` documents itself as a third of `longlance_rail`'s reach, and a
+  per-weapon retune would have silently broken that. Compress range by scaling the catalog, not
+  weapon by weapon.
 - **The manual trigger is level-triggered, not edge-triggered.** Holding the left button
   re-runs the whole selection loop every frame; per-weapon rate limiting comes entirely from
   `WEAPON_FIRE_RELOADING`, so a weapon fires at its own authored rate and nothing bypasses the
@@ -217,6 +229,5 @@ it reports affordability, and the caller commits via `ship_try_spend_cap`.
 `sandbox/source/sim/weapon.{cpp,h}`, `sandbox/source/sim/weapon_def.{cpp,h}`,
 `sandbox/source/sim/projectile.{cpp,h}`, `sandbox/source/render/ship_visual.{cpp,h}`
 
-**Last verified:** 2026-08-08, commit `65f1ccb` (cannon mount art, data-driven muzzles, and the
-limited-traverse slew fix; supersedes the mount-art and multi-barrel notes carried inline here
-while that work was uncommitted)
+**Last verified:** 2026-08-09, commit `b1baf31` (left button is the ballistic
+trigger in both control modes; uniform 0.15 ballistic range compression)

@@ -82,9 +82,14 @@ configurations from one code path. A new detection rule belongs in `sensor_readi
 - "Hostile" in the sensor path is a single hardcoded comparison against `FACTION_PLAYER`, not a
   diplomacy query — unlike the projectile hit path, which does consult
   `galaxy_history_faction_is_hostile`.
-- `ENEMY_DETECTOR_RADIUS` (120000) is documented as deliberately larger than the flagship's
-  sensor layers **so that the sensor system gets exercised for testing** — a gameplay constant
-  chosen for debugging.
+- **`ENEMY_DETECTOR_RADIUS` (40000) must stay inside the ballistic engagement envelope**
+  (19k–58k units of reach after the 0.15 range compression).
+  `combat_arena_update_enemy_ai` gates firing on alignment and cooldown but **not on reach**, so
+  a detector radius beyond its own shells' reach makes the enemy fire continuously at a flagship
+  it cannot hit, draining its capacitor and filling the field with shells that expire short. It
+  was 120000, chosen to exceed the sensor layers *for detection testing* — a debugging value that
+  sat on the critical path of the fight. Its comment also cited a "50k sensor layer" that no
+  longer exists (the layers are 250k/500k/1M).
 - **The point-defense gate fractions `{0.6, 0.8, 1.0}` are the third copy of those numbers**,
   alongside identical tables in `render/defense_laser_overlay.cpp` and documented tiers in the
   engine's `renderer/bs_rml.h`.
@@ -97,4 +102,5 @@ configurations from one code path. A new detection rule belongs in `sensor_readi
 **Source paths:** `sandbox/source/sim/combat_arena.{cpp,h}`,
 `sandbox/source/sim/point_defense.{cpp,h}`, `sandbox/source/sim/sensor_system.{cpp,h}`
 
-**Last verified:** 2026-08-08, commit `65f1ccb`
+**Last verified:** 2026-08-09, commit `b1baf31` (detector radius brought inside the
+compressed ballistic envelope)
