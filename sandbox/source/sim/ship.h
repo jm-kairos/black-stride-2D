@@ -495,6 +495,12 @@ bs_math::HierPos2 ship_hardpoint_fire_origin(const Ship* ship, i32 hp_index);
 // apart -- that failure would have been silent, and only visible mid-traverse.
 bs_math::HierPos2 ship_muzzle_origin(const Ship* ship, i32 hp_index, i32 muzzle_index);
 
+// The ship-local angle this mount's barrel WANTS to sit at to bear on `world_dir`, clamped into
+// the hardpoint's traverse arc. THE one place that maths lives: ship_turret_aim_at drives the
+// slew toward it and ship_weapon_fire_state measures how far the barrel still has to travel, so
+// "where the turret is going" and "is it there yet" cannot disagree.
+f32 ship_hardpoint_aim_goal(const Ship* ship, i32 hp_index, bs_math::Vec2 world_dir);
+
 // THE spawn site: put this mount's shot(s) in the world, along `world_dir`, with
 // `ship_velocity` added. Every fire-control surface routes through it -- the manual
 // trigger, the RTS attack order and both NPC gunners -- which is what makes a weapon's
@@ -587,6 +593,7 @@ enum WeaponFireState : u8 {
     WEAPON_FIRE_RELOADING,      // cooling down
     WEAPON_FIRE_OUT_OF_RANGE,   // target beyond weapon_effective_reach (armed, holds fire)
     WEAPON_FIRE_NO_BEARING,     // target outside this mount's traverse arc
+    WEAPON_FIRE_SLEWING,        // in arc, but the barrel is still training onto it
     WEAPON_FIRE_STARVED,        // capacitor cannot afford the shot
     WEAPON_FIRE_DISABLED,       // empty slot, or the mount is knocked out
 };

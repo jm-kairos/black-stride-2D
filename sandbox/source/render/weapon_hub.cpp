@@ -348,6 +348,10 @@ static void hub_draw_slot(game_state* s, const Ship* ship, i32 slot, i32 hp,
                                            cooldown = ship->mounts[hp]->cooldown_progress(); break;
             case WEAPON_FIRE_OUT_OF_RANGE: look = HUB_FADED;     status = "OUT OF RANGE"; break;
             case WEAPON_FIRE_NO_BEARING:   look = HUB_FADED;     status = "NO BEARING";   break;
+            // Transient and self-resolving, so it reads as RELOADING does -- the weapon is
+            // working, not blocked. HUB_FADED would say "this slot is unavailable", which is
+            // the wrong story for a turret that is already swinging onto the target.
+            case WEAPON_FIRE_SLEWING:      look = HUB_RELOADING; status = "TRAINING";     break;
             case WEAPON_FIRE_STARVED:      look = HUB_FADED;     status = "NO POWER";     break;
             default:                       look = HUB_DISABLED;  status = "DISABLED";     break;
         }

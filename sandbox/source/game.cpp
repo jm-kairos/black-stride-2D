@@ -2905,6 +2905,10 @@ b8 game_update(Game* game_inst, f32 dt) {
                         case WEAPON_FIRE_NO_BEARING:   ++blocked; continue;   // outside its arc
 
                         case WEAPON_FIRE_RELOADING:              continue;   // cooling down: silent
+                        // Barrel still training onto the target. Silent like RELOADING: it
+                        // resolves in a fraction of a second and reporting it would fire an
+                        // action-log line on every press that beat the turret.
+                        case WEAPON_FIRE_SLEWING:                continue;
 
                         case WEAPON_FIRE_OUT_OF_RANGE: ++ranged;  continue;   // armed, holds fire
 

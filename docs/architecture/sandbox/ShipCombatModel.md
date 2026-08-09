@@ -18,7 +18,7 @@ damage (CombatArena), and does not own drawing — `render/ship_visual` here is 
 `ship_try_spend_cap`, `ship_capacitor_update`, `ship_collider_corners`, `ship_bounding_radius`,
 `ship_local_dir`, `ships_collide`, `hardpoint_accepts`, `hardpoint_fits_module`,
 `ship_first_free_hardpoint`, `ship_hardpoint_fire_origin`, `ship_muzzle_origin`,
-`ship_hardpoint_fire`,
+`ship_hardpoint_aim_goal`, `ship_hardpoint_fire`,
 `ship_hardpoint_can_aim`, `ship_select_bearing_weapon`, `ship_turret_aim_at`,
 `ship_update_turrets`;
 `WeaponFireState`, `ship_weapon_fire_state`, `ship_hardpoint_in_selection`,
@@ -70,10 +70,25 @@ the subsystem while sitting outside `ship.h`'s seven.)*
 - **`ship_weapon_fire_state` is the one per-shot validator**, and all three fire-control
   surfaces go through it: the manual held-trigger loop in `game.cpp`, the autopilot attack order
   in `sim/fleet.cpp`, and the selection hub's per-tile status. It folds operational status,
-  traverse arc, cooldown, reach and capacitor affordability into one `WeaponFireState` and
-  spends nothing — the caller commits via `ship_try_spend_cap` only after `WEAPON_FIRE_READY`.
+  traverse arc, **slew convergence**, cooldown, reach and capacitor affordability into one
+  `WeaponFireState` and spends nothing — the caller commits via `ship_try_spend_cap` only after
+  `WEAPON_FIRE_READY`.
   *(Until the micro-selection work the manual path never checked reach at all, so a click far
   beyond the drawn range ring still fired and still drained the bank.)*
+- **The arc test and the slew test are different questions, and both are needed.**
+  `ship_hardpoint_can_aim` answers "can this mount ever point there"; `WEAPON_FIRE_SLEWING`
+  answers "does it, yet". Without the second, a held trigger fired the instant the target
+  entered the arc while `mount_aim` was still mid-rotation, and since the muzzle resolves
+  against `mount_aim` (below) the round left the correct barrel tip at a visible angle to the
+  barrel. The tolerance is deliberately a VISUAL one — it bounds how far the barrel may be off
+  the shot, not how far the shot may be off the target, because the round still flies exactly
+  along `world_dir`. ~3 degrees is imperceptible on the art and comfortably above one frame's
+  slew (a medium mount turns 2.2 rad/s, so 0.037 rad at 60 fps), which is what keeps a turret
+  tracking a moving cursor firing instead of stuttering every time the goal shifts.
+  *Note this reaches the autopilot too, by design — that is what routing every rule through one
+  validator buys. It does NOT reach `combat_arena`'s enemy gunner or `ai_ship.cpp`'s agent
+  gunner, both of which bypass the validator; neither matters today because the enemy hull has
+  no hardpoints and agents fire from their hull origin with no turret to disagree with.*
 - **The trigger is mode-independent; only FLIGHT is gated on camera attachment.** `game_update`'s
   piloting branch has no mode test and no longer has a detach test either: turret traverse, the
   fire-group number row and trigger firing all run at any zoom, in either look, attached or
@@ -148,7 +163,9 @@ the subsystem while sitting outside `ship.h`'s seven.)*
   differ while a turret is still traversing, and the muzzle must sit where ShipRendering draws
   the barrel — the shot is watched leaving the art, not leaving the aim vector. Offsets are in
   the same hardpoint-half-extent units as `mount_art_size`, so art and shot origins scale
-  together and cannot drift apart.
+  together and cannot drift apart. The two can still differ *in angle* mid-traverse, but
+  `WEAPON_FIRE_SLEWING` now bounds that gap to the aim tolerance rather than letting it run to
+  the full width of the arc.
 - **`Weapon::fire` is now a non-virtual composition of two virtuals** — `spawn_shot` (put one
   projectile in the world) and `begin_cooldown` — because `fire` gated on `ready()` and set the
   cooldown itself, so a salvo calling it per barrel would have fired exactly once. Every
@@ -297,4 +314,5 @@ it reports affordability, and the caller commits via `ship_try_spend_cap`.
 and the spawn-side muzzle flash; `ship_muzzle_origin` factored out as the one barrel-geometry
 site; `vfx_family` and the guided-round trail history added to the data model; `render` gains an
 incandescent head, takes a per-family glow table as a parameter, loses the `glow_override`
-member, and loses the travelling fake muzzle flash)
+member, and loses the travelling fake muzzle flash; `WEAPON_FIRE_SLEWING` added so a mount holds
+fire until its barrel has trained onto the target)

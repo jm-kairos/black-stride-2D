@@ -178,6 +178,13 @@ b8 ship_hardpoint_in_selection(const Ship* ship, i32 hp_index) {
     if (ship->weapon_override >= 0) return (hp_index == ship->weapon_override) ? TRUE : FALSE;
     return ship_hardpoint_in_group(ship, hp_index, ship->active_group);
 }
+// Wrap an angle into (-pi, pi]. Defined here rather than beside the turret code below because
+// the fire validator needs it too, to measure how far a barrel still has to travel.
+static f32 wrap_pi(f32 a) {
+    while (a >  BS_PI) a -= 2.0f * BS_PI;
+    while (a < -BS_PI) a += 2.0f * BS_PI;
+    return a;
+}
 // ---- Per-weapon fire validation --------------------------------------------------------
 WeaponFireState ship_weapon_fire_state(const Ship* ship, i32 hp_index, Vec2 world_dir, f32 dist) {
     if (!ship || hp_index < 0 || hp_index >= ship->hardpoint_count) return WEAPON_FIRE_DISABLED;
@@ -185,6 +192,23 @@ WeaponFireState ship_weapon_fire_state(const Ship* ship, i32 hp_index, Vec2 worl
     if (!w || w->disabled) return WEAPON_FIRE_DISABLED;
     // Traverse arc first: a mount that cannot bear will never fire whatever else is true.
     if (!ship_hardpoint_can_aim(ship, hp_index, world_dir)) return WEAPON_FIRE_NO_BEARING;
+    // Then whether the barrel has GOT there yet. The arc test above answers "can this mount ever
+    // point at the target"; this one answers "does it, now". Without it a held trigger fired the
+    // instant the target entered the arc, while mount_aim was still mid-slew -- and because
+    // ship_muzzle_origin resolves the barrel against mount_aim while the shot flies along
+    // world_dir, the round left the correct barrel tip at a visible angle to the barrel.
+    //
+    // The tolerance is a VISUAL one: it bounds how far the barrel may be off the shot, not how
+    // far the shot may be off the target (the round still flies exactly along world_dir). ~3
+    // degrees is imperceptible on the art and, at one frame's slew for a medium mount (2.2 rad/s
+    // is 0.037 rad at 60 fps), loose enough that a turret tracking a moving cursor keeps firing
+    // instead of stuttering every time the goal shifts.
+    {
+        const f32 AIM_TOL = 0.055f; // radians (~3.2 degrees)
+        f32 goal = ship_hardpoint_aim_goal(ship, hp_index, world_dir);
+        if (fabsf(wrap_pi(goal - ship->mount_aim[hp_index])) > AIM_TOL)
+            return WEAPON_FIRE_SLEWING;
+    }
     if (!w->ready()) return WEAPON_FIRE_RELOADING;
     // Range: weapon_effective_reach is the single source of truth the HUD ring also draws, so
     // the ship never opens fire at a distance the ring says it cannot cover. A weapon with no
@@ -275,11 +299,6 @@ i32 ship_select_bearing_weapon(const Ship* ship, Vec2 world_dir) {
     return -1;
 }
 // ---- Turret traverse (Phase 5) ----------------------------------------------------------
-static f32 wrap_pi(f32 a) {
-    while (a >  BS_PI) a -= 2.0f * BS_PI;
-    while (a < -BS_PI) a += 2.0f * BS_PI;
-    return a;
-}
 // Traverse rate by slot size: big mounts swing slower (rad/s).
 static f32 turret_slew_rate(HardpointSize s) {
     switch (s) {
@@ -289,10 +308,10 @@ static f32 turret_slew_rate(HardpointSize s) {
     }
     return 2.2f;
 }
-void ship_turret_aim_at(Ship* ship, i32 hp_index, Vec2 world_dir) {
-    if (!ship || hp_index < 0 || hp_index >= ship->hardpoint_count) return;
-    if (world_dir.x == 0.0f && world_dir.y == 0.0f) return;
+f32 ship_hardpoint_aim_goal(const Ship* ship, i32 hp_index, Vec2 world_dir) {
+    if (!ship || hp_index < 0 || hp_index >= ship->hardpoint_count) return 0.0f;
     const HardpointDef& hp = ship->hardpoints[hp_index];
+    if (world_dir.x == 0.0f && world_dir.y == 0.0f) return hp.facing;
     // Ship convention: angle 0 = nose = +Y, so a world direction's heading is atan2(-x, y).
     f32 dir_angle = atan2f(-world_dir.x, world_dir.y);
     f32 rel = wrap_pi(dir_angle - ship->angle - hp.facing); // offset from the rest facing
@@ -300,7 +319,12 @@ void ship_turret_aim_at(Ship* ship, i32 hp_index, Vec2 world_dir) {
         f32 half = hp.arc * 0.5f;
         rel = clampf(rel, -half, half); // pin at the traverse-arc edge, never through it
     }
-    ship->mount_aim_goal[hp_index]    = hp.facing + rel; // ship-local goal angle
+    return hp.facing + rel; // ship-local goal angle
+}
+void ship_turret_aim_at(Ship* ship, i32 hp_index, Vec2 world_dir) {
+    if (!ship || hp_index < 0 || hp_index >= ship->hardpoint_count) return;
+    if (world_dir.x == 0.0f && world_dir.y == 0.0f) return;
+    ship->mount_aim_goal[hp_index]    = ship_hardpoint_aim_goal(ship, hp_index, world_dir);
     ship->mount_aim_engaged[hp_index] = TRUE;
 }
 void ship_update_turrets(Ship* ship, f32 dt) {
