@@ -40,6 +40,14 @@ GameStateModel; engine `math/math_utils.h`, `math/bs_hierpos.h`, `defines.h`.
   multi-barrel weapon fire from its barrels for an NPC exactly as it does for the player.
   Calling `Weapon::fire` directly here would still shoot, and would silently collapse every
   barrel back onto the mount centre — see ShipCombatModel's spawner invariant.
+- **Every projectile this subsystem destroys goes through `ProjectileSystem::retire`**, not
+  through a hand-rolled `active = FALSE; --count`. All three sites here (hull hit, flak burst
+  killing hostile ordnance, and the flak shell consumed by its own burst) pass the *reason* the
+  shot stopped, because only this code knows it — the shell hit armour, or was burned down, or
+  fused. That reason picks the termination effect. Flak additionally passes
+  `s->flak_tuning.burst_radius` as the effect size, so the airburst is drawn at the radius that
+  actually did damage rather than at the 3-unit shell's own radius; it is the only place in the
+  game that shows the player how far the screen reaches.
 - **Detection is a fleet-wide union computed by max** — a contact's confidence is the strongest
   single reading over all friendly ships, so overlapping coverage widens the picture without
   double-counting (`sensor_system.h`).
@@ -102,5 +110,5 @@ configurations from one code path. A new detection rule belongs in `sensor_readi
 **Source paths:** `sandbox/source/sim/combat_arena.{cpp,h}`,
 `sandbox/source/sim/point_defense.{cpp,h}`, `sandbox/source/sim/sensor_system.{cpp,h}`
 
-**Last verified:** 2026-08-09, commit `b1baf31` (detector radius brought inside the
-compressed ballistic envelope)
+**Last verified:** 2026-08-09, working tree on `game` (the four projectile-destruction sites
+across this subsystem and `point_defense.cpp` now retire through the pool's own API)

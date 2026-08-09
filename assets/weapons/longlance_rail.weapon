@@ -19,4 +19,10 @@ emission    0.8
 proj_hp     1.6
 price       1400
 tier        2
+
+# The one def in the catalog that opts out of its kind's default visual family. A rail-driven
+# slug is not a propellant round: the launch is an electromagnetic snap with no expanding gas,
+# and the shot is a long thin very bright line rather than a short hot streak. Everything else
+# ballistic keeps `shell`, which is why this is one authored line and not a code branch.
+vfx_family  slug
 desc "An alpha-strike railgun for captains who pick their moment. Each slug spikes the capacitor hard - time the shot, or drift powerless."

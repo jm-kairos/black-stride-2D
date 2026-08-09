@@ -17,25 +17,31 @@ damage (CombatArena), and does not own drawing — `render/ship_visual` here is 
 `PdStance`/`PdPriority`, `ShipSizeClass`, `ShipMotion`; `ship_load`, `ship_recompute_stats`,
 `ship_try_spend_cap`, `ship_capacitor_update`, `ship_collider_corners`, `ship_bounding_radius`,
 `ship_local_dir`, `ships_collide`, `hardpoint_accepts`, `hardpoint_fits_module`,
-`ship_first_free_hardpoint`, `ship_hardpoint_fire_origin`, `ship_hardpoint_fire`,
+`ship_first_free_hardpoint`, `ship_hardpoint_fire_origin`, `ship_muzzle_origin`,
+`ship_hardpoint_fire`,
 `ship_hardpoint_can_aim`, `ship_select_bearing_weapon`, `ship_turret_aim_at`,
 `ship_update_turrets`;
 `WeaponFireState`, `ship_weapon_fire_state`, `ship_hardpoint_in_selection`,
 `ship_select_weapon_override`, `ship_clear_weapon_override`, `ship_hardpoint_in_group`,
 `ship_nth_group_weapon`.
 `sim/weapon.h` — `Weapon`, `BallisticWeapon`, `MissileLauncher`, `WeaponKind`, `FireMode`,
-`weapon_effective_reach`. `sim/weapon_def.h` — `WeaponDef`, `WeaponRegistry`, `MuzzlePattern`,
-`WEAPON_MAX_MUZZLES`, `weapon_registry_load`, `weapon_registry_resolve_textures`,
+`weapon_effective_reach`, `Weapon::cooldown_duration_s`. `sim/weapon_def.h` — `WeaponDef`,
+`WeaponRegistry`, `MuzzlePattern`,
+`WEAPON_MAX_MUZZLES`, `VfxFamily`, `weapon_registry_load`, `weapon_registry_resolve_textures`,
 `weapon_registry_find`, `weapon_instantiate`.
 `sim/module.h` — `ModuleDef`, `ModuleRegistry`, `module_registry_load`, `module_registry_find`.
-`sim/projectile.h` — `Projectile`, `ProjectileKind`, `ProjectileSystem`, `MAX_PROJECTILES`.
+`sim/projectile.h` — `Projectile`, `ProjectileKind`, `ProjectileSystem`, `MAX_PROJECTILES`,
+`PROJ_TRAIL_SAMPLES`, `PROJ_TRAIL_INTERVAL`, `ProjectileSystem::retire`, `ProjectileSystem::fx`.
 `render/ship_visual.h` — `ShipVisual`, `VisualLayer`, `ship_visual_load`,
 `ship_visual_resolve_textures`.
 `ship.h` is included by 7 other subsystems; `weapon.h` by 6.
 
-**Depends on:** GameStateModel; engine `math/math_utils.h`, `math/bs_hierpos.h`,
-`renderer/renderer.h`, `renderer/renderer_types.h`, `core/logger.h`, `defines.h`.
-It has **out-degree 0** to other sandbox subsystems — the most self-contained large cluster.
+**Depends on:** GameStateModel, `core/projectile_fx.h`; engine `math/math_utils.h`,
+`math/bs_hierpos.h`, `renderer/renderer.h`, `renderer/renderer_types.h`, `core/logger.h`,
+`defines.h`.
+Its only sandbox edge is the Tier 0 FX ring — a dependency-free POD buffer, so the cluster is
+still effectively self-contained and still points strictly *down* the tier order. The
+alternative considered was having the render tier reach in, which would have inverted it.
 **Depended on by:** CombatArena, CoordinateDiagnostics, Discovery, FleetControl, InWorldOverlays,
 RtsControl, ShipRendering, LocalAgentAi, FrameOrchestrator, GameStateModel.
 *(The per-header counts above are not the same question: `game.cpp` reaches this cluster through
@@ -127,6 +133,17 @@ the subsystem while sitting outside `ship.h`'s seven.)*
   `.weapon` def listing `muzzle` offsets gets them on the player's guns, the autopilot's and
   the NPCs' together, with no fire site aware that barrels exist. Callers still validate and
   spend the capacitor first; the spawner only spawns.
+- **`ship_muzzle_origin` is the ONE place barrel geometry is computed**, and it exists because a
+  second consumer arrived: `ship_hardpoint_fire` spawns from it, and the charge-up VFX pass
+  (InWorldOverlays) draws the pre-fire glow on it. Had the render side re-derived the same
+  half-extent/`mount_aim` maths, the two would have agreed at rest and drifted apart *only while
+  a turret was traversing* — a bug that is invisible in a screenshot and obvious in motion.
+  Passing `-1` returns the hardpoint centre, which is what keeps weapons with no authored
+  muzzles behaving exactly as they did before barrels existed.
+- **`cooldown_duration_s()` exists so callers can recover ABSOLUTE time-to-ready**, since
+  `cooldown_progress()` is a fraction and a fixed-length anticipation window is not. The same
+  0.4 s of charge-up is 24% of a trident's cycle and 4% of a torpedo's; keying the window off the
+  fraction would have made the torpedo glow for most of a nine-second reload.
 - **A muzzle resolves against `mount_aim`, not against the direction being fired.** The two
   differ while a turret is still traversing, and the muzzle must sit where ShipRendering draws
   the barrel — the shot is watched leaving the art, not leaving the aim vector. Offsets are in
@@ -137,6 +154,23 @@ the subsystem while sitting outside `ship.h`'s seven.)*
   cooldown itself, so a salvo calling it per barrel would have fired exactly once. Every
   existing caller of `fire` keeps its behaviour; only a multi-barrel salvo takes the split path,
   checking readiness once and cooling down once.
+- **`spawn` / `spawn_missile` are where the MUZZLE FLASH is emitted, and that is the whole
+  reason it reaches every gun.** They are the two functions through which a projectile enters
+  the world, so an effect raised there covers the manual trigger, the autopilot, both
+  combat-arena gunners *and* `sim/ai_ship.cpp`'s agent gunner — the one fire site documented
+  below as bypassing `ship_hardpoint_fire` entirely. Emitting from the spawner instead would
+  have silently skipped NPC agents, and a future fire path would have to remember to opt in.
+- **`retire` is the one place a shot STOPS for a reason**, the mirror of `spawn` being where it
+  starts. It frees the slot and records the termination effect; the four callers (hull hit,
+  flak burst, flak self-consume, PD kill) pass the *reason* because only they know it. Lifetime
+  expiry is deliberately not routed through it and stays inside `update`, silently: a shell
+  running out of range should fizzle, not detonate.
+- **The whole VFX layer hangs off one nullable pointer.** `ProjectileSystem::fx` is wired once
+  in `combat_arena_init` and never rewritten (contrast `glow_override`, which a render pass
+  rewrites every frame — see tech debt). Setting it to `nullptr` disables every launch and
+  termination effect in the game and must leave damage, collision and physics bit-identical.
+  That is the removability test for the feature, and it is why the emit calls take no non-const
+  simulation state.
 - **`Weapon::disabled` is declared with no producer.** There is no subsystem-damage model yet;
   the flag exists so the validator and the hub's Disabled state are correct the day one lands.
 - **Weapon instances point their `name`/`icon` into the registry's pool storage**, which
@@ -145,6 +179,30 @@ the subsystem while sitting outside `ship.h`'s seven.)*
 - **Module defs are shared by pointer across ships** and carry no per-instance state
   (`sim/module.h`), which is what makes sharing safe.
 - Sensor layers are strictly ordered `l0 < l1 < l2`; `sim/ship.h` notes the editor enforces it.
+
+- **Guided rounds carry a position history; unguided ones deliberately do not.** `Projectile::
+  trail` is `PROJ_TRAIL_SAMPLES` past positions stored as `Vec2` OFFSETS from `position` (8 bytes
+  a sample against 24 for a `HierPos2`, and trivially precision-safe as a short local vector no
+  matter how far from the origin the fight is), rebased by each tick's movement. Recorded only
+  for `PROJ_MISSILE`, so the per-tick cost scales with missiles in flight rather than with the
+  512-slot pool, and read only by `ProjectileSystem::render`. A shell flies a straight line and
+  its single stretched quad is already exactly right; a missile is steered every tick, so a
+  straight streak reports a path it never flew.
+  *Sampled on a fixed 25 ms clock, not per frame* — a per-frame history would make trail length
+  a readout of the player's framerate.
+- **A weapon's VISUAL family is authored data, and defaults so hard that five of six defs say
+  nothing.** `WeaponDef::vfx_family` picks one of three looks — `shell` (inert kinetic round),
+  `slug` (rail-driven), `ordnance` (powered and guided) — and is resolved *after* parsing from
+  `kind`, so ballistic becomes shell and missile becomes ordnance with nothing written. Only
+  `longlance_rail` opts out. The field is read by `ProjectileSystem::render` and the FX pass and
+  by nothing else: two projectiles differing only in `vfx_family` fly, collide and damage
+  identically. A `slug` is never inferred from `proj_speed` — a railgun is a design statement
+  about a weapon, not a threshold.
+  *(0xFF is the "unauthored" sentinel during parsing, because `VFX_SHELL` is 0 and a zeroed
+  struct would otherwise be indistinguishable from an explicit `vfx_family shell`.)*
+- **A FLAK round keeps the SHELL look regardless of its gun's family.** `BallisticWeapon::
+  spawn_shot` forces it: what is in flight is a fused proximity round and what it does is burst,
+  so borrowing a `slug` gun's visual language would misdescribe it.
 
 **Extension points:** **A new weapon is a data file** — a `.weapon` text file listed in
 `assets/weapons/weapons.list`; `weapon_instantiate` builds a `BallisticWeapon` or
@@ -159,6 +217,11 @@ offsets off the art's alpha rather than guessing, as `gauss_mk1` and `autocannon
 their comments. Choose `salvo` only for a def tuned for it — it empties every barrel on one
 capacitor charge, multiplying damage per trigger pull by the barrel count; `trident_mk1` is the
 worked example, balanced around its 3-shell volley rather than its per-shell damage.
+**Its visual family is one more optional line** — `vfx_family shell|slug|ordnance`, which picks
+which of the three looks its shots speak and is resolved from `kind` when omitted (ballistic →
+shell, missile → ordnance). Purely cosmetic: nothing in the simulation reads it. Five of the six
+catalog defs author nothing; only `longlance_rail` opts out, because a rail slug is a design
+statement about a weapon rather than something to infer from `proj_speed`.
 **A new module** is the same shape via `assets/modules/modules.list`.
 **A new hull** is a `.ship` file with `hardpoint <id> <accepts> <size> <x> <y> <facing> <arc>`
 lines. A genuinely new weapon *behaviour* needs a `Weapon` subclass plus a `WeaponKind` tag and
@@ -213,9 +276,10 @@ it reports affordability, and the caller commits via `ship_try_spend_cap`.
 - `ProjectileSystem::glow_override` is a mutable pointer set by a *render* pass
   (`render/gameplay_overlays.cpp:151`) into a simulation object, and its identity determines GPU
   batch merging.
-- `point_defense.cpp` frees projectile slots directly (`p.active = FALSE; --count`) rather than
-  through an API, and `ProjectileSystem::update` recounts from scratch each tick, quietly
-  repairing the counter.
+- ~~`point_defense.cpp` frees projectile slots directly rather than through an API~~ — **fixed**:
+  it and the three `combat_arena.cpp` sites now go through `ProjectileSystem::retire`.
+  `ProjectileSystem::update` still recounts from scratch each tick, quietly repairing the
+  counter, so the invariant remains unenforced rather than checked.
 - Three hand-rolled `sscanf` parsers with near-identical helpers (`ship.cpp`, `module.cpp`,
   `weapon_def.cpp`); the latter two duplicate four functions almost verbatim. All three define
   `_CRT_SECURE_NO_WARNINGS` locally.
@@ -229,5 +293,7 @@ it reports affordability, and the caller commits via `ship_try_spend_cap`.
 `sandbox/source/sim/weapon.{cpp,h}`, `sandbox/source/sim/weapon_def.{cpp,h}`,
 `sandbox/source/sim/projectile.{cpp,h}`, `sandbox/source/render/ship_visual.{cpp,h}`
 
-**Last verified:** 2026-08-09, commit `b1baf31` (left button is the ballistic
-trigger in both control modes; uniform 0.15 ballistic range compression)
+**Last verified:** 2026-08-09, working tree on `game` (adds `ProjectileSystem::retire` / `::fx`
+and the spawn-side muzzle flash; `ship_muzzle_origin` factored out as the one barrel-geometry
+site; `vfx_family` and the guided-round trail history added to the data model; `render` gains an
+incandescent head and loses the travelling fake muzzle flash)

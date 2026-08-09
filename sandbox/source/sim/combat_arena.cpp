@@ -13,6 +13,14 @@ void combat_arena_init(game_state* s) {
     // ---- Projectile system -----------------------------------------------------------------
     s->projectiles.init();
 
+    // ---- Projectile VFX ring (cosmetic) ----------------------------------------------------
+    // Wired ONCE here, not per frame -- unlike ProjectileSystem::glow_override, which a render
+    // pass rewrites every frame. The pool is a plain game_state member, so the pointer stays
+    // valid for the process lifetime. Set it to nullptr to disable every launch and
+    // termination effect without touching a fire site.
+    s->projectile_fx.init();
+    s->projectiles.fx = &s->projectile_fx;
+
     // ---- Combat entities -------------------------------------------------------------------
     s->combat_entity_count = 0;
     for (i32 i = 0; i < MAX_COMBAT_ENTITIES; ++i) {
@@ -344,16 +352,19 @@ void combat_arena_update_projectiles(game_state* s, f32 sim_dt) {
                 if (d > burst) continue;
                 p->hp -= s->flak_tuning.burst_damage * (1.0f - d / burst);
                 if (p->hp <= 0.0f) {
-                    p->active = FALSE;
-                    --s->projectiles.count;
+                    // Ordnance killed in flight reads the same whether flak or a PD beam did
+                    // it -- from the player's side both are "the screen worked".
+                    s->projectiles.retire(pi, PFX_INTERCEPT);
                     ++kills;
                 }
             }
             // Attribution (Phase E): the player's manually-laid screen reports its work.
             if (kills > 0 && fp->faction_id == FACTION_PLAYER)
                 action_log_push(s, "Flak burst: %d ordnance destroyed", kills);
-            fp->active = FALSE;   // the shell is consumed by its own burst
-            --s->projectiles.count;
+            // The shell is consumed by its own burst. Drawn at the BURST radius rather than the
+            // shell's own 3-unit radius, so the airburst covers the volume that actually took
+            // ordnance down -- the effect doubles as the readout for where the screen reaches.
+            s->projectiles.retire(fi, PFX_BURST, s->flak_tuning.burst_radius);
         }
     }
 
@@ -397,8 +408,7 @@ void combat_arena_update_projectiles(game_state* s, f32 sim_dt) {
                             cause = "PD saturated";
                         action_log_push(s, "MISSILE HIT -- %s", cause);
                     }
-                    p->active = FALSE;
-                    --s->projectiles.count;
+                    s->projectiles.retire(pi, PFX_IMPACT);
                     break; // projectile can only hit one entity
                 }
             }

@@ -49,9 +49,14 @@ void BallisticWeapon::spawn_shot(HierPos2 origin, Vec2 direction, Vec2 ship_velo
         default: break;
     }
     if (flak) col = bs_color{ 0.82f, 0.85f, 0.88f, 1.0f };   // pale burst-grey tracer
+    // A FLAK round is a fused airburst shell, not the weapon's normal solid slug, so it keeps
+    // the SHELL look even when fired from a def authored as `slug` -- what is in flight is a
+    // proximity round, and its termination is a burst regardless of the gun that laid it.
+    const u8 family = (flak || !def) ? (u8)VFX_SHELL : def->vfx_family;
     projectiles->spawn(origin, vel, lifetime,
                        projectile_radius, col, owner_faction, owner_faction_id,
-                       projectile_emission, proj_hp_value, flak ? PROJ_FLAK : PROJ_SHELL, damage);
+                       projectile_emission, proj_hp_value, flak ? PROJ_FLAK : PROJ_SHELL, damage,
+                       family);
 }
 void BallisticWeapon::update(f32 dt) {
     if (cooldown_remaining > 0.0f) {
@@ -104,7 +109,8 @@ void MissileLauncher::spawn_shot(HierPos2 origin, Vec2 direction, Vec2 ship_velo
     bs_color col = bs_color{ 1.00f, 0.45f, 0.20f, 1.0f };
     projectiles->spawn_missile(origin, vel, missile_lifetime, missile_radius, col,
                                owner_faction, owner_faction_id, missile_emission, missile_hp,
-                               damage, missile_speed);
+                               damage, missile_speed,
+                               def ? def->vfx_family : (u8)VFX_ORDNANCE);
 }
 void MissileLauncher::update(f32 dt) {
     if (cooldown_remaining > 0.0f) {

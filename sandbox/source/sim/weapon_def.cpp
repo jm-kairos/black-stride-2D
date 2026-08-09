@@ -22,6 +22,13 @@ static b8 weapon_muzzle_pattern_from_token(const char* tok, u8* out) {
     return FALSE;
 }
 
+static b8 weapon_vfx_family_from_token(const char* tok, u8* out) {
+    if (strcmp(tok, "shell")    == 0) { *out = VFX_SHELL;    return TRUE; }
+    if (strcmp(tok, "slug")     == 0) { *out = VFX_SLUG;     return TRUE; }
+    if (strcmp(tok, "ordnance") == 0) { *out = VFX_ORDNANCE; return TRUE; }
+    return FALSE;
+}
+
 static b8 weapon_size_from_token(const char* tok, HardpointSize* out) {
     if (strcmp(tok, "S") == 0) { *out = HARDPOINT_SMALL;  return TRUE; }
     if (strcmp(tok, "M") == 0) { *out = HARDPOINT_MEDIUM; return TRUE; }
@@ -59,6 +66,10 @@ static b8 weapon_def_load(WeaponDef* out, const char* path) {
     out->proj_hp     = 1.0f;
     out->price       = 0;
     out->tier        = 1;
+    // 0xFF means "not authored". VFX_SHELL is 0, so a zeroed struct is indistinguishable from
+    // an explicit `vfx_family shell` -- and the default has to be resolved from `kind`, which
+    // may appear anywhere in the file. Hence a sentinel now and the real default after parsing.
+    out->vfx_family  = 0xFF;
     // Mount-art geometry defaults, only ever read when a `mount_art` path is present. The
     // 3.0 height matches the procedural turret's own axial footprint (base plate through
     // muzzle block, ~2.95 half-extents), so art and rectangles occupy the same slot.
@@ -115,6 +126,11 @@ static b8 weapon_def_load(WeaponDef* out, const char* path) {
         // cannot eat "_pattern" the way "%s" ate "_size" -- but the fall-through for an
         // unmatched line is silent, so keeping the order uniform is what stops the next
         // `muzzle_*` key from being quietly swallowed.
+        if (sscanf(line, "vfx_family %31s", tok) == 1) {
+            if (!weapon_vfx_family_from_token(tok, &out->vfx_family))
+                BS_LOG_WARN("weapon_def_load: unknown vfx_family '%s' in '%s'.", tok, path);
+            continue;
+        }
         if (sscanf(line, "muzzle_pattern %31s", tok) == 1) {
             if (!weapon_muzzle_pattern_from_token(tok, &out->muzzle_pattern))
                 BS_LOG_WARN("weapon_def_load: unknown muzzle_pattern '%s' in '%s'.", tok, path);
@@ -157,6 +173,11 @@ static b8 weapon_def_load(WeaponDef* out, const char* path) {
                 sizeof(out->icon) - 1);
         out->icon[sizeof(out->icon) - 1] = '\0';
     }
+    // Resolve the visual family last, once `kind` is final. Guided ordnance burns an engine and
+    // detonates; a ballistic round is inert and punches through. That mapping is right for five
+    // of the six catalog weapons with nothing authored -- only the railgun opts out.
+    if (out->vfx_family == 0xFF)
+        out->vfx_family = (out->kind == WEAPON_KIND_MISSILE) ? VFX_ORDNANCE : VFX_SHELL;
     return TRUE;
 }
 

@@ -3367,6 +3367,16 @@ struct game_state {
 
 
 
+    // ---- Projectile VFX event ring (cosmetic; core/projectile_fx.h) ---------------------
+    // Muzzle flashes, impacts, flak airbursts and point-defense intercepts. Written by the
+    // sim (ProjectileSystem::spawn / ::retire), read only by render/projectile_fx.cpp.
+    // projectiles.fx points here; nulling that pointer disables every effect and must leave
+    // the simulation bit-identical.
+
+    ProjectileFx projectile_fx;
+
+
+
     // ---- Missile flight model (Phase A guided missiles; editor-tunable) -----------------
     // Global v1 flight model shared by every PROJ_MISSILE in flight (single missile type).
     // Consumed by combat_arena_steer_missiles each tick. Split per-projectile when multiple

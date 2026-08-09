@@ -53,8 +53,14 @@ struct Weapon {
     virtual void update(f32 dt) = 0;
     // TRUE if the weapon can fire right now (cooldown expired)
     virtual b8 ready() const = 0;
-    // 0..1 charge / cooldown progress (for UI)
+    // 0..1 charge / cooldown progress (for UI). 1.0 = ready, 0.0 = just fired.
     virtual f32 cooldown_progress() const = 0;
+    // Full cycle time in seconds -- a ballistic's 1/fire_rate, a launcher's reload. Read-only,
+    // and paired with cooldown_progress() so a caller can recover ABSOLUTE seconds-to-ready
+    // rather than a fraction: (1 - progress) * duration. The charge-up VFX needs that because a
+    // fixed-length anticipation window is the same 0.4 s on a 1.25 s railgun and a 9 s torpedo,
+    // where the equivalent FRACTION differs by a factor of seven.
+    virtual f32 cooldown_duration_s() const = 0;
     // projectile speed for aim prediction (0 if not applicable)
     virtual f32 projectile_speed() const { return 0.0f; }
     // capacitor cost per trigger pull (spent at the fire site via ship_try_spend_cap;
@@ -90,6 +96,7 @@ struct BallisticWeapon : Weapon {
     void update(f32 dt) override;
     b8   ready() const override;
     f32  cooldown_progress() const override;
+    f32  cooldown_duration_s() const override { return cooldown_duration; }
     f32  projectile_speed() const override { return projectile_speed_value; }
     f32  cap_cost() const override { return cap_cost_value; }
 };
@@ -124,6 +131,7 @@ struct MissileLauncher : Weapon {
     void update(f32 dt) override;
     b8   ready() const override;
     f32  cooldown_progress() const override;
+    f32  cooldown_duration_s() const override { return reload_time; }
     f32  projectile_speed() const override { return missile_speed; }
     f32  cap_cost() const override { return cap_cost_value; }
 };

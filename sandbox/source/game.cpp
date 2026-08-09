@@ -16,6 +16,8 @@
 
 #include "sim/point_defense.h"
 
+#include "render/projectile_fx.h" // projectile_fx_render_init (bakes the VFX textures)
+
 #include "sim/ss_generation.h"
 
 #include "render/voronoi_cell_hover_effect.h"
@@ -197,9 +199,12 @@ b8 game_init(Game* game_inst) {
 
     };
 
-    // Bloom defaults (disabled by default until user opts in).
+    // Bloom defaults. ON by default: weapon fire draws on LAYER_PROJECTILE / LAYER_PROJECTILE_FX,
+    // which sit below BS_LAYER_BLOOM_THRESHOLD precisely so muzzle flashes, tracers and impacts
+    // go through the bloom pass. Leaving this FALSE made that layer choice inert -- every hit
+    // composited after the pass and read as a flat coloured decal.
 
-    s->render.bloom_enabled    = FALSE;
+    s->render.bloom_enabled    = TRUE;
 
     s->render.bloom_threshold  = 1.2f;
 
@@ -740,6 +745,12 @@ b8 game_init(Game* game_inst) {
     // this is the mandatory second phase that turns them into handles (cf. ship_visual).
 
     weapon_registry_resolve_textures(&s->weapon_registry);
+
+    // Bake the projectile-VFX textures (flare / ring / spark). Same mandatory-second-phase
+    // shape as the two resolve calls above: it needs a live renderer, so it cannot run from
+    // combat_arena_init where the FX ring itself is wired.
+
+    projectile_fx_render_init();
 
     // Initialize star visual effect system (generates procedural textures).
 
@@ -2165,6 +2176,12 @@ b8 game_update(Game* game_inst, f32 dt) {
     // Advance the shared in-game calendar: 1 real second = 1 in-game hour at 1x (scaled by time_scale
     // through sim_dt). This single clock drives both local gameplay and the galaxy history/news.
     s->sim_hours += (f64)sim_dt;
+
+    // Age the cosmetic projectile-FX ring. Deliberately EARLY: the fire path below and the
+    // collision pass further down both emit into it, and an event aged in the same frame it
+    // was emitted would lose a whole frame of a 75 ms muzzle flash before it is ever drawn.
+    // Runs on sim_dt, not dt, so effects slow with the time scale like the world they depict.
+    s->projectile_fx.update(sim_dt);
 
     galaxy_history_live_tick(s, sim_dt);   // Phase C1: the galaxy lives on the shared calendar clock
     ship_missions_update(s, sim_dt);       // Cross-system Ship AI: advance macro travelers along lanes

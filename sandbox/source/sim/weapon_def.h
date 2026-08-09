@@ -55,6 +55,12 @@
 //   muzzle  0.51 1.82                # starboard barrel
 //   muzzle_pattern sequential        # sequential (default) | salvo
 //
+// Optional visual family (see VfxFamily below). Cosmetic only; omit it and a ballistic weapon
+// looks like a shell and a missile looks like powered ordnance, which is right for every def
+// in the catalog except the railgun:
+//
+//   vfx_family      slug
+//
 // A weapon with no `muzzle` line fires from the hardpoint centre exactly as before, which
 // is what leaves every un-authored weapon untouched. Giving a weapon barrels is therefore a
 // data edit: `ship_hardpoint_fire` is the only spawn site, so the manual trigger, the
@@ -81,6 +87,24 @@
 //                 opts in must be balanced for it.
 enum MuzzlePattern : u8 { MUZZLE_SEQUENTIAL = 0, MUZZLE_SALVO = 1 };
 
+// Which VISUAL LANGUAGE this weapon's shots speak. Three families, not six looks: the split
+// tracks distinctions the simulation already makes, so it costs two extra render branches
+// rather than a parameter set per weapon.
+//
+//   SHELL     -- an inert kinetic round. Short bright streak, gas-cone muzzle, flash + sparks
+//                on impact. The default for anything ballistic.
+//   SLUG      -- a rail-driven round. Long, thin, very bright streak and a hard directional
+//                impact; the launch is an electromagnetic snap rather than a propellant blast,
+//                so it gets almost no muzzle ring. Authored, never inferred -- a railgun is a
+//                design statement about a weapon, not something to guess from proj_speed.
+//   ORDNANCE  -- a powered, guided object. Burns an engine the whole way, so it carries a live
+//                exhaust plume instead of a velocity streak, and detonates rather than
+//                punching through. The default for anything missile.
+//
+// `vfx_family <shell|slug|ordnance>` overrides the default. Purely cosmetic: nothing in the
+// simulation reads it, and a def that omits it looks correct for its kind.
+enum VfxFamily : u8 { VFX_SHELL = 0, VFX_SLUG = 1, VFX_ORDNANCE = 2 };
+
 struct WeaponDef {
 
     char          id[32];        // registry key ("gauss_mk1")
@@ -100,6 +124,7 @@ struct WeaponDef {
     f32           proj_hp;       // projectile HP vs point-defense/flak
     i32           price;         // market-forward: credits (unused v1)
     i32           tier;          // market-forward: tech tier (unused v1)
+    u8            vfx_family;    // VfxFamily: cosmetic only; defaults from `kind` at load
 
     // ---- In-world mount art (optional; empty path = procedural rectangles) ----
     char          mount_art[128];   // turret art path, resolved to a texture after the renderer is up

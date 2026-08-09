@@ -11,7 +11,8 @@
 #include "render/defense_laser_overlay.h" // defense_laser_overlay_draw
 #include "render/weapon_hub.h"    // weapon_hub_draw (middle-mouse weapon micro-selection)
 #include "render/projectile_marker.h" // projectile_markers_draw (screen-constant shot markers)
-#include "core/render_layers.h" // LAYER_UI / LAYER_GIZMO / LAYER_DEBUG
+#include "render/projectile_fx.h"     // projectile_fx_draw (muzzle / impact / burst / intercept)
+#include "core/render_layers.h" // LAYER_UI / LAYER_PROJECTILE / LAYER_GIZMO / LAYER_DEBUG
 #include "sim/galaxy_history.h"  // galaxy_history_faction_label / faction_is_hostile
 #include "sim/ai_ship.h"         // ShipArchetype (role marker shapes)
 #include "render/text.h"                // text_draw (patrol label)
@@ -151,7 +152,20 @@ void draw_gameplay_overlays(game_state* s) {
     // ---- Projectiles ---------------------------------------------------------------------
     s->profiler.begin(PROF_PROJECTILES_DRAW);
     s->projectiles.glow_override = &s->render.bullet_glow;
-    s->projectiles.render(LAYER_UI, &s->camera_state.camera_hierpos);
+    // LAYER_PROJECTILE, not LAYER_UI. LAYER_UI is BS_LAYER_BLOOM_THRESHOLD, so every shot in
+    // the game used to be composited AFTER the bloom pass and picked up no bloom at all --
+    // tracers and hits read as flat coloured decals rather than as anything hot. The streak
+    // and head both set custom.z = 1 so dropping below the threshold (and therefore below
+    // frame_lighting's unlit cutoff, which is the same number) does not hand them to the
+    // galaxy-map look's star light instead.
+    s->projectiles.render(LAYER_PROJECTILE, &s->camera_state.camera_hierpos);
+    // Launch and termination effects: muzzle flashes, impacts, flak airbursts, PD intercepts.
+    // Reads the ring the sim wrote this frame; takes a const game_state so it cannot write back.
+    projectile_fx_draw(s);
+    // Charge-up: heavy weapons glow at the barrel over the last 0.4 s of their reload, so the
+    // sequence the player sees is charge -> flash -> shot rather than a shot from nowhere.
+    // Reads cooldown_progress() only; it cannot and must not delay firing.
+    projectile_fx_draw_charges(s);
     // Screen-constant visibility markers on top: the world-sized art above goes sub-pixel long
     // before galaxy-map zoom. Cosmetic only, and self-gating to zero cost at arena zoom.
     projectile_markers_draw(s);

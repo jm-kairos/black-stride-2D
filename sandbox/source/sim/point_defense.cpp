@@ -137,8 +137,10 @@ void point_defense_update(game_state* s, f32 dt) {
             // Destroyed: free the projectile slot before it advances / collides this frame.
             // Missile intercepts are logged (rare + meaningful); shell kills stay silent.
             if (p.kind == PROJ_MISSILE) action_log_push(s, "PD: missile intercepted");
-            p.active = FALSE;
-            --s->projectiles.count;
+            // Frees the slot exactly as the hand-rolled `active = FALSE; --count` pair did, and
+            // additionally records the intercept flash. Going through the API is also what the
+            // subsystem docs asked for -- this was the one site freeing pool slots directly.
+            s->projectiles.retire(L.target_index, PFX_INTERCEPT);
             L.target_index       = -1;
             L.cooldown_remaining = retarget;
         } else if (L.dwell_remaining <= 0.0f) {

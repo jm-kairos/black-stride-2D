@@ -8,8 +8,9 @@ argument as the fullbright cutoff. This header only names the values the game us
 
 **Public interface:** `sandbox/source/core/render_layers.h` — `LAYER_STARFIELD_FAR` (0),
 `LAYER_STARFIELD_MID` (2), `LAYER_MAPPED_SYSTEM` (3), `LAYER_SHIP` (10), `LAYER_CELESTIAL` (11),
-`LAYER_UI` (50), `LAYER_HUD_TEXT` (100), `LAYER_DEBUG` (`BS_LAYER_BLOOM_THRESHOLD`),
-`LAYER_GIZMO` (`BS_LAYER_BLOOM_THRESHOLD + 1`). Included by **7 subsystems**.
+`LAYER_PROJECTILE` (12), `LAYER_PROJECTILE_FX` (13), `LAYER_UI` (50), `LAYER_HUD_TEXT` (100),
+`LAYER_DEBUG` (`BS_LAYER_BLOOM_THRESHOLD`), `LAYER_GIZMO` (`BS_LAYER_BLOOM_THRESHOLD + 1`).
+Included by **7 subsystems**.
 
 **Depends on:** engine `renderer/renderer_types.h` (for `BS_LAYER_BLOOM_THRESHOLD`).
 **Depended on by:** CoordinateDiagnostics, FrameOrchestrator, GalaxyMapRendering,
@@ -24,8 +25,17 @@ InWorldOverlays, SceneOrchestration, ShipRendering, SystemContentRendering.
 - **Constants are `static`, not `extern`** — the header states each TU gets its own copy to
   avoid ODR and link concerns. That is deliberate; it also means they are not visible by symbol
   name in a debugger and produce unused-variable pressure in TUs that use only a few.
-- Ordering must remain ascending by intended depth (starfield → system → ship → celestial → UI →
-  HUD text). Nothing enforces it; a mis-numbered constant produces a silent z-order bug.
+- **A layer number decides THREE things at once, and the two weapon-fire layers are where that
+  bites.** Below `BS_LAYER_BLOOM_THRESHOLD` a sprite blooms; below the `unlit_layer` argument
+  `frame_lighting` passes to `renderer_set_lights` (also `LAYER_UI`, also 50) it is *lit*. So
+  `LAYER_PROJECTILE` (12) and `LAYER_PROJECTILE_FX` (13) buy bloom for weapon fire and inherit
+  scene lighting as the price; both opt back out per-sprite with the shader's `custom.z = 1`
+  self-emissive flag. Any new layer placed under 50 for bloom must make the same choice, and
+  getting it wrong is invisible in the arena look (which submits no lights) and only shows on
+  the galaxy-map side.
+- Ordering must remain ascending by intended depth (starfield → system → ship → celestial →
+  weapon fire → UI → HUD text). Nothing enforces it; a mis-numbered constant produces a silent
+  z-order bug.
 
 **Extension points:** A new layer is one `static const u32` line. Place it by value relative to
 the existing constants, and derive from `BS_LAYER_BLOOM_THRESHOLD` (as `LAYER_DEBUG` and
@@ -45,7 +55,10 @@ number.
   hand-copied.
 - `render/out_sensor_detection_fx.cpp` defines a private `LAYER_FX = 15` and uses five
   consecutive layers from it, none of them named here — so the 11–50 range has an undocumented
-  occupant.
+  occupant. It is why the weapon-fire layers are 12/13 rather than the more natural 15/16, and
+  it is a live hazard: the next module to pick a number in that gap has nothing to read.
+- `LAYER_MOUNT_ART` is a *third* privately-defined layer (`render/ship_render.cpp`, `LAYER_SHIP
+  + 1` = 11), colliding with `LAYER_CELESTIAL`.
 - `render/debug_overlay.cpp` draws its parity checkerboard on the bare literal layer `1`, which
   has no name in this table.
 - The file is one of only two single-header subsystems in the sandbox and arguably belongs
@@ -55,4 +68,5 @@ number.
 
 **Source paths:** `sandbox/source/core/render_layers.h`
 
-**Last verified:** 2026-08-07, commit `812680c`
+**Last verified:** 2026-08-09, working tree on `game` (adds `LAYER_PROJECTILE` /
+`LAYER_PROJECTILE_FX` under the bloom threshold)

@@ -14,6 +14,13 @@ screen-constant visibility markers for in-flight shots. `sandbox/source/render/w
 `_draw`: the middle-mouse weapon micro-selection hub. It is the one member of this subsystem
 that also *reads input* — `game_update` owns the gating and calls `_update`, the dispatcher
 calls `_draw` — because the flick hit-test and the tile layout must share one geometry.
+`sandbox/source/render/projectile_fx.h` — `projectile_fx_render_init`, `projectile_fx_draw`,
+`projectile_fx_draw_charges`: the launch and termination halves of the weapon-fire VFX (muzzle
+flashes, impacts, flak airbursts, point-defense intercepts), plus the pre-fire charge-up glow on
+heavy weapons. The *travel* half is not here — an in-flight streak is a
+function of the live projectile's velocity, so `ProjectileSystem::render` regenerates it from
+the pool each frame (ShipCombatModel). The events these two ends produce outlive the projectile
+they belong to, which is why they need storage of their own.
 `sandbox/source/render/sensor_overlay.h` — `sensor_overlay_draw`,
 `g_sensor_fade_distance`. `sandbox/source/render/defense_laser_overlay.h` —
 `defense_laser_overlay_draw`. `sandbox/source/render/out_sensor_detection_fx.h` —
@@ -23,9 +30,12 @@ Used from outside: `gameplay_overlays.h` by 2, the others by 1 each.
 
 **Depends on:** CoordinateFrames, CombatArena, RenderLayerTable, WorldEditor, ShipRendering,
 GalaxyHistory, LocalAgentAi, BitmapText, ShipCombatModel, FleetControl, ActionLog,
-GameStateModel; engine `renderer/renderer.h`, `renderer/camera2d.h`, `core/input.h`,
-`math/math_utils.h`, `renderer/renderer_types.h`, `defines.h`.
-**Out-degree 23 — the highest in the render tier.** FleetControl, ActionLog and `core/input.h`
+GameStateModel, `core/projectile_fx.h`; engine `renderer/renderer.h`, `renderer/camera2d.h`,
+`core/input.h`, `math/math_utils.h`, `renderer/renderer_types.h`, `defines.h`.
+*(`core/projectile_fx.h` is a Tier 0 POD ring with no sandbox dependencies of its own, shared
+with ShipCombatModel — the sim writes it, this subsystem reads it. It is deliberately not a
+subsystem page: it is one fixed-capacity event buffer and a lifetime table.)*
+**Out-degree 24 — the highest in the render tier.** FleetControl, ActionLog and `core/input.h`
 all arrive through `weapon_hub.cpp`, which polls a mouse button and writes an action-log line.
 **Depended on by:** SceneOrchestration, DevPanels, FrameOrchestrator, GameStateModel.
 
@@ -47,6 +57,62 @@ all arrive through `weapon_hub.cpp`, which polls a mouse button and writes an ac
   it. Above 24 px of streak nothing is submitted at all, which is why the pass costs nothing at
   arena zoom. Every `ProjectileKind` gets the identical dot-and-tracer at the identical screen
   size; only the tint follows the shot's own colour, so friend/foe stays readable.
+- **Weapon fire draws BELOW the bloom threshold, and pays for it with `custom.z`.** Shots and
+  their effects sit on `LAYER_PROJECTILE` (12) and `LAYER_PROJECTILE_FX` (13), not `LAYER_UI`.
+  `LAYER_UI` *is* `BS_LAYER_BLOOM_THRESHOLD`, so for as long as projectiles drew there every
+  tracer and impact in the game was composited after the bloom pass and could not bloom at all
+  — they read as flat coloured decals rather than as anything hot. The catch is that the same
+  number is also the `unlit_layer` cutoff `frame_lighting` hands to `renderer_set_lights`, so
+  dropping below it hands these sprites to the galaxy-map look's star light and bright ambient.
+  Every sprite on both layers therefore sets `custom.z = 1`, the shader's self-emissive flag,
+  which skips the scene-lighting branch entirely. Miss that on a new effect and it will look
+  correct in the arena (fullbright, no lights submitted) and wash out on the map side only.
+  `s->render.bloom_enabled` now defaults to **TRUE** (`game.cpp`), which is what makes the layer
+  choice pay off — it was FALSE, and the two facts cancelled: shots sat below the threshold and
+  the pass they were placed there for never ran. Turning it on is narrower in practice than it
+  sounds, because `bloom_threshold` is 1.2: the static scene is pixel-identical with it on or
+  off at combat framing, and only weapon fire is bright enough to cross the cut. The effects are
+  still tuned to carry themselves unaided, so the editor toggle remains a look preference rather
+  than a switch that turns combat legibility off.
+- **Three visual families, not six looks.** `render/projectile_fx.cpp` branches muzzle and
+  impact geometry on `ProjectileFxEvent::family` (a `VfxFamily` from the firing weapon's def);
+  `ProjectileSystem::render` branches the travel component on the same value. The split is
+  `shell` / `slug` / `ordnance` because those are distinctions the *simulation* already makes —
+  guided vs unguided, powered vs inert — so it costs two extra branches per pass rather than a
+  parameter set per weapon. What varies is the physics being depicted: a shell launches on
+  expanding propellant gas, a slug on an electromagnetic snap (so it gets a needle-thin cone and
+  almost no blast ring), and ordnance on rocket ignition (the broadest ring of the three, plus a
+  pulsing engine plume drawn for its whole flight). Flak bursts and PD intercepts are
+  deliberately *not* family-varied: a burst is a fused round's own behaviour, and an intercept is
+  tinted by the defender that killed it, not by the weapon that fired it.
+- **The curved trail is exclusive to guided rounds, and that exclusivity is what pays for it.**
+  `ProjectileSystem::render` threads a chain of quads through a missile's recorded positions
+  instead of drawing the velocity-aligned streak (the streak is suppressed outright while the
+  chain is live, or the straight quad would poke out of the arc on every turn). At 7 quads per
+  round this is affordable only because missiles are rare: the same technique applied across the
+  512-slot pool would be ~3,500 sprites of a 16,384 frame budget.
+  *Chain width is its own constant, not the streak's.* At combat framing a 6-unit missile drawn
+  at the streak's width is ~1.5 px across, and a Gaussian cross-section that narrow rasterises to
+  a dashed line — the arc was present and unreadable until the chain got its own wider stroke.
+- **The charge-up is gated on CYCLE TIME, not on a weapon list, and it never draws while idle.**
+  `projectile_fx_draw_charges` completes the reference document's `charge -> flash -> launch`
+  sequence from the front, but only for weapons whose whole cycle exceeds `CHARGE_MIN_CYCLE`
+  (1 s): a build-up shorter than the gap between shots reads as a permanently lit barrel, which
+  is what a 12-shot-per-second autocannon would produce. That gate falls out of authored stats,
+  so a new weapon sorts itself. The glow is drawn *only while still cooling* — never on a loaded,
+  idle gun. Under a held trigger the weapon fires the instant it is ready, so the build hands
+  straight to the muzzle flash; at rest it shows nothing, because "this gun is loaded" is a
+  readiness readout the weapon hub already owns from the same `cooldown_progress()` call.
+  Which barrel lights follows the fire pattern: SALVO charges every muzzle, SEQUENTIAL only the
+  one next in rotation.
+  *The charge must stay SMALLER than the flash it sets up.* The first pass sized it off the
+  hardpoint half-extent at 5.6x, putting a 336-unit halo in front of a 139-unit muzzle flash —
+  the gun's brightest moment was its wind-up. Brightness hierarchy applies across time, not only
+  within a single effect.
+- **The FX pass cannot touch the simulation, and the compiler enforces it.** `projectile_fx_draw`
+  takes a `const game_state*` — the same guard `projectile_markers_draw` uses — so it can only
+  read the event ring and submit sprites. Deleting its one dispatcher call is a zero-behaviour
+  edit, and so is nulling `ProjectileSystem::fx` on the producing side.
 - **The hub offers the ACTIVE FIRE GROUP, never the whole hull.** Its seven directional slots
   are `ship_nth_group_weapon(ship, active_group, n)`, so switching groups with the number row
   changes what the hub shows, and a weapon outside the active group has no tile and cannot be
@@ -95,7 +161,7 @@ all arrive through `weapon_hub.cpp`, which polls a mouse button and writes an ac
   override the ring collapses to that one weapon's reach and turns green to say so.
 
 **Extension points:** A new overlay is a `draw_*` function in its own `render/` file plus one
-call in `draw_gameplay_overlays` — the dispatcher already aggregates six such modules. Draw on
+call in `draw_gameplay_overlays` — the dispatcher already aggregates seven such modules. Draw on
 `LAYER_UI` (or `LAYER_GIZMO` for editor affordances), route positions through
 `render_from_hierpos`, and remember the engine's two thickness conventions: radii must be
 divided by zoom manually, while `renderer_draw_line`/`_circle` thickness is already in screen
@@ -135,10 +201,11 @@ pixels. A new heat source kind is an entry appended to the `MBSource` array in
 **Source paths:** `sandbox/source/render/gameplay_overlays.{cpp,h}`,
 `sandbox/source/render/weapon_hub.{cpp,h}`,
 `sandbox/source/render/projectile_marker.{cpp,h}`,
+`sandbox/source/render/projectile_fx.{cpp,h}`,
 `sandbox/source/render/sensor_overlay.{cpp,h}`,
 `sandbox/source/render/defense_laser_overlay.{cpp,h}`,
 `sandbox/source/render/out_sensor_detection_fx.{cpp,h}`, `sandbox/source/sim/heat_map.{cpp,h}`
 
-**Last verified:** 2026-08-09, commit `b1baf31` (hub rationale no longer rests on
-the zoom/detach coupling; the reach ring is on-screen at combat framing for the first time now
-that ballistic reach is 19k–58k units)
+**Last verified:** 2026-08-09, working tree on `game` (adds `render/projectile_fx` — three
+visual families, the heavy-weapon charge-up and the guided-round curved trail; weapon fire moves
+off `LAYER_UI` onto the two new bloom-eligible layers)

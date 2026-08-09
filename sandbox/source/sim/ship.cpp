@@ -204,21 +204,13 @@ HierPos2 ship_hardpoint_fire_origin(const Ship* ship, i32 hp_index) {
         return ship_local_to_world(ship, ship->weapon_fire_offset_local);
     return ship_local_to_world(ship, ship->hardpoints[hp_index].pos_local);
 }
-void ship_hardpoint_fire(Ship* ship, i32 hp_index, Vec2 world_dir, Vec2 ship_velocity,
-                         ProjectileSystem* projectiles) {
-    if (!ship || !projectiles) return;
-    if (hp_index < 0 || hp_index >= ship->hardpoint_count) return;
-    Weapon* w = ship->mounts[hp_index];
-    if (!w) return;
-
+HierPos2 ship_muzzle_origin(const Ship* ship, i32 hp_index, i32 muzzle_index) {
     HierPos2 pivot = ship_hardpoint_fire_origin(ship, hp_index);
-    const WeaponDef* def = w->def;
+    if (!ship || hp_index < 0 || hp_index >= ship->hardpoint_count) return pivot;
+    const Weapon* w = ship->mounts[hp_index];
+    const WeaponDef* def = w ? w->def : nullptr;
     const i32 n = def ? def->muzzle_count : 0;
-    if (n <= 0) {
-        w->fire(pivot, world_dir, ship_velocity, projectiles);   // no barrels authored
-        return;
-    }
-    if (!w->ready()) return;   // gate ONCE, so every barrel of a salvo gets through
+    if (n <= 0 || muzzle_index < 0) return pivot;   // no barrels authored: the mount centre
 
     // Muzzle offsets are authored in the weapon's own frame, so resolve them against
     // mount_aim -- the SLEWED aim the turret art is drawn at -- not the direction being
@@ -228,15 +220,31 @@ void ship_hardpoint_fire(Ship* ship, i32 hp_index, Vec2 world_dir, Vec2 ship_vel
     const f32  aim  = ship->angle + ship->mount_aim[hp_index];
     const Vec2 fwd  = vec2_rotate(Vec2{ 0.0f, 1.0f }, aim);
     const Vec2 rgt  = vec2_rotate(Vec2{ 1.0f, 0.0f }, aim);
+    const Vec2 m    = def->muzzles[muzzle_index % n];
+    const Vec2 off  = vec2_add(vec2_scale(rgt, m.x * unit), vec2_scale(fwd, m.y * unit));
+    return hierpos_add_vec2(&pivot, off);
+}
+void ship_hardpoint_fire(Ship* ship, i32 hp_index, Vec2 world_dir, Vec2 ship_velocity,
+                         ProjectileSystem* projectiles) {
+    if (!ship || !projectiles) return;
+    if (hp_index < 0 || hp_index >= ship->hardpoint_count) return;
+    Weapon* w = ship->mounts[hp_index];
+    if (!w) return;
+
+    const WeaponDef* def = w->def;
+    const i32 n = def ? def->muzzle_count : 0;
+    if (n <= 0) {
+        // No barrels authored: fire from the mount centre, exactly as before barrels existed.
+        w->fire(ship_hardpoint_fire_origin(ship, hp_index), world_dir, ship_velocity, projectiles);
+        return;
+    }
+    if (!w->ready()) return;   // gate ONCE, so every barrel of a salvo gets through
 
     const i32 first = (def->muzzle_pattern == MUZZLE_SALVO) ? 0 : (i32)(w->next_muzzle % n);
     const i32 count = (def->muzzle_pattern == MUZZLE_SALVO) ? n : 1;
-    for (i32 k = 0; k < count; ++k) {
-        const Vec2 m   = def->muzzles[(first + k) % n];
-        const Vec2 off = vec2_add(vec2_scale(rgt, m.x * unit), vec2_scale(fwd, m.y * unit));
-        HierPos2   o   = hierpos_add_vec2(&pivot, off);
-        w->spawn_shot(o, world_dir, ship_velocity, projectiles);
-    }
+    for (i32 k = 0; k < count; ++k)
+        w->spawn_shot(ship_muzzle_origin(ship, hp_index, (first + k) % n),
+                      world_dir, ship_velocity, projectiles);
     w->next_muzzle = (u8)((first + count) % n);
     w->begin_cooldown();
 }

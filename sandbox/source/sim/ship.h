@@ -485,6 +485,16 @@ void ship_capacitor_update(Ship* ship, f32 dt);
 // weapon_fire_offset_local.
 bs_math::HierPos2 ship_hardpoint_fire_origin(const Ship* ship, i32 hp_index);
 
+// World position of one authored BARREL on a mounted weapon, resolved against the turret's
+// live slewed aim (mount_aim), in the same hardpoint-half-extent units the art uses. Returns
+// the hardpoint centre when the weapon authors no muzzles or `muzzle_index` is negative, which
+// keeps un-authored weapons behaving exactly as they did before barrels existed.
+//
+// THE one place barrel geometry is computed. ship_hardpoint_fire spawns from it and the
+// charge-up VFX pass draws on it, so where a shot leaves and where its gun glows cannot drift
+// apart -- that failure would have been silent, and only visible mid-traverse.
+bs_math::HierPos2 ship_muzzle_origin(const Ship* ship, i32 hp_index, i32 muzzle_index);
+
 // THE spawn site: put this mount's shot(s) in the world, along `world_dir`, with
 // `ship_velocity` added. Every fire-control surface routes through it -- the manual
 // trigger, the RTS attack order and both NPC gunners -- which is what makes a weapon's
