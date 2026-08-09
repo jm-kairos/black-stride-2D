@@ -16,6 +16,7 @@ void ProjectileSystem::init() {
     // call. A ProjectileSystem with no FX sink is fully functional -- it just draws nothing
     // at launch or termination.
     fx = nullptr;
+
     // ---- 2D tapered bullet streak (128 x 512) -------------------------------------------
     // Y=0 is the transparent tail, Y=511 is the bright head.
     // Widthwise Gaussian falloff (sigma=8) for a sharp taper to a thin line.
@@ -196,12 +197,17 @@ void ProjectileSystem::update(f32 dt) {
     }
     count = active_count;
 }
-void ProjectileSystem::render(u32 layer, const bs_math::HierPos2* camera) const {
+void ProjectileSystem::render(u32 layer, const bs_math::HierPos2* camera,
+                              const bs_glow_params* const* glow_by_family) const {
     for (i32 i = 0; i < MAX_PROJECTILES; ++i) {
         const Projectile& p = pool[i];
         if (!p.active) continue;
         bs_math::Vec2 draw_pos = hierpos_diff(&p.position, camera);
         f32 speed = vec2_length(p.velocity);
+        // Every sprite this round submits shares one glow pointer, so a family costs one draw
+        // run rather than one per sprite (the backend breaks runs on pointer identity).
+        const bs_glow_params* glow_override =
+            glow_by_family ? glow_by_family[(p.vfx_family < 3) ? p.vfx_family : 0] : nullptr;
         // ---- Per-family travel geometry -----------------------------------------------------
         // Three visual languages, keyed off the firing weapon's authored vfx_family. What varies
         // is how the round advertises what it IS:

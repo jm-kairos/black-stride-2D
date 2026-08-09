@@ -1,6 +1,6 @@
 #include "render/projectile_fx.h"
 
-#include "game.h"                  // game_state (projectile_fx ring, render.bullet_glow)
+#include "game.h"                  // game_state (projectile_fx ring, render.projectile_glow)
 #include "core/view_transform.h"   // render_from_hierpos
 #include "core/render_layers.h"    // LAYER_PROJECTILE_FX
 #include "sim/weapon_def.h"        // VfxFamily (explicit peer include, not via the game.h cascade)
@@ -414,7 +414,7 @@ static void draw_charge_at(const bs_glow_params* glow, Vec2 p, f32 t01, f32 unit
 
 // One ship's mounts. Split out because the fleet, the enemy hull and any future combatant all
 // want identical treatment and none of them share an iteration path.
-static void draw_ship_charges(const game_state* s, const bs_glow_params* glow, const Ship& sh) {
+static void draw_ship_charges(const game_state* s, const Ship& sh) {
     for (i32 hp = 0; hp < sh.hardpoint_count; ++hp) {
         const Weapon* w = sh.mounts[hp];
         if (!w || w->disabled) continue;
@@ -437,6 +437,9 @@ static void draw_ship_charges(const game_state* s, const bs_glow_params* glow, c
         const WeaponDef* def = w->def;
         const u8  family = def ? def->vfx_family : (u8)VFX_SHELL;
         const i32 n      = def ? def->muzzle_count : 0;
+        // The glow this weapon's SHOTS will use, so the charge, the muzzle flash and the round
+        // in flight are one continuous colour rather than three unrelated ones.
+        const bs_glow_params* glow = &s->render.projectile_glow[(family < 3) ? family : 0];
 
         if (n <= 0) {
             HierPos2 c = ship_muzzle_origin(&sh, hp, -1);   // -1 => the mount centre
@@ -459,15 +462,14 @@ static void draw_ship_charges(const game_state* s, const bs_glow_params* glow, c
 
 void projectile_fx_draw_charges(const game_state* s) {
     if (!s) return;
-    const bs_glow_params* glow = &s->render.bullet_glow;
     const Fleet& fleet = s->fleet_state.fleet;
     for (i32 i = 0; i < fleet.count(); ++i)
-        draw_ship_charges(s, glow, fleet.at(i).ship);
+        draw_ship_charges(s, fleet.at(i).ship);
     // The enemy hull too -- a heavy gun spinning up is exactly the kind of thing that should
     // telegraph. NPC agents are deliberately skipped: they fire through Weapon::fire from their
     // hull origin rather than through a hardpoint, and draw no mount art, so there is no barrel
     // for a charge to sit on (see ShipCombatModel's note on that fire site).
-    draw_ship_charges(s, glow, s->fleet_state.enemy_ship);
+    draw_ship_charges(s, s->fleet_state.enemy_ship);
 }
 
 void projectile_fx_draw(const game_state* s) {
@@ -475,16 +477,17 @@ void projectile_fx_draw(const game_state* s) {
     const ProjectileFx& ring = s->projectile_fx;
     if (ring.live <= 0) return;   // nothing live: the whole pass costs one branch
 
-    // Share the projectile pass's glow block. It is long-lived storage inside game_state,
-    // which the boundary doc requires -- renderer_draw_sprite copies this POINTER into the
-    // frame batch and the backend dereferences it during end_frame, so a stack-local would
-    // dangle. Sharing it with the streaks also means one glow identity across both layers
-    // instead of two, which is what the backend breaks draw runs on.
-    const bs_glow_params* glow = &s->render.bullet_glow;
-
     for (i32 i = 0; i < MAX_PROJECTILE_FX; ++i) {
         const ProjectileFxEvent& e = ring.events[i];
         if (!e.active) continue;
+
+        // The event's own family glow -- the same pointer the in-flight shot used, so a muzzle
+        // flash and the round it launched share one colour temperature and one draw run. Long-
+        // lived game_state storage, which the boundary requires: renderer_draw_sprite copies this
+        // POINTER into the frame batch and the backend dereferences it during end_frame, so a
+        // stack-local would dangle.
+        const bs_glow_params* glow =
+            &s->render.projectile_glow[(e.family < 3) ? e.family : 0];
 
         Vec2 p = render_from_hierpos(s, &e.position);
 

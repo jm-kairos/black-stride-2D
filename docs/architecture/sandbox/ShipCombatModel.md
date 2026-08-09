@@ -166,8 +166,7 @@ the subsystem while sitting outside `ship.h`'s seven.)*
   expiry is deliberately not routed through it and stays inside `update`, silently: a shell
   running out of range should fizzle, not detonate.
 - **The whole VFX layer hangs off one nullable pointer.** `ProjectileSystem::fx` is wired once
-  in `combat_arena_init` and never rewritten (contrast `glow_override`, which a render pass
-  rewrites every frame — see tech debt). Setting it to `nullptr` disables every launch and
+  in `combat_arena_init` and never rewritten. Setting it to `nullptr` disables every launch and
   termination effect in the game and must leave damage, collision and physics bit-identical.
   That is the removability test for the feature, and it is why the emit calls take no non-const
   simulation state.
@@ -273,9 +272,10 @@ it reports affordability, and the caller commits via `ship_try_spend_cap`.
   silently ignored there, and that is the site to fix if agents ever grow turrets.
 - `spawn_missile` duplicates `spawn`'s entire free-slot loop, with a comment explaining the
   reason: `spawn` does not report which slot it filled.
-- `ProjectileSystem::glow_override` is a mutable pointer set by a *render* pass
-  (`render/gameplay_overlays.cpp:151`) into a simulation object, and its identity determines GPU
-  batch merging.
+- ~~`ProjectileSystem::glow_override` is a mutable pointer set by a *render* pass into a
+  simulation object~~ — **fixed**: the member is gone and `render` takes a per-family glow table
+  as a parameter instead. Pointer identity still determines GPU batch merging, so the table must
+  point at long-lived storage; that constraint moved to the call site rather than disappearing.
 - ~~`point_defense.cpp` frees projectile slots directly rather than through an API~~ — **fixed**:
   it and the three `combat_arena.cpp` sites now go through `ProjectileSystem::retire`.
   `ProjectileSystem::update` still recounts from scratch each tick, quietly repairing the
@@ -293,7 +293,8 @@ it reports affordability, and the caller commits via `ship_try_spend_cap`.
 `sandbox/source/sim/weapon.{cpp,h}`, `sandbox/source/sim/weapon_def.{cpp,h}`,
 `sandbox/source/sim/projectile.{cpp,h}`, `sandbox/source/render/ship_visual.{cpp,h}`
 
-**Last verified:** 2026-08-09, working tree on `game` (adds `ProjectileSystem::retire` / `::fx`
+**Last verified:** 2026-08-10, working tree on `game` (adds `ProjectileSystem::retire` / `::fx`
 and the spawn-side muzzle flash; `ship_muzzle_origin` factored out as the one barrel-geometry
 site; `vfx_family` and the guided-round trail history added to the data model; `render` gains an
-incandescent head and loses the travelling fake muzzle flash)
+incandescent head, takes a per-family glow table as a parameter, loses the `glow_override`
+member, and loses the travelling fake muzzle flash)

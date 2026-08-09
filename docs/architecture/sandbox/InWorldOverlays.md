@@ -85,6 +85,14 @@ all arrive through `weapon_hub.cpp`, which polls a mouse button and writes an ac
   pulsing engine plume drawn for its whole flight). Flak bursts and PD intercepts are
   deliberately *not* family-varied: a burst is a fused round's own behaviour, and an intercept is
   tinted by the defender that killed it, not by the weapon that fired it.
+  Each family also carries **its own `bs_glow_params`** (`game_state::render::projectile_glow`,
+  indexed by `VfxFamily`), which is where the colour lives: the shader ramps
+  `temp_cool -> temp_warm -> temp_hot` along a sprite whenever `custom.x > 0`, so a slug reads
+  cold blue and a missile plume reads as a burning motor with roughly double the heat-distortion
+  amplitude. Charge-up, muzzle flash, in-flight round and screen-marker all resolve to the *same*
+  pointer for a given family, which keeps one weapon's whole life-cycle in one colour language
+  and in one draw run. This only became worth doing after the scene went HDR — on 8-bit targets
+  a saturated tint clipped to white in the composite and all three families converged there.
 - **The curved trail is exclusive to guided rounds, and that exclusivity is what pays for it.**
   `ProjectileSystem::render` threads a chain of quads through a missile's recorded positions
   instead of drawing the velocity-aligned streak (the streak is suppressed outright while the
@@ -171,9 +179,11 @@ pixels. A new heat source kind is an entry appended to the `MBSource` array in
 **Known limitations / tech debt:**
 - **`gameplay_overlays.cpp` is a dispatcher as much as a renderer**, with 17 project includes
   reaching into three simulation subsystems.
-- **A render pass mutates simulation state**: it assigns
-  `s->projectiles.glow_override = &s->render.bullet_glow` before rendering, writing a pointer
-  into the projectile pool that the engine later compares by *identity* for batch breaking.
+- ~~**A render pass mutates simulation state**: it assigns `s->projectiles.glow_override`
+  before rendering~~ — **fixed**: the per-family glow table is built here and passed to
+  `ProjectileSystem::render` as an argument, so the pool no longer carries render state. The
+  pointers still have to be long-lived `game_state` storage, because the backend retains them
+  until `end_frame` and compares them by *identity* for batch breaking.
 - **`heat_map.cpp` lives under `sim/` but is purely a render submission**, and its function is
   still named `draw_ship_metaballs` while everything around it says "heat map".
 - **`HEAT_FADE_ZERO_ZOOM` is annotated "== ZOOM_GLOBAL_MIN" but the two do not match** — the
@@ -206,6 +216,6 @@ pixels. A new heat source kind is an entry appended to the `MBSource` array in
 `sandbox/source/render/defense_laser_overlay.{cpp,h}`,
 `sandbox/source/render/out_sensor_detection_fx.{cpp,h}`, `sandbox/source/sim/heat_map.{cpp,h}`
 
-**Last verified:** 2026-08-09, working tree on `game` (adds `render/projectile_fx` — three
-visual families, the heavy-weapon charge-up and the guided-round curved trail; weapon fire moves
-off `LAYER_UI` onto the two new bloom-eligible layers)
+**Last verified:** 2026-08-10, working tree on `game` (adds `render/projectile_fx` — three
+visual families with per-family glow params, the heavy-weapon charge-up and the guided-round
+curved trail; weapon fire moves off `LAYER_UI` onto the two new bloom-eligible layers)

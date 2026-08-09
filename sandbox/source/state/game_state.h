@@ -2653,7 +2653,20 @@ struct game_state {
 
 
 
-    bs_glow_params bullet_glow;   // per-entity glow for combat entities (bullets, etc.)
+    // Per-VISUAL-FAMILY projectile glow, indexed by VfxFamily (sim/weapon_def.h):
+    // [VFX_SHELL] inert kinetic tracer, [VFX_SLUG] rail-driven, [VFX_ORDNANCE] rocket exhaust.
+    //
+    // These carry the shader's colour-TEMPERATURE ramp (temp_cool -> temp_warm -> temp_hot along
+    // the sprite's length) plus the additive glow tint and the heat-distortion amplitude, so a
+    // family's identity is as much in here as it is in the geometry projectile_fx.cpp draws.
+    // Splitting them only became worth doing once the scene went HDR: on the old 8-bit targets a
+    // saturated tint clipped to white in the composite, so three differently-coloured families
+    // would have converged on the same white anyway.
+    //
+    // Three separate structs, not one shared: the backend breaks draw runs on glow_override
+    // POINTER IDENTITY, so this is at most three runs for the projectile pass rather than one.
+    // That is the deliberate cost of the feature and it is small.
+    bs_glow_params projectile_glow[3];
 
 
 

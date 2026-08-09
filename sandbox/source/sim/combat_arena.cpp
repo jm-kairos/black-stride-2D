@@ -14,9 +14,8 @@ void combat_arena_init(game_state* s) {
     s->projectiles.init();
 
     // ---- Projectile VFX ring (cosmetic) ----------------------------------------------------
-    // Wired ONCE here, not per frame -- unlike ProjectileSystem::glow_override, which a render
-    // pass rewrites every frame. The pool is a plain game_state member, so the pointer stays
-    // valid for the process lifetime. Set it to nullptr to disable every launch and
+    // Wired ONCE here, not per frame. The pool is a plain game_state member, so the pointer
+    // stays valid for the process lifetime. Set it to nullptr to disable every launch and
     // termination effect without touching a fire site.
     s->projectile_fx.init();
     s->projectiles.fx = &s->projectile_fx;

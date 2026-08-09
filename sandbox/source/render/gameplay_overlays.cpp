@@ -151,14 +151,21 @@ void draw_gameplay_overlays(game_state* s) {
 
     // ---- Projectiles ---------------------------------------------------------------------
     s->profiler.begin(PROF_PROJECTILES_DRAW);
-    s->projectiles.glow_override = &s->render.bullet_glow;
+    // Per-family glow, indexed by VfxFamily. Built here rather than stored on the pool because
+    // it is render state: the pool used to carry a `glow_override` pointer that this pass wrote
+    // into it every frame, which the subsystem docs recorded as a render pass mutating
+    // simulation state. These point at long-lived game_state members, which the boundary
+    // requires -- the backend retains the pointer until end_frame.
+    const bs_glow_params* proj_glow[3] = {
+        &s->render.projectile_glow[0], &s->render.projectile_glow[1], &s->render.projectile_glow[2]
+    };
     // LAYER_PROJECTILE, not LAYER_UI. LAYER_UI is BS_LAYER_BLOOM_THRESHOLD, so every shot in
     // the game used to be composited AFTER the bloom pass and picked up no bloom at all --
     // tracers and hits read as flat coloured decals rather than as anything hot. The streak
     // and head both set custom.z = 1 so dropping below the threshold (and therefore below
     // frame_lighting's unlit cutoff, which is the same number) does not hand them to the
     // galaxy-map look's star light instead.
-    s->projectiles.render(LAYER_PROJECTILE, &s->camera_state.camera_hierpos);
+    s->projectiles.render(LAYER_PROJECTILE, &s->camera_state.camera_hierpos, proj_glow);
     // Launch and termination effects: muzzle flashes, impacts, flak airbursts, PD intercepts.
     // Reads the ring the sim wrote this frame; takes a const game_state so it cannot write back.
     projectile_fx_draw(s);

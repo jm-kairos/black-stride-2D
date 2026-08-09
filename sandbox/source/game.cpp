@@ -308,7 +308,43 @@ b8 game_init(Game* game_inst) {
 
     s->render.exhaust_glow = s->render.glow_params;
 
-    s->render.bullet_glow  = s->render.glow_params;
+    // ---- Per-family projectile glow -------------------------------------------------------
+    // All three start from the global defaults, then differ only where the family's PHYSICS
+    // differs. The shader ramps temp_cool -> temp_warm -> temp_hot from a sprite's tail to its
+    // head whenever custom.x > 0, which is the streak and the missile plume; glow_tint is the
+    // additive halo every projectile sprite picks up; distort_amp is the heat shimmer.
+
+    for (i32 i = 0; i < 3; ++i) s->render.projectile_glow[i] = s->render.glow_params;
+
+    // SHELL -- an inert slug of hot metal. This is the established look and stays the baseline
+    // the other two are read against; changing it would re-tune every existing tracer.
+    s->render.projectile_glow[VFX_SHELL].glow_tint = bs_color{ 1.00f, 0.85f, 0.50f, 1.0f };
+    s->render.projectile_glow[VFX_SHELL].temp_cool = bs_color{ 0.90f, 0.15f, 0.02f, 1.0f };
+    s->render.projectile_glow[VFX_SHELL].temp_warm = bs_color{ 1.00f, 0.45f, 0.05f, 1.0f };
+    s->render.projectile_glow[VFX_SHELL].temp_hot  = bs_color{ 1.00f, 0.98f, 0.90f, 1.0f };
+
+    // SLUG -- rail-driven, so the light is electrical rather than thermal: cold blue through
+    // cyan to a blue-white head. Distortion is nearly off because there is no combustion gas to
+    // shimmer -- a railgun's flash is ionisation, not burning propellant. Brighter core and
+    // stronger head bloom because the discharge, not the projectile, is the event.
+    s->render.projectile_glow[VFX_SLUG].glow_tint   = bs_color{ 0.55f, 0.80f, 1.00f, 1.0f };
+    s->render.projectile_glow[VFX_SLUG].temp_cool   = bs_color{ 0.10f, 0.25f, 0.85f, 1.0f };
+    s->render.projectile_glow[VFX_SLUG].temp_warm   = bs_color{ 0.35f, 0.70f, 1.00f, 1.0f };
+    s->render.projectile_glow[VFX_SLUG].temp_hot    = bs_color{ 0.92f, 0.98f, 1.00f, 1.0f };
+    s->render.projectile_glow[VFX_SLUG].intensity   = 1.25f;
+    s->render.projectile_glow[VFX_SLUG].head_mult   = 5.0f;
+    s->render.projectile_glow[VFX_SLUG].distort_amp = 0.02f;
+
+    // ORDNANCE -- a chemical motor actually burning. Yellow-white at the nozzle into a dark
+    // smoky red aft, and the ONE family where the shader's heat distortion is literally correct
+    // rather than decorative, so it runs at roughly double the default amplitude.
+    s->render.projectile_glow[VFX_ORDNANCE].glow_tint    = bs_color{ 1.00f, 0.62f, 0.28f, 1.0f };
+    s->render.projectile_glow[VFX_ORDNANCE].temp_cool    = bs_color{ 0.55f, 0.10f, 0.02f, 1.0f };
+    s->render.projectile_glow[VFX_ORDNANCE].temp_warm    = bs_color{ 1.00f, 0.55f, 0.10f, 1.0f };
+    s->render.projectile_glow[VFX_ORDNANCE].temp_hot     = bs_color{ 1.00f, 0.95f, 0.75f, 1.0f };
+    s->render.projectile_glow[VFX_ORDNANCE].distort_amp  = 0.15f;
+    s->render.projectile_glow[VFX_ORDNANCE].wave_speed   = 22.0f;
+    s->render.projectile_glow[VFX_ORDNANCE].jitter_speed = 60.0f;
 
     s->editor.edit_mode_active = FALSE;
 

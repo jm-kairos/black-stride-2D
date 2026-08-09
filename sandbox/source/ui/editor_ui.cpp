@@ -227,8 +227,17 @@ void build_editor_panel(game_state* s) {
         bs_ui_text_colored(GL[0], GL[1], GL[2], GL[3], "EXHAUST GLOW");
         draw_glow_editor(&s->render.exhaust_glow, "exhaust");
         bs_ui_separator();
-        bs_ui_text_colored(GL[0], GL[1], GL[2], GL[3], "BULLET GLOW");
-        draw_glow_editor(&s->render.bullet_glow, "bullet");
+        // One editor per VISUAL FAMILY. These are what give a rail slug its cold blue and a
+        // missile motor its shimmer, so they are tuned against each other rather than alone --
+        // hence three panels in a row instead of one "bullet glow".
+        bs_ui_text_colored(GL[0], GL[1], GL[2], GL[3], "PROJECTILE GLOW - SHELL");
+        draw_glow_editor(&s->render.projectile_glow[VFX_SHELL], "pglow_shell");
+        bs_ui_separator();
+        bs_ui_text_colored(GL[0], GL[1], GL[2], GL[3], "PROJECTILE GLOW - SLUG");
+        draw_glow_editor(&s->render.projectile_glow[VFX_SLUG], "pglow_slug");
+        bs_ui_separator();
+        bs_ui_text_colored(GL[0], GL[1], GL[2], GL[3], "PROJECTILE GLOW - ORDNANCE");
+        draw_glow_editor(&s->render.projectile_glow[VFX_ORDNANCE], "pglow_ordnance");
         // Also keep the global fallback editable for entities that don't set an override.
         bs_ui_separator();
         bs_ui_text_colored(GL[0], GL[1], GL[2], GL[3], "GLOBAL GLOW (fallback)");

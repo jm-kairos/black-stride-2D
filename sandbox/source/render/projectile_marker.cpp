@@ -85,10 +85,11 @@ void projectile_markers_draw(const game_state* s) {
         dot.texture       = ps.flash_texture;
         dot.blend         = BLEND_ADDITIVE;
         dot.layer         = LAYER_UI;
-        // Same long-lived glow storage the projectile pass points at. The backend breaks draw
-        // runs on this pointer's IDENTITY, so reusing it keeps the markers batching with the
-        // shots rather than splitting the run per sprite.
-        dot.glow_override = &s->render.bullet_glow;
+        // Same long-lived glow storage the projectile pass points at, and the SAME family entry,
+        // so a marker glows in its shot's own colour language. The backend breaks draw runs on
+        // this pointer's IDENTITY, so reusing the exact pointer keeps markers batching with the
+        // shots they mark rather than splitting the run per sprite.
+        dot.glow_override = &s->render.projectile_glow[(p.vfx_family < 3) ? p.vfx_family : 0];
         renderer_draw_sprite(&dot);
 
     }

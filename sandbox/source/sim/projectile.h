@@ -94,8 +94,16 @@ struct ProjectileSystem {
     void retire(i32 index, u8 fx_kind, f32 fx_scale = 0.0f);
     // submit draw commands for all active projectiles. Positions are transformed into render
     // space relative to `camera` (render = hierpos_diff(pos, camera)).
-    void render(u32 layer, const bs_math::HierPos2* camera) const;
-    const bs_glow_params* glow_override; // NULL => use global glow; else per-bullet glow
+    //
+    // `glow_by_family` is indexed by VfxFamily and supplies the shader's colour-temperature ramp
+    // and glow tint per family; entries may be null for the global glow. It is a PARAMETER rather
+    // than the mutable `glow_override` member it replaces -- that member was a pointer a render
+    // pass wrote into a simulation object every frame, which the subsystem docs carried as tech
+    // debt. Passing it in keeps the pool free of render state and makes the lifetime obvious at
+    // the one call site. The pointees must outlive the frame: the backend copies the pointer into
+    // its batch and dereferences it during end_frame.
+    void render(u32 layer, const bs_math::HierPos2* camera,
+                const bs_glow_params* const* glow_by_family) const;
     // Cosmetic muzzle/impact ring, wired once at init to the game_state member. NULL disables
     // every launch and termination effect in the game and must leave damage, collision and
     // physics bit-identical -- that nullability IS the removability test for the VFX feature.
