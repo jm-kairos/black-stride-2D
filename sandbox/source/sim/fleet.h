@@ -36,6 +36,23 @@ struct ShipFlight {
     bs_math::Vec2 velocity;          // world-space linear velocity
     f32           angular_velocity;  // rad/s, CCW positive; auto-stabilizes when A/D released
 };
+// Standing posture for a fleet ship: what it does when nobody is issuing it a fresh order.
+//
+// Modelled on DefenseLaser's stance/priority/gate trio rather than invented fresh -- that one
+// already proves the shape in this codebase: a u8 on the owning struct, a branch in the update
+// that consumes it, and a HUD chip round-tripped through the action grammar.
+//
+// The distinction that matters is AUTONOMY, not aggression. Aggressive and Defensive both fight;
+// they differ in whether the ship will leave its station to do it. That is what makes a stance
+// useful next to an order: the order says where, the stance says how far the ship will stray
+// from it.
+enum FleetStance : u8 {
+    FLEET_STANCE_AGGRESSIVE = 0, // engage designated targets and close to weapons range
+    FLEET_STANCE_DEFENSIVE,      // engage, but hold station -- fire from where the order put it
+    FLEET_STANCE_PASSIVE,        // never engage; movement orders only
+    FLEET_STANCE_HOLD_FIRE,      // manoeuvre normally, weapons tight (shadow a target, don't shoot)
+};
+
 // One player ship: pose + dynamics + selection + per-ship order state.
 // Move and attack targets are independent: a ship can strafe toward a destination while its
 // nose tracks and fires at a designated target.
@@ -48,6 +65,16 @@ struct FleetShip {
     b8            has_attack_target; // TRUE when an attack order is active
     b8            jump_capable;      // TRUE when this ship can perform FTL jumps
     f32           jump_radius;       // world-space FTL jump range (units)
+    u8            stance;            // FleetStance; honoured by update_attack
+    // ---- Standing orders ---------------------------------------------------------------
+    // Distinct from move_target because their destination is not a POINT -- it tracks another
+    // hull every frame. A move order to where the escortee currently is would be stale the
+    // moment it moved, which is the whole reason these are separate order types rather than
+    // the RTS layer re-issuing move orders every tick.
+    b8            has_escort_target; // TRUE when following a friendly at station-keeping range
+    Ship*         escort_target;     // validated against the fleet each frame
+    b8            has_avoid_target;  // TRUE when actively keeping away from a hostile
+    Ship*         avoid_target;      // validated against combat entities each frame
     bs_math::HierPos2 move_target;   // world-space formation slot / destination
     Ship*         attack_target;     // validated against combat entities each frame
     // Integrate the rigid-body pose from the flight velocities. Mirrors the legacy
@@ -58,9 +85,16 @@ struct FleetShip {
     // Autopilot an Attack order: rotate nose toward attack_target and fire when aligned.
     // If no move target is set, this also approaches the target to maintain engagement range.
     void update_attack(game_state* s, f32 dt);
+    // Autopilot an Escort order: hold station near escort_target, using steering::standoff so the
+    // ship settles into a band rather than oscillating on the exact radius.
+    void update_escort(f32 dt);
+    // Autopilot an Avoid order: run from avoid_target until outside the disengage band.
+    void update_avoid(f32 dt);
     // Clear a single order type.
     void clear_move_target();
     void clear_attack_target();
+    void clear_escort_target();
+    void clear_avoid_target();
 };
 class Fleet {
 public:
@@ -103,6 +137,17 @@ public:
     void order_move(bs_math::HierPos2 target);   // selected ships -> formation slots around target
     void order_attack(Ship* target);          // selected ships -> attack target
     void clear_order(i32 idx);                 // cancel a ship's order (e.g. when piloted)
+    // Apply a FleetStance to every selected ship. Stance is orthogonal to orders -- it survives
+    // one and constrains the next -- so this deliberately does not touch order state.
+    void set_selected_stance(u8 stance);
+    // Selected ships escort `target` (a friendly hull) at station-keeping range.
+    void order_escort(Ship* target);
+    // Selected ships break off and keep away from `target`.
+    void order_avoid(Ship* target);
+    // Selected ships regroup on the flagship. Deliberately NOT a new order type: it is
+    // order_escort aimed at member 0, because "regroup" and "escort" are the same behaviour
+    // with a different target, and a fourth near-duplicate update_* would earn nothing.
+    void order_rally();
     // ---- FTL jump --------------------------------------------------------------------
     // Among the selected, jump-capable ships, find the smallest jump radius and the index of
     // the ship that owns it (the jump circle's center; ties resolve to the first selected).

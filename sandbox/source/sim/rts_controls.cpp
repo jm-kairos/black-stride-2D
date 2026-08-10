@@ -1,6 +1,7 @@
 #include "sim/rts_controls.h"
 #include "game.h"
 #include "core/view_transform.h" // game_screen_to_true_*, render_from_hierpos, game_camera_center_hierpos
+#include "render/fleet_roster.h" // fleet_roster_wants_mouse (panel owns the click over itself)
 #include "sim/ship.h"
 #include "sim/weapon.h"
 #include "sim/fleet.h"
@@ -27,11 +28,10 @@ static constexpr u32   HOVER_CIRCLE_LAYER        = 50; // same as LAYER_UI in ga
 static constexpr f32 BOX_SELECT_THICKNESS        = 1.0f;
 static constexpr bs_color BOX_SELECT_COLOR       = { 0.35f, 0.85f, 0.95f, 0.90f };
 static constexpr bs_color SELECTION_RECT_COLOR = { 0.35f, 0.85f, 0.95f, 0.85f };
-// Pixels; below this a left release counted as a click rather than a box drag. Retained with the
-// rest of the retired box-selection machinery (see RtsControls::update) so restoring multi-unit
-// selection is a matter of re-driving it, not re-deriving it. [[maybe_unused]] because the build
-// is -Werror on unused constants and nothing references it while selection is retired.
-[[maybe_unused]] static constexpr f32 RTS_CLICK_THRESHOLD = 4.0f;
+// Pixels; below this a left release counts as a click rather than a box drag. Live again now
+// that selection is driven from the command overlay -- the [[maybe_unused]] it carried while
+// selection was retired is gone with it.
+static constexpr f32 RTS_CLICK_THRESHOLD = 4.0f;
 static constexpr f32 RTS_MOVE_MARKER_SIZE      = 12.0f;  // world units
 static constexpr f32 RTS_MOVE_MARKER_THICKNESS = 1.5f;
 static constexpr bs_color RTS_MOVE_MARKER_COLOR = { 0.35f, 0.85f, 0.95f, 0.90f };
@@ -277,27 +277,57 @@ void RtsControls::update(f32 dt) {
     // ---- System-mode camera pan REMOVED: the galaxy-map look now uses the same detached free-
     // camera path above (free_camera_pos), so there is no separate camera.position pan branch. ----
     // ---- Selection and order input (whenever the camera is detached) -----------------------
-    if (detached) {
-        // ---- Box / click selection: RETIRED ---------------------------------------------
-        // The game has ONE hull, so there was never more than one thing to select: every box
-        // drag and every click resolved to "the ship" or "nothing". Meanwhile LEFT BUTTON is
-        // the ballistic trigger in both control modes, and it could not be, because selection
-        // owned it while detached (that is exactly why game.cpp's fire gate tested
-        // free_camera_active). Retiring selection is what frees it.
+    if (detached || m_state->command_overlay_active) {
+        // ---- Box / click selection ------------------------------------------------------
+        // RESTORED, by re-driving the machinery that was kept when it was retired rather than
+        // by rewriting it: RtsSelectionBox, m_box, ship_inside_world_box and
+        // draw_rect_from_screen_box were all left compiling and correct for exactly this.
         //
-        // Kept, not deleted, following the convention the M and P keys and
-        // combat_arena_update_enemy_orbit already set: RtsSelectionBox, m_box,
-        // ship_inside_world_box, draw_rect_from_screen_box and RTS_CLICK_THRESHOLD all still
-        // compile and are still correct -- they are simply no longer driven. m_box.active stays
-        // FALSE for the process lifetime, so draw()'s drag-box branch is inert without a change
-        // there. Restoring multi-unit selection means re-driving this, not rewriting it.
+        // What changed is not the mechanism but WHEN the left button is ours. It is the
+        // ballistic trigger in both control modes, and that is deliberate -- so selection only
+        // takes it while the command overlay is up, which is a bounded moment the player opened
+        // on purpose. game.cpp's fire gate tests the same flag, so the button is never claimed
+        // by both.
         //
-        // The hull is instead held permanently selected, so everything downstream that asks
-        // "what is selected" (the RMB order path below, jump mode's any_selected gate, X's
-        // per-selection attack clear, and draw()'s selection rect) behaves exactly as it did
-        // after a click, every frame, with no click.
-        if (m_state->fleet_state.fleet.count() > 0)
-            m_state->fleet_state.fleet.set_selected(0, TRUE);
+        // With the overlay down and the camera merely detached, the flagship stays permanently
+        // selected exactly as before, so the RMB order path, jump mode's any_selected gate and
+        // draw()'s selection rect all behave as they did after a click, with no click.
+        Fleet& sel_fleet = m_state->fleet_state.fleet;
+        // The roster is drawn over the world rather than in a layer that arbitrates for itself,
+        // so it has to be asked explicitly -- otherwise a click on a stance chip would also drag
+        // a selection box through the world behind the panel.
+        const b8 ui_free_sel = !bs_imgui_wants_mouse() && !bs_rml_wants_mouse()
+                            && !fleet_roster_wants_mouse(m_state);
+        if (m_state->command_overlay_active && ui_free_sel) {
+            const b8 lmb_down = input_is_button_down(BUTTON_LEFT);
+            const b8 lmb_prev = input_was_button_down(BUTTON_LEFT);
+            const f32 mxf = (f32)mx, myf = (f32)my;
+            if (lmb_down && !lmb_prev) {
+                m_box.active  = TRUE;
+                m_box.start_x = mxf; m_box.start_y = myf;
+                m_box.end_x   = mxf; m_box.end_y   = myf;
+            } else if (lmb_down && m_box.active) {
+                m_box.end_x = mxf; m_box.end_y = myf;
+            } else if (!lmb_down && m_box.active) {
+                m_box.active = FALSE;
+                const f32 dx = m_box.end_x - m_box.start_x;
+                const f32 dy = m_box.end_y - m_box.start_y;
+                // Below the threshold the gesture was a CLICK, not a drag. Routing the two
+                // through different Fleet calls keeps the screen-constant pick floor in
+                // select_at_point doing its job -- a box that small would select nothing at
+                // combat zoom, where a hull is a couple of pixels wide.
+                if (fabsf(dx) < RTS_CLICK_THRESHOLD && fabsf(dy) < RTS_CLICK_THRESHOLD) {
+                    sel_fleet.select_at_point(game_screen_to_true_hierpos(m_state, Vec2{ mxf, myf }));
+                } else {
+                    sel_fleet.select_in_box(
+                        game_screen_to_true_hierpos(m_state, Vec2{ m_box.start_x, m_box.start_y }),
+                        game_screen_to_true_hierpos(m_state, Vec2{ m_box.end_x,   m_box.end_y }));
+                }
+            }
+        } else {
+            m_box.active = FALSE;   // overlay closed mid-drag: abandon it rather than commit
+            if (sel_fleet.count() > 0 && !sel_fleet.any_selected()) sel_fleet.set_selected(0, TRUE);
+        }
         // ---- FTL jump mode toggle (J) --------------------------------------------------
         Fleet& fleet = m_state->fleet_state.fleet;
         if (input_is_key_down(KEY_J) && !input_was_key_down(KEY_J)) {

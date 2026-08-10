@@ -14,6 +14,11 @@ screen-constant visibility markers for in-flight shots. `sandbox/source/render/w
 `_draw`: the middle-mouse weapon micro-selection hub. It is the one member of this subsystem
 that also *reads input* — `game_update` owns the gating and calls `_update`, the dispatcher
 calls `_draw` — because the flick hit-test and the tile layout must share one geometry.
+`sandbox/source/render/fleet_roster.h` — `fleet_roster_update`, `_draw`, `_wants_mouse`: the
+command-overlay fleet panel, and the **second** member that reads input, for the same reason —
+row hit-test and row layout must be one geometry. `_wants_mouse` exists because the panel is
+drawn over the world rather than in a layer that arbitrates for itself, so RtsControl has to ask
+it before treating a click as a world drag.
 `sandbox/source/render/projectile_fx.h` — `projectile_fx_render_init`, `projectile_fx_draw`,
 `projectile_fx_draw_charges`: the launch and termination halves of the weapon-fire VFX (muzzle
 flashes, impacts, flak airbursts, point-defense intercepts), plus the pre-fire charge-up glow on
@@ -38,9 +43,16 @@ subsystem page: it is one fixed-capacity event buffer and a lifetime table.)*
 **Out-degree 37 — still the highest in the render tier by a wide margin** (next is ShipRendering
 at 15). FleetControl, ActionLog and `core/input.h`
 all arrive through `weapon_hub.cpp`, which polls a mouse button and writes an action-log line.
-**Depended on by:** SceneOrchestration, DevPanels, FrameOrchestrator, GameStateModel.
+**Depended on by:** SceneOrchestration, DevPanels, FrameOrchestrator, GameStateModel, and
+RtsControl (`fleet_roster_wants_mouse` — an inverted `sim/` → `render/` edge, recorded as tech
+debt on that page).
 
 **Key invariants:**
+- **Self-drawn panels must be asked whether they own the cursor.** `weapon_hub` and
+  `fleet_roster` draw in screen space over the world, so neither ImGui's nor RmlUi's
+  `wants_mouse` arbitration covers them. `fleet_roster_wants_mouse` is polled by RtsControl
+  before it starts a selection drag; without it a stance-chip click would also drag a box
+  through the world behind the panel. Any third such panel needs the same treatment.
 - **It must run after ShipRendering.** Several sub-passes read `Ship::render_pos` and
   `CombatEntity::render_pos`, which `draw_ship_scene` writes; `out_sensor_detection_fx.cpp`
   notes its dependency in a trailing comment. Enforced only by the order in `render_scene`.
@@ -170,7 +182,7 @@ all arrive through `weapon_hub.cpp`, which polls a mouse button and writes an ac
   override the ring collapses to that one weapon's reach and turns green to say so.
 
 **Extension points:** A new overlay is a `draw_*` function in its own `render/` file plus one
-call in `draw_gameplay_overlays` — the dispatcher already aggregates seven such modules. Draw on
+call in `draw_gameplay_overlays` — the dispatcher already aggregates eight such modules. Draw on
 `LAYER_UI` (or `LAYER_GIZMO` for editor affordances), route positions through
 `render_from_hierpos`, and remember the engine's two thickness conventions: radii must be
 divided by zoom manually, while `renderer_draw_line`/`_circle` thickness is already in screen
@@ -217,6 +229,7 @@ pixels. A new heat source kind is an entry appended to the `MBSource` array in
 `sandbox/source/render/defense_laser_overlay.{cpp,h}`,
 `sandbox/source/render/out_sensor_detection_fx.{cpp,h}`, `sandbox/source/sim/heat_map.{cpp,h}`
 
-**Last verified:** 2026-08-10, working tree on `game` (adds `render/projectile_fx` — three
-visual families with per-family glow params, the heavy-weapon charge-up and the guided-round
-curved trail; weapon fire moves off `LAYER_UI` onto the two new bloom-eligible layers)
+**Last verified:** 2026-08-10, working tree on `game` (adds `render/fleet_roster`, the second
+input-reading member; plus `render/projectile_fx` — three visual families with per-family glow
+params, the heavy-weapon charge-up and the guided-round curved trail; weapon fire moves off
+`LAYER_UI` onto the two new bloom-eligible layers)

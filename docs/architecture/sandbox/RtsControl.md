@@ -2,7 +2,8 @@
 
 **Responsibility:** Owns the RTS interaction layer — hover detection, issuing move and attack
 orders, FTL jump mode, free-camera movement, the pilot/auto-pilot toggle, and the overlays that
-visualise all of it. **Box and click selection are retired** (see invariants). It explicitly does not *execute* orders:
+visualise all of it. **Box and click selection are live again, driven from the command overlay**
+(see invariants). It explicitly does not *execute* orders:
 `sim/rts_controls.h` records that orders are now executed by `Fleet`, leaving this module owning
 "the input state + transition logic". It also does not own the camera transform (CoordinateFrames)
 or zoom (CameraControl), though it moves the free camera.
@@ -10,34 +11,37 @@ or zoom (CameraControl), though it moves the free camera.
 **Public interface:** `sandbox/source/sim/rts_controls.h` — `inline ship_inside_world_box`;
 `struct RtsSelectionBox`; `class RtsControls` with `update`, `draw`, `piloted_index`,
 `jump_mode_active`, `hud_toggle_pilot_mode`.
-`ship_inside_world_box` and `RtsSelectionBox` are still declared and still correct, but nothing
-drives them — see the retirement note below before assuming they are live.
+`ship_inside_world_box` and `RtsSelectionBox` are driven again by `update`, gated on
+`game_state::command_overlay_active`.
 The object is a `game_state` member, so it is reached through the hub rather than by include —
 no other subsystem includes this header.
 
 **Depends on:** FleetControl, ShipCombatModel, CoordinateFrames, GalaxyMapRendering
-(`galaxy_pick_planet`), GameStateModel; engine `core/input.h`, `renderer/renderer.h`,
+(`galaxy_pick_planet`), InWorldOverlays (`fleet_roster_wants_mouse`), GameStateModel;
+engine `core/input.h`, `renderer/renderer.h`,
 `renderer/camera2d.h`, `renderer/bs_imgui.h`, `renderer/bs_rml.h`, `math/math_utils.h`,
 `renderer/renderer_types.h`, `defines.h`.
 **Depended on by:** FleetControl (`piloted_ship_origin` calls `piloted_index`),
 FrameOrchestrator.
 
 **Key invariants:**
-- **Box and click selection are RETIRED, and that is what freed the left button.** The game has
-  one hull, so every box drag and every click resolved to "the ship" or "nothing", while LEFT
-  BUTTON is the ballistic trigger in both control modes — and it could not be, because selection
-  owned it while detached (that is exactly why `game.cpp`'s fire gate tested
-  `free_camera_active`). The hull is instead held permanently selected, so everything downstream
-  that asks "what is selected" — the RMB order path, jump mode's `any_selected` gate, X's
-  per-selection attack clear, `draw()`'s selection rect — behaves as it did after a click, every
-  frame, with no click. Kept and not deleted, per the convention the M and P keys and
-  `combat_arena_update_enemy_orbit` already set: `RtsSelectionBox`, `m_box`,
-  `ship_inside_world_box`, `draw_rect_from_screen_box` and `RTS_CLICK_THRESHOLD` all still
-  compile and are still correct. `m_box.active` stays FALSE for the process lifetime, so
-  `draw()`'s drag-box branch is inert without a change there. Restoring multi-unit selection
-  means re-driving this, not rewriting it. (`ship_inside_world_box` remains `inline` and
-  min-relative via `hierpos_diff` so it stays precise far from the galaxy origin — the property
-  that made it correct is preserved for whoever revives it.)
+- **Selection is RESTORED, and the command overlay is what made that possible.** LEFT BUTTON is
+  the ballistic trigger in both control modes; selection takes it only while
+  `command_overlay_active`, a bounded moment the player opened deliberately. `game.cpp`'s fire
+  gate tests the same flag, so the button is never claimed by both. It was retired — not
+  deleted — for exactly this: `RtsSelectionBox`, `m_box`, `ship_inside_world_box`,
+  `draw_rect_from_screen_box` and `RTS_CLICK_THRESHOLD` were all kept compiling, and restoring
+  multi-unit selection was re-driving them, not rewriting them. (`ship_inside_world_box` is
+  still `inline` and min-relative via `hierpos_diff`, so it stays precise far from the origin.)
+- **With the overlay DOWN, the flagship is still held permanently selected**, so the RMB order
+  path, jump mode's `any_selected` gate and `draw()`'s selection rect behave as they did after a
+  click, with no click — unchanged from the retired arrangement.
+- **A drag below `RTS_CLICK_THRESHOLD` routes to `select_at_point`, not `select_in_box`.** The
+  point path carries the screen-constant 22 px pick floor; a 3-pixel box would select nothing at
+  combat zoom, where a hull is a couple of pixels wide.
+- **The selection block runs when `detached || command_overlay_active`**, widened from
+  detached-only so the player can command mid-flight without first handing the ship to the
+  autopilot. That is the whole point of the overlay being separate from TAB.
 - **Hull hit-testing has a SCREEN-CONSTANT pick floor (`SHIP_PICK_FLOOR_PX` 22).** A hull's
   bounding radius is a world quantity, so it shrinks with zoom: the cruiser's ~816 units is a
   2 px target once the view frames an engagement, while `draw_enemy_marker` paints its reticle at
@@ -83,8 +87,11 @@ drain.
 - **`HOVER_CIRCLE_LAYER` is the literal `50` with the comment "same as `LAYER_UI` in
   game.cpp"** — a hand-copied layer constant rather than an include of `core/render_layers.h`,
   so the two can drift.
-- **A `sim/` module includes a `render/` header.** It calls `galaxy_pick_planet` from
-  `render/galaxy_map_render.h` — one of only two places that inverted dependency occurs.
+- **A `sim/` module includes `render/` headers — now two of them.** `galaxy_pick_planet` from
+  `render/galaxy_map_render.h`, and `fleet_roster_wants_mouse` from `render/fleet_roster.h`
+  (the roster is drawn over the world rather than in a layer that arbitrates for itself, so it
+  must be asked explicitly or a chip click also drags a selection box behind the panel). If a
+  third appears, extract an input-arbitration seam instead.
 - **The class both owns input state and draws**, with seven private rendering helpers, so it
   spans simulation and presentation in one object — unlike every other sim module, which
   exposes state for a render pass to consume.
@@ -92,9 +99,7 @@ drain.
   ×3 on shift, a 24-pixel edge-pan margin), independent of both the ship flight model and
   `steering`.
 - ~16 appearance and behaviour constants are file-static `constexpr` with no editor exposure.
-  One of them, `RTS_CLICK_THRESHOLD` (the 4-pixel click-vs-drag threshold), is now
-  `[[maybe_unused]]`: the build is `-Werror` on unused constants and nothing references it while
-  selection is retired.
+  (`RTS_CLICK_THRESHOLD` lost its `[[maybe_unused]]` when selection came back.)
 - **The hover RING still draws at the raw `ship_bounding_radius`** while the hit-test uses the
   22 px floor, so at combat zoom the clickable area is slightly larger than the drawn ring — the
   same drawn-vs-clickable mismatch the floor fixed, now inverted and much smaller.
@@ -106,5 +111,6 @@ drain.
 
 **Source paths:** `sandbox/source/sim/rts_controls.{cpp,h}`
 
-**Last verified:** 2026-08-09, commit `b1baf31` (box/click selection and the RTS
-number row retired; screen-constant hull pick floor)
+**Last verified:** 2026-08-10, working tree on `game` (box/click selection restored behind the
+command overlay; roster consulted for cursor ownership). The RTS number row stays retired — keys
+1–5 are the weapon fire-group selector.

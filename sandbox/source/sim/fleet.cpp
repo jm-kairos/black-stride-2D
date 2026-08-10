@@ -1,4 +1,5 @@
 #include "sim/fleet.h"
+#include "sim/steering.h"   // escort station-keeping and avoid both reuse the shared primitives
 #include "game.h"
 #include "sim/weapon.h"
 #include <math/math_utils.h>
@@ -93,6 +94,11 @@ void FleetShip::update_move(f32 dt) {
 // =====================================================================================
 void FleetShip::update_attack(game_state* s, f32 dt) {
     if (!has_attack_target) return;
+    // PASSIVE refuses the engagement outright rather than holding fire while tracking: a ship
+    // told not to fight should not be turning its nose at things either, or it drifts off station
+    // chasing a heading. Clearing the order rather than early-returning makes that visible in the
+    // HUD instead of leaving a live order the ship silently ignores.
+    if (stance == FLEET_STANCE_PASSIVE) { clear_attack_target(); return; }
     if (!attack_target) { clear_attack_target(); return; }
     CombatEntity* ce = find_combat_entity_for_ship(s, attack_target);
     if (!ce || !ce->active || !ce->ship) { clear_attack_target(); return; }
@@ -153,7 +159,13 @@ void FleetShip::update_attack(game_state* s, f32 dt) {
     if (approach_reach <= 0.0f) approach_reach = RTS_ATTACK_RANGE;   // unarmed: legacy standoff
     // Only approach the target if we have no separate move order. When both orders are set,
     // movement is handled by update_move and we just track/fire here.
-    if (!has_move_target) {
+    //
+    // DEFENSIVE also declines to approach. That is the entire difference between it and
+    // AGGRESSIVE: both fight, but a defensive ship fights from wherever its order put it rather
+    // than closing to its own weapons' preferred range. It is what makes "hold this station and
+    // shoot what comes" expressible without a second order type, and it is why a screening ship
+    // set defensive stops wandering off the thing it was screening.
+    if (!has_move_target && stance == FLEET_STANCE_AGGRESSIVE) {
         if (fabsf(angle_diff) < RTS_MOVE_FACE_ANGLE) {
             Vec2 heading = vec2_rotate(Vec2{ 0.0f, 1.0f }, sh->angle);
             f32 brake_dist = (speed > 0.0f) ? (speed * speed) / (2.0f * m.decel) : 0.0f;
@@ -189,7 +201,10 @@ void FleetShip::update_attack(game_state* s, f32 dt) {
     // NPC agents fire through sim/ai_ship.cpp and the static enemy through combat_arena.cpp. Their
     // shots still lead. So the enemy is a better marksman than an unskilled player and a worse one
     // than a skilled player, which is the intended shape.
-    b8 guided = (w && w->wkind == WEAPON_KIND_MISSILE);
+    // HOLD_FIRE keeps everything above -- the nose tracks, the turret slews, the ship holds its
+    // station -- and stops only at the trigger. That is deliberately a different thing from
+    // PASSIVE: this ship is shadowing a target and ready, it is just not authorised to shoot.
+    b8 guided = (w && w->wkind == WEAPON_KIND_MISSILE && stance != FLEET_STANCE_HOLD_FIRE);
     if (w && guided && fabsf(angle_diff) < RTS_ATTACK_FACE_ANGLE && dist >= RTS_ATTACK_MIN_RANGE && dist <= fire_reach) {
         {
             // Each shot leaves from its own hardpoint, honoring the slot's traverse arc.
@@ -226,6 +241,62 @@ void FleetShip::clear_move_target() {
 void FleetShip::clear_attack_target() {
     has_attack_target = FALSE;
     attack_target = nullptr;
+}
+void FleetShip::clear_escort_target() {
+    has_escort_target = FALSE;
+    escort_target = nullptr;
+}
+void FleetShip::clear_avoid_target() {
+    has_avoid_target = FALSE;
+    avoid_target = nullptr;
+}
+// Station-keeping distance for an escort, in multiples of the ESCORTEE's bounding radius. A
+// multiple rather than a constant because a corvette shadowing a cruiser has to sit further out
+// than one shadowing a drone simply to clear the hull.
+static constexpr f32 ESCORT_STATION_MUL = 2.6f;
+static constexpr f32 ESCORT_MIN_STATION = 400.0f;
+void FleetShip::update_escort(f32 dt) {
+    if (!has_escort_target) return;
+    if (!escort_target || escort_target == &ship) { clear_escort_target(); return; }
+    Ship* sh = &ship;
+    const ShipMotion& m = sh->motion;
+    Vec2 to_t = hierpos_diff(&escort_target->origin, &sh->origin);
+    f32  dist = vec2_length(to_t);
+    f32  station = ship_bounding_radius(escort_target) * ESCORT_STATION_MUL;
+    if (station < ESCORT_MIN_STATION) station = ESCORT_MIN_STATION;
+    // steering::standoff already expresses "approach when far, back off when close" with a
+    // deadband, which is exactly the leash Starsector's escort orders describe -- reusing it
+    // keeps escorts out of the oscillation a bare seek would produce at the ring.
+    Vec2 desired = steering::standoff(to_t, dist, station, m.max_speed);
+    // Face the escortee rather than the travel heading: a screening ship should keep its guns
+    // and shields oriented on what it is protecting, not on whichever way station-keeping
+    // happens to be nudging it that frame.
+    steering::apply_face(sh, &flight, desired, to_t, m.accel, m.max_speed, m.max_turn, dt);
+}
+// How far outside the threat's reach an avoiding ship tries to get. Slightly over 1 so it does
+// not sit exactly on the boundary and flip between running and idling every frame.
+static constexpr f32 AVOID_CLEAR_MUL = 1.25f;
+void FleetShip::update_avoid(f32 dt) {
+    if (!has_avoid_target) return;
+    if (!avoid_target) { clear_avoid_target(); return; }
+    Ship* sh = &ship;
+    const ShipMotion& m = sh->motion;
+    Vec2 to_t = hierpos_diff(&avoid_target->origin, &sh->origin);
+    f32  dist = vec2_length(to_t);
+    // Clear range is the THREAT's longest reach, not a fixed number, so avoiding a sniper means
+    // running further than avoiding a knife-fighter -- the same weapon_effective_reach the HUD
+    // ring and the engagement logic use.
+    f32 threat = 0.0f;
+    for (i32 hpi = 0; hpi < avoid_target->hardpoint_count; ++hpi) {
+        f32 r = weapon_effective_reach(avoid_target->mounts[hpi]);
+        if (r > threat) threat = r;
+    }
+    if (threat <= 0.0f) threat = RTS_ATTACK_RANGE;
+    if (dist > threat * AVOID_CLEAR_MUL) { clear_avoid_target(); return; }  // clear: order done
+    // Nose stays ON the threat while running: backing away facing the enemy keeps forward
+    // weapons and the strongest arc pointed at it, which is what withdrawing under fire wants.
+    Vec2 desired = steering::flee(to_t, m.max_speed);
+    steering::apply_face(sh, &flight, desired, to_t, m.accel, m.max_speed, m.max_turn, dt);
 }
 // =====================================================================================
 // Fleet
@@ -268,6 +339,13 @@ FleetShip& Fleet::add() {
     fs.has_attack_target = FALSE;
     fs.jump_capable = TRUE;
     fs.jump_radius = JUMP_RADIUS_DEFAULT;
+    // AGGRESSIVE is the default because it is the pre-stance behaviour: engage and close. Any
+    // other default would silently change how every existing escort fights.
+    fs.stance = FLEET_STANCE_AGGRESSIVE;
+    fs.has_escort_target = FALSE;
+    fs.escort_target     = nullptr;
+    fs.has_avoid_target  = FALSE;
+    fs.avoid_target      = nullptr;
     fs.move_target = HierPos2{};
     fs.attack_target = nullptr;
     fs.flight.velocity = Vec2{ 0.0f, 0.0f };
@@ -408,6 +486,41 @@ void Fleet::clear_order(i32 idx) {
     if (idx < 0 || idx >= m_count) return;
     m_ships[idx].clear_move_target();
     m_ships[idx].clear_attack_target();
+    m_ships[idx].clear_escort_target();
+    m_ships[idx].clear_avoid_target();
+}
+void Fleet::set_selected_stance(u8 stance) {
+    if (stance > FLEET_STANCE_HOLD_FIRE) return;   // unknown value: leave the fleet alone
+    for (i32 i = 0; i < m_count; ++i)
+        if (m_ships[i].selected) m_ships[i].stance = stance;
+}
+void Fleet::order_escort(Ship* target) {
+    if (!target) return;
+    for (i32 i = 0; i < m_count; ++i) {
+        if (!m_ships[i].selected) continue;
+        if (&m_ships[i].ship == target) continue;   // a ship cannot escort itself
+        // Escort supersedes a move order: both drive position, and leaving a stale destination
+        // set would have update_move fighting update_escort every frame.
+        m_ships[i].clear_move_target();
+        m_ships[i].clear_avoid_target();
+        m_ships[i].has_escort_target = TRUE;
+        m_ships[i].escort_target     = target;
+    }
+}
+void Fleet::order_avoid(Ship* target) {
+    if (!target) return;
+    for (i32 i = 0; i < m_count; ++i) {
+        if (!m_ships[i].selected) continue;
+        m_ships[i].clear_move_target();
+        m_ships[i].clear_escort_target();
+        m_ships[i].clear_attack_target();   // running from something you are shooting is incoherent
+        m_ships[i].has_avoid_target = TRUE;
+        m_ships[i].avoid_target     = target;
+    }
+}
+void Fleet::order_rally() {
+    if (m_count <= 0) return;
+    order_escort(&m_ships[0].ship);
 }
 // =====================================================================================
 void Fleet::update_autopilot(game_state* s, f32 dt, i32 piloted_idx) {
@@ -415,6 +528,12 @@ void Fleet::update_autopilot(game_state* s, f32 dt, i32 piloted_idx) {
         if (i == piloted_idx) continue;
         if (m_ships[i].has_attack_target) m_ships[i].update_attack(s, dt);
         if (m_ships[i].has_move_target)     m_ships[i].update_move(dt);
+        // Position orders are mutually exclusive by construction (each order_* clears the
+        // others), so at most one of these three ever drives a ship in a frame. Avoid is
+        // checked last because it is the one that ends itself: it clears its own order once
+        // the ship is outside the threat's reach.
+        else if (m_ships[i].has_escort_target) m_ships[i].update_escort(dt);
+        else if (m_ships[i].has_avoid_target)  m_ships[i].update_avoid(dt);
     }
 }
 void Fleet::simulate_all(f32 dt, b8 piloted_turn_commanded, i32 piloted_idx) {

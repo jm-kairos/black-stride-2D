@@ -8,8 +8,8 @@ issues the order; this executes it), does not own the ship data model (ShipComba
 does not own NPC movement — although LocalAgentAi is the sole external consumer of `steering.h`.
 
 **Public interface:** `sandbox/source/sim/fleet.h` — `FLEET_MAX_SHIPS`, `JUMP_RADIUS_DEFAULT`,
-`enum ShipType`, `struct ShipFlight`, `struct FleetShip`, `class Fleet` (membership, piloting,
-selection, orders, jump, `update_autopilot`, `simulate_all`).
+`enum ShipType`, `enum FleetStance`, `struct ShipFlight`, `struct FleetShip`, `class Fleet`
+(membership, piloting, selection, orders, stance, jump, `update_autopilot`, `simulate_all`).
 `sandbox/source/sim/ship_control.h` — `control_ship_global`, `resolve_ship_collision`,
 `piloted_ship_origin`.
 `sandbox/source/sim/steering.h` — `namespace steering`: `arrive`, `seek`, `flee`, `standoff`,
@@ -53,7 +53,26 @@ InWorldOverlays, FrameOrchestrator, GameStateModel.
   model in the exact mode where the player has the most attention free to aim — and would beat
   them at it, because the first-order lead solution below is something the manual path
   deliberately does not do. A missile creates no such asymmetry: it steers itself after launch,
-  so there is no aiming skill to take away. The gate is `w->wkind == WEAPON_KIND_MISSILE`.
+  so there is no aiming skill to take away. The gate is `w->wkind == WEAPON_KIND_MISSILE`, and
+  since stances landed, also `stance != FLEET_STANCE_HOLD_FIRE`.
+- **Stance is orthogonal to orders: it survives one and constrains the next.** The distinction
+  that carries the design is AUTONOMY, not aggression — Aggressive and Defensive both fight and
+  differ only in whether the ship will leave its station to do it, which is what lets "hold here
+  and shoot what comes" be expressed without a second order type. Passive *clears* an attack
+  order rather than silently ignoring it, so the HUD never shows a live order the ship is
+  declining; Hold Fire keeps tracking, slewing and station-keeping and stops only at the
+  trigger, because shadowing a target while not authorised to shoot is a different thing from
+  refusing the engagement. Default is Aggressive: it is the pre-stance behaviour, and any other
+  default would silently re-tune how every existing escort fights.
+- **The three position orders are mutually exclusive by construction.** Each `order_*` clears
+  the others, so at most one of `update_move` / `update_escort` / `update_avoid` drives a ship
+  in a frame — they all write velocity, and two of them running would fight every tick. Avoid is
+  the only self-terminating order: it clears itself once the ship is outside the threat's reach.
+- **Escort and avoid size themselves from the OTHER hull, never a constant.** Station-keeping is
+  a multiple of the escortee's bounding radius (a corvette shadowing a cruiser must sit further
+  out just to clear the hull), and the avoid clear range is the threat's own longest
+  `weapon_effective_reach` — the same function the HUD ring and the engagement logic use, so
+  running from a sniper means running further than running from a knife-fighter.
 - **This reaches only the PLAYER's own fleet.** `update_autopilot` walks `Fleet::m_ships`; NPC
   agents fire through `sim/ai_ship.cpp` and the static enemy through `sim/combat_arena.cpp`.
   Their shots still lead. So the enemy out-shoots an unskilled player and loses to a skilled one,
@@ -74,16 +93,21 @@ InWorldOverlays, FrameOrchestrator, GameStateModel.
 `order_*` method on `Fleet`, an autopilot `update_*` invoked from `update_autopilot`, and a
 `clear_*`; the existing move and attack orders are the template, and the header notes they are
 independent by design (a ship can strafe toward a destination while its nose tracks a different
-target). A new steering behaviour is a pure function in `namespace steering` returning a desired
+target). Escort and avoid are the newer worked examples. **Not every command needs a new order
+type**: `order_rally` is `order_escort` aimed at member 0, because regroup and escort are the
+same behaviour with a different target, and "screen a point" is a move order plus the Defensive
+stance. A fourth near-duplicate `update_*` would have earned nothing. A new steering behaviour is a pure function in `namespace steering` returning a desired
 velocity, consumed through `steering::apply` or `apply_face` — those two own accel-clamping,
 speed capping, nose slew and pose integration. New per-hull motion feel is data: `ShipMotion` is
 resolved from the hull's size class at load, so a new `ShipSizeClass` row changes flight
 characteristics without touching this code.
 
 **Known limitations / tech debt:**
-- **The autopilot does not use `steering::apply`.** `sim/fleet.cpp` implements its own strafing
-  controller — desired velocity, velocity error, `RTS_STRAFE_GAIN`, then projection onto local
-  thrusters — so the fleet and the NPC AI move through two different locomotion implementations
+- **The autopilot only PARTLY uses `steering`.** `update_escort` and `update_avoid` go through
+  `steering::standoff` / `flee` and `apply_face`, but `update_move` and `update_attack` still
+  implement their own strafing controller — desired velocity, velocity error, `RTS_STRAFE_GAIN`,
+  then projection onto local thrusters — so the fleet and the NPC AI move through two locomotion
+  implementations
   despite `steering.h` describing itself as "one locomotion layer, reused by any Ship-backed
   agent". The player goes through a third path (`control_ship_global`).
 - **`piloted_ship_origin` asks `s->rts_controls.piloted_index()`**, so a `sim` module depends on
@@ -108,5 +132,6 @@ characteristics without touching this code.
 **Source paths:** `sandbox/source/sim/fleet.{cpp,h}`, `sandbox/source/sim/ship_control.{cpp,h}`,
 `sandbox/source/sim/steering.{cpp,h}`
 
-**Last verified:** 2026-08-09, commit `b1baf31` (attack orders fire guided ordnance
-only; turret tracking narrowed to the engaging mount)
+**Last verified:** 2026-08-10, working tree on `game` (adds `FleetStance`, the escort/avoid
+standing orders and `order_rally`; attack orders still fire guided ordnance only, now also gated
+on stance)

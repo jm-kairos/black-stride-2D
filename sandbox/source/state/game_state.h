@@ -3306,6 +3306,19 @@ struct game_state {
 
     f32 time_scale;         // 0.0 = paused; 1/2/3/5 = speed tiers (Pause + 1x/2x/3x/5x)
 
+    // ---- Command overlay (RTS command layer) ------------------------------------------------
+    // While up, the world dilates and the LEFT BUTTON stops being the ballistic trigger and
+    // becomes selection + order issuing. That trade is the whole reason the overlay exists: the
+    // trigger owns the left button in both control modes, so selection could only come back by
+    // taking the button for a bounded moment rather than by sharing it with a modifier.
+    //
+    // DILATION, not pause: the galaxy runs a live clock (sim_hours, orbits, history), and
+    // stopping it to think is a different game. 0.25x keeps everything moving while giving the
+    // player time to read a fight. It multiplies the SAME global time_scale the HUD speed tiers
+    // set, so the two must not both own it -- hence the saved value below.
+    b8  command_overlay_active;
+    f32 command_overlay_saved_time_scale; // restored on close; the tier the player had chosen
+
 
 
     f32 elapsed_time;       // monotonic REAL seconds since game_init (unscaled; for procedural FX)

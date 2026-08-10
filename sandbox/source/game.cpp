@@ -18,6 +18,8 @@
 
 #include "render/projectile_fx.h" // projectile_fx_render_init (bakes the VFX textures)
 
+#include "render/fleet_roster.h"  // fleet_roster_update (command-overlay fleet panel input)
+
 #include "sim/ss_generation.h"
 
 #include "render/voronoi_cell_hover_effect.h"
@@ -124,6 +126,12 @@ const f32 SHIP_MAX_TURN     = 3.0f;    // rad/s
 
 // ---- Render layers (lower draws first) ---- now shared via core/render_layers.h
 #include "core/render_layers.h"
+
+// World speed while the command overlay is up. Dilation rather than a pause: the galaxy runs a
+// live clock (sim_hours, orbital motion, the history tick), and stopping it to give orders is a
+// different game from slowing down inside one. 0.25x is slow enough to read a fight and fast
+// enough that the fight is still happening while you decide.
+static constexpr f32 COMMAND_OVERLAY_TIME_SCALE = 0.25f;
 
 // Debug collider outline colour (COLLIDER_COLOR) now lives in render/ship_scene.cpp.
 
@@ -348,9 +356,12 @@ b8 game_init(Game* game_inst) {
 
     s->editor.edit_mode_active = FALSE;
 
-    // Player commands a SINGLE ship (the flagship) by default. The EDITOR PANEL "Multiple ship
-    // command" checkbox reveals the escort wing (see build_editor_panel).
-    s->editor.multi_ship_enabled = FALSE;
+    // The player commands the WHOLE WING by default. This was FALSE -- one hull, escorts spawned
+    // but hidden behind the editor checkbox -- which made the fleet a debug feature. Everything
+    // the RTS layer exists for (selection, formations, standing orders) is inert with one ship,
+    // and box selection was retired precisely because every drag resolved to "the ship" or
+    // "nothing". The checkbox still works and still collapses the wing back to the flagship.
+    s->editor.multi_ship_enabled = TRUE;
 
     s->editor.draw_discovery_sensor_range = FALSE;
 
@@ -599,9 +610,10 @@ b8 game_init(Game* game_inst) {
             weapon_instantiate(weapon_registry_find(&s->weapon_registry, "harpoon_rack"),
                                s->fleet_state.enemy_ship.faction);
 
-    // Default to single-ship command: the escorts are spawned above (so their data + weapons exist
-    // and can be revealed instantly), but only the flagship is ACTIVE until the player enables
-    // "Multiple ship command" in the EDITOR PANEL.
+    // The escorts spawned above stay ACTIVE unless the editor checkbox collapses the wing. No
+    // rebuild is needed on this path: combat_arena_init below registers the whole active fleet.
+    // (The checkbox's own handler must still call combat_arena_rebuild_player_entities itself,
+    // because it changes the count after the entity windows are packed.)
     if (!s->editor.multi_ship_enabled) s->fleet_state.fleet.set_count(1);
 
     // ---- Combat arena: projectile pool + combat entities + sensor/heat/encounter tunables --
@@ -672,6 +684,9 @@ b8 game_init(Game* game_inst) {
 
     // (Sensor range, heat-signature params and encounter state are set by combat_arena_init above.)
     s->time_scale             = 1.0f;
+
+    s->command_overlay_active            = FALSE;
+    s->command_overlay_saved_time_scale  = 1.0f;
 
     s->elapsed_time           = 0.0f;
 
@@ -2289,6 +2304,30 @@ b8 game_update(Game* game_inst, f32 dt) {
 
     }
 
+    // ---- SPACE: raise / lower the command overlay --------------------------------------------
+    // Distinct from TAB, which changes WHO FLIES (pilot vs autopilot). This changes what the
+    // player is DOING: commanding rather than shooting. Both can be true at once -- you can
+    // command mid-flight without handing the ship to the autopilot first, which is the point.
+    //
+    // Time drops to 0.25x for as long as it is up. The saved tier is restored on close so the
+    // overlay and the HUD speed buttons cannot fight over the same global; if the player was
+    // paused, 0.0 is restored and the overlay simply gave them a readable screen.
+    if (input_is_key_down(KEY_SPACE) && !input_was_key_down(KEY_SPACE)) {
+        s->command_overlay_active = !s->command_overlay_active;
+        if (s->command_overlay_active) {
+            s->command_overlay_saved_time_scale = s->time_scale;
+            s->time_scale = COMMAND_OVERLAY_TIME_SCALE;
+            action_log_push(s, "Command overlay -- time 0.25x.");
+        } else {
+            s->time_scale = s->command_overlay_saved_time_scale;
+            action_log_push(s, "Command overlay closed.");
+        }
+    }
+
+    // Roster input runs BEFORE rts_controls so a click that lands on the panel is consumed here
+    // and never also reaches the world as a box-select drag underneath it.
+    if (!bs_imgui_wants_mouse() && !bs_rml_wants_mouse()) fleet_roster_update(s);
+
     // ---- TAB key: toggle pilot <-> auto-pilot/RTS. Piloting -> instant detach to the free camera
     // at the current view. Auto-pilot -> smooth glide back onto the ship, ending in ship-follow. --
 
@@ -2843,7 +2882,11 @@ b8 game_update(Game* game_inst, f32 dt) {
         //
         // control_ship_global still self-guards on free_camera_active, so freeing the trigger
         // does not also hand back flight control -- detached still means the autopilot flies.
-        if (!s->editor.edit_mode_active && !s->show_flagship_inspector && !bs_imgui_wants_mouse() && !bs_rml_wants_mouse()) {
+        // The command overlay joins the existing suppressors. While it is up the left button is
+        // selection and order issuing, not the trigger -- that hand-off IS the overlay, and it is
+        // what lets multi-unit selection exist at all without a modifier chord fighting the gun.
+        if (!s->editor.edit_mode_active && !s->show_flagship_inspector && !s->command_overlay_active
+            && !bs_imgui_wants_mouse() && !bs_rml_wants_mouse()) {
 
             // Turret traverse: every weapon in the CURRENT SELECTION tracks the cursor. Under a
             // micro-selection override that is the one chosen weapon, so the hull art shows at a
