@@ -228,6 +228,11 @@ HierPos2 ship_hardpoint_fire_origin(const Ship* ship, i32 hp_index) {
         return ship_local_to_world(ship, ship->weapon_fire_offset_local);
     return ship_local_to_world(ship, ship->hardpoints[hp_index].pos_local);
 }
+f32 ship_hardpoint_unit(const Ship* ship, i32 hp_index) {
+    if (!ship || hp_index < 0 || hp_index >= ship->hardpoint_count) return 0.0f;
+    const HardpointDef& hp = ship->hardpoints[hp_index];
+    return hardpoint_half_extent(hp.size) * ship->world_scale * hp.art_scale;
+}
 HierPos2 ship_muzzle_origin(const Ship* ship, i32 hp_index, i32 muzzle_index) {
     HierPos2 pivot = ship_hardpoint_fire_origin(ship, hp_index);
     if (!ship || hp_index < 0 || hp_index >= ship->hardpoint_count) return pivot;
@@ -240,7 +245,7 @@ HierPos2 ship_muzzle_origin(const Ship* ship, i32 hp_index, i32 muzzle_index) {
     // mount_aim -- the SLEWED aim the turret art is drawn at -- not the direction being
     // fired along. The two differ while a turret is still traversing, and it is the art
     // the player is watching the shot leave.
-    const f32  unit = hardpoint_half_extent(ship->hardpoints[hp_index].size) * ship->world_scale;
+    const f32  unit = ship_hardpoint_unit(ship, hp_index);
     const f32  aim  = ship->angle + ship->mount_aim[hp_index];
     const Vec2 fwd  = vec2_rotate(Vec2{ 0.0f, 1.0f }, aim);
     const Vec2 rgt  = vec2_rotate(Vec2{ 1.0f, 0.0f }, aim);
@@ -525,12 +530,18 @@ b8 ship_load(Ship* out_ship, const char* path) {
                 out_ship->collider_verts[out_ship->collider_count++] = Vec2{ cx, cy };
             continue;
         }
-        // hardpoint <id> <accepts> <size> <x> <y> <facing_deg> <arc_deg>
+        // hardpoint <id> <accepts> <size> <x> <y> <facing_deg> <arc_deg> [art_scale]
         // Ship-local coords: same art-texel space as the collider (+Y = nose).
+        //
+        // art_scale is OPTIONAL and trailing, so every existing 7-field line keeps working and
+        // means exactly what it did. sscanf reports how many fields it converted, which is what
+        // distinguishes "omitted" from "present"; an absent scale leaves the struct's own 1.0
+        // default rather than a zero that would draw the mount at nothing.
         char hp_id[32], hp_accepts[32], hp_size[16];
-        f32 hx, hy, hfacing, harc;
-        if (sscanf(line, "hardpoint %31s %31s %15s %f %f %f %f",
-                   hp_id, hp_accepts, hp_size, &hx, &hy, &hfacing, &harc) == 7) {
+        f32 hx, hy, hfacing, harc, hscale = 1.0f;
+        i32 hp_fields = sscanf(line, "hardpoint %31s %31s %15s %f %f %f %f %f",
+                               hp_id, hp_accepts, hp_size, &hx, &hy, &hfacing, &harc, &hscale);
+        if (hp_fields == 7 || hp_fields == 8) {
             if (out_ship->hardpoint_count >= SHIP_MAX_HARDPOINTS) {
                 BS_LOG_WARN("ship_load: too many hardpoints in '%s' (max %d); '%s' skipped.",
                             path, SHIP_MAX_HARDPOINTS, hp_id);
@@ -552,6 +563,9 @@ b8 ship_load(Ship* out_ship, const char* path) {
             hp.pos_local = Vec2{ hx, hy };
             hp.facing    = hfacing * BS_DEG2RAD;
             hp.arc       = harc * BS_DEG2RAD;
+            // Clamped rather than trusted: a zero or negative scale would make the mount
+            // vanish, and a stray large one would swallow the hull.
+            hp.art_scale = (hp_fields == 8) ? clampf(hscale, 0.05f, 4.0f) : 1.0f;
             continue;
         }
     }

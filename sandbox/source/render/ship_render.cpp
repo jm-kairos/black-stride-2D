@@ -373,8 +373,11 @@ static void draw_mount_art(const WeaponDef* def, Vec2 c, Vec2 fwd, f32 aim, f32 
 // aim (Ship.mount_aim). The point-defense variant is smaller with twin barrels.
 static void draw_turret(const Ship* ship, i32 hp_index, b8 is_pd, f32 alpha) {
     const HardpointDef& hp = ship->hardpoints[hp_index];
-    f32  e   = hardpoint_half_extent(hp.size);
-    f32  sc  = ship->world_scale;
+    // e * sc is the slot's draw unit, folded through ship_hardpoint_unit so the art moves with
+    // the slot's art_scale exactly as the muzzle origins do. `sc` stays 1 here rather than
+    // being removed, so the many `... * e * sc` expressions below read unchanged.
+    f32  e   = ship_hardpoint_unit(ship, hp_index);
+    f32  sc  = 1.0f;
     Vec2 c   = vec2_add(ship->render_pos, ship_local_dir(ship, hp.pos_local));
     f32  aim = ship->angle + ship->mount_aim[hp_index]; // world aim angle
     Vec2 fwd = vec2_rotate(Vec2{ 0.0f, 1.0f }, aim);    // aim forward
@@ -418,8 +421,10 @@ static void draw_turret(const Ship* ship, i32 hp_index, b8 is_pd, f32 alpha) {
 // Sensor module: hull-fixed base plate with a continuously spinning radar bar + hub.
 static void draw_radar_dish(const Ship* ship, i32 hp_index, f32 time, f32 alpha) {
     const HardpointDef& hp = ship->hardpoints[hp_index];
-    f32  e    = hardpoint_half_extent(hp.size);
-    f32  sc   = ship->world_scale;
+    // Same folding as draw_turret: a module's art answers to its slot's art_scale too, which is
+    // what makes the editor's slider read as "rescale this mount" rather than "rescale guns".
+    f32  e    = ship_hardpoint_unit(ship, hp_index);
+    f32  sc   = 1.0f;
     Vec2 c    = vec2_add(ship->render_pos, ship_local_dir(ship, hp.pos_local));
     f32  spin = ship->angle + hp.facing + time * 1.8f;
 

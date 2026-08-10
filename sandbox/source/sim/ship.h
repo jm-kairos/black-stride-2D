@@ -92,6 +92,16 @@ struct HardpointDef {
 
     f32           arc;         // total traverse arc (radians) centered on facing
 
+    // Multiplier on everything this slot DRAWS, and on where its shots leave. 1.0 = the size
+    // implied by the slot class. Purely presentational: it scales the mount art, the procedural
+    // turret/dish rectangles and the muzzle origins together, and touches no rule -- module fit
+    // still keys off `size`, collision off the hull collider, damage off the weapon.
+    //
+    // A default member initialiser, not a value set at the parse site, because both
+    // construction sites use `HardpointDef{}` and a zeroed scale would draw every mount at
+    // nothing. Optional 8th field on a `hardpoint` line; omit it and the slot is unchanged.
+    f32           art_scale = 1.0f;
+
 };
 
 // Half-extent (ship-local units) of a hardpoint's visual/placement box.
@@ -484,6 +494,17 @@ void ship_capacitor_update(Ship* ship, f32 dt);
 // art-pixel position on the hull. Invalid indices (e.g. -1) fall back to the legacy shared
 // weapon_fire_offset_local.
 bs_math::HierPos2 ship_hardpoint_fire_origin(const Ship* ship, i32 hp_index);
+
+// The world-space unit EVERY drawn feature of a hardpoint is measured in: its half-extent,
+// scaled by the hull and by the slot's own art_scale.
+//
+// THE one place that product is formed. The mount art, the procedural turret and dish
+// rectangles, the barrel origins in ship_muzzle_origin and the charge-up glow all derive from
+// it, and a weapon's `muzzle` / `mount_art_size` offsets are authored in it -- so art and shot
+// origins scale together and cannot drift apart. Editor affordances (the hardpoint overlay,
+// selection highlight, drag feedback and hit-tests) deliberately do NOT use this: they size to
+// the SLOT, which art_scale does not change.
+f32 ship_hardpoint_unit(const Ship* ship, i32 hp_index);
 
 // World position of one authored BARREL on a mounted weapon, resolved against the turret's
 // live slewed aim (mount_aim), in the same hardpoint-half-extent units the art uses. Returns

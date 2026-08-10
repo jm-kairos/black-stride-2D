@@ -631,6 +631,13 @@ void build_editor_panel(game_state* s) {
                     hp.facing = fac_deg * BS_DEG2RAD;
                 if (bs_ui_slider_float("Arc (deg)", &arc_deg, 0.0f, 360.0f))
                     hp.arc = arc_deg * BS_DEG2RAD;
+                // Mount art size. Scales everything this slot draws -- authored turret art,
+                // the procedural turret/dish rectangles, and the barrel origins with them, so
+                // shots keep leaving the muzzle at any scale. Slot semantics are untouched:
+                // an M slot still takes M modules and the selection box stays slot-sized.
+                bs_ui_slider_float("Art scale", &hp.art_scale, 0.25f, 2.0f);
+                bs_ui_same_line();
+                if (bs_ui_button("Reset##artscale", TRUE)) hp.art_scale = 1.0f;
                 // Cursor placement: the slot rides the mouse (inverse pose -> ship-local px)
                 // until the checkbox is turned off.
                 bs_ui_checkbox("Slot follows cursor", &hp_snap);
@@ -648,10 +655,20 @@ void build_editor_panel(game_state* s) {
                         const HardpointDef& h = fship.hardpoints[i];
                         char a[64];
                         hardpoint_accepts_string(h.accepts, a, sizeof(a));
-                        BS_LOG_INFO("hardpoint %s %s %s %.1f %.1f %.1f %.1f",
-                                    h.id, a, hardpoint_size_name(h.size),
-                                    h.pos_local.x, h.pos_local.y,
-                                    h.facing * BS_RAD2DEG, h.arc * BS_RAD2DEG);
+                        // The scale is emitted only when it differs from 1.0, so a hull whose
+                        // mounts are all default-sized still dumps the original 7-field lines
+                        // and the .ship file stays as terse as it was.
+                        if (h.art_scale > 1.001f || h.art_scale < 0.999f) {
+                            BS_LOG_INFO("hardpoint %s %s %s %.1f %.1f %.1f %.1f %.3f",
+                                        h.id, a, hardpoint_size_name(h.size),
+                                        h.pos_local.x, h.pos_local.y,
+                                        h.facing * BS_RAD2DEG, h.arc * BS_RAD2DEG, h.art_scale);
+                        } else {
+                            BS_LOG_INFO("hardpoint %s %s %s %.1f %.1f %.1f %.1f",
+                                        h.id, a, hardpoint_size_name(h.size),
+                                        h.pos_local.x, h.pos_local.y,
+                                        h.facing * BS_RAD2DEG, h.arc * BS_RAD2DEG);
+                        }
                     }
                     action_log_push(s, "Hardpoint lines written to the log.");
                 }

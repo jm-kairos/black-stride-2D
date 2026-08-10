@@ -48,6 +48,13 @@ positions with `ship_local_dir`, and draw on `LAYER_DEBUG` or `LAYER_GIZMO`. **G
 authored turret art is a data edit, not a code edit** — add `mount_art` / `mount_art_size` /
 `mount_art_pivot` to its `.weapon` def and `draw_turret` picks it up through
 `Weapon::def`; the geometry is authored in hardpoint half-extents so it scales with the slot.
+**Every drawn feature of a mount now resolves its unit through `ship_hardpoint_unit`** rather
+than multiplying `hardpoint_half_extent` by `world_scale` in each pass — that helper folds in the
+slot's `art_scale`, so the hardpoint editor's size slider moves the authored art, the procedural
+turret and dish rectangles, the barrel origins and the charge-up glow together. Editor
+affordances (`draw_hardpoint_overlay`, `draw_hardpoint_highlight`, `draw_hardpoint_drag_feedback`
+and the hit-tests) deliberately keep using the raw half-extent: they size to the SLOT, which the
+scale does not change.
 A mount with no art (railguns, missile racks, point defense) keeps the rectangles, so the two
 looks coexist per weapon. A weapon's `muzzle` offsets are authored in those same units and
 resolved against the same `mount_aim` this pass draws with (in `ship_hardpoint_fire`), so shots
@@ -91,5 +98,7 @@ with it. A new *procedural* mount art kind still follows `draw_turret` /
 **Source paths:** `sandbox/source/render/ship_scene.{cpp,h}`,
 `sandbox/source/render/ship_render.{cpp,h}`
 
-**Last verified:** 2026-08-08, commit `65f1ccb` (`draw_turret` draws authored art via
+**Last verified:** 2026-08-10, working tree on `game` (mount draw units now come from
+`ship_hardpoint_unit`, adding the slot's `art_scale`). Previously verified 2026-08-08, commit
+`65f1ccb` (`draw_turret` draws authored art via
 `draw_mount_art` when the mounted weapon's def has one)

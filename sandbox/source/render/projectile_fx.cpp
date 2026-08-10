@@ -434,7 +434,9 @@ static void draw_ship_charges(const game_state* s, const Ship& sh) {
         // in-world would be a second answer to a question that already has one.
         const f32 t01 = 1.0f - (remaining / CHARGE_WINDOW);
 
-        const f32 unit = hardpoint_half_extent(sh.hardpoints[hp].size) * sh.world_scale;
+        // Same unit the barrel art and the muzzle origins use, so a rescaled mount's charge glow
+        // rescales with it instead of floating at the old size.
+        const f32 unit = ship_hardpoint_unit(&sh, hp);
         const WeaponDef* def = w->def;
         const u8  family = def ? def->vfx_family : (u8)VFX_SHELL;
         const i32 n      = def ? def->muzzle_count : 0;

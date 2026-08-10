@@ -18,7 +18,7 @@ damage (CombatArena), and does not own drawing — `render/ship_visual` here is 
 `ship_try_spend_cap`, `ship_capacitor_update`, `ship_collider_corners`, `ship_bounding_radius`,
 `ship_local_dir`, `ships_collide`, `hardpoint_accepts`, `hardpoint_fits_module`,
 `ship_first_free_hardpoint`, `ship_hardpoint_fire_origin`, `ship_muzzle_origin`,
-`ship_hardpoint_aim_goal`, `ship_hardpoint_fire`,
+`ship_hardpoint_aim_goal`, `ship_hardpoint_unit`, `ship_hardpoint_fire`,
 `ship_hardpoint_can_aim`, `ship_select_bearing_weapon`, `ship_turret_aim_at`,
 `ship_update_turrets`;
 `WeaponFireState`, `ship_weapon_fire_state`, `ship_hardpoint_in_selection`,
@@ -162,7 +162,8 @@ the subsystem while sitting outside `ship.h`'s seven.)*
 - **A muzzle resolves against `mount_aim`, not against the direction being fired.** The two
   differ while a turret is still traversing, and the muzzle must sit where ShipRendering draws
   the barrel — the shot is watched leaving the art, not leaving the aim vector. Offsets are in
-  the same hardpoint-half-extent units as `mount_art_size`, so art and shot origins scale
+  the same hardpoint-half-extent units as `mount_art_size` — and both now resolve through
+  `ship_hardpoint_unit`, which folds in the slot's `art_scale` — so art and shot origins scale
   together and cannot drift apart. The two can still differ *in angle* mid-traverse, but
   `WEAPON_FIRE_SLEWING` now bounds that gap to the aim tolerance rather than letting it run to
   the full width of the arc.
@@ -239,8 +240,12 @@ shell, missile → ordnance). Purely cosmetic: nothing in the simulation reads i
 catalog defs author nothing; only `longlance_rail` opts out, because a rail slug is a design
 statement about a weapon rather than something to infer from `proj_speed`.
 **A new module** is the same shape via `assets/modules/modules.list`.
-**A new hull** is a `.ship` file with `hardpoint <id> <accepts> <size> <x> <y> <facing> <arc>`
-lines. A genuinely new weapon *behaviour* needs a `Weapon` subclass plus a `WeaponKind` tag and
+**A new hull** is a `.ship` file with
+`hardpoint <id> <accepts> <size> <x> <y> <facing> <arc> [art_scale]` lines. The trailing scale is
+optional and presentational — it multiplies everything the slot draws *and* the barrel origins
+with it, so a rescaled mount still fires from its muzzle; omit it and the slot behaves exactly
+as before it existed, which is why every pre-existing 7-field line is untouched. The hardpoint
+editor writes it into its "Log .ship hardpoint lines" dump only when it differs from 1.0. A genuinely new weapon *behaviour* needs a `Weapon` subclass plus a `WeaponKind` tag and
 a branch in `weapon_instantiate`. The subclass implements `spawn_shot` and `begin_cooldown`,
 **not** `fire` — `fire` is now a non-virtual composition of those two, so it cannot be
 overridden and a subclass defining only `fire` will not compile. Note also that
@@ -315,4 +320,6 @@ and the spawn-side muzzle flash; `ship_muzzle_origin` factored out as the one ba
 site; `vfx_family` and the guided-round trail history added to the data model; `render` gains an
 incandescent head, takes a per-family glow table as a parameter, loses the `glow_override`
 member, and loses the travelling fake muzzle flash; `WEAPON_FIRE_SLEWING` added so a mount holds
-fire until its barrel has trained onto the target)
+fire until its barrel has trained onto the target; `HardpointDef::art_scale` plus
+`ship_hardpoint_unit` let a slot rescale everything it draws, and the `.ship` hardpoint line
+gains an optional trailing scale)
