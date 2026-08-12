@@ -8,11 +8,15 @@ table. It explicitly does not own any GPU code (RenderBackend), nor the concrete
 vtable (`renderer_backend.cpp` is grouped with the backend) — but it *does* own the ImGui and
 RmlUi **lifecycles**, which it brackets around the backend's own init and shutdown.
 
-**Public interface:** `engine/source/renderer/renderer.h` — ~42 `bs__api__` functions: lifecycle
+**Public interface:** `engine/source/renderer/renderer.h` — ~44 `bs__api__` functions: lifecycle
 (`renderer_initialize`/`_shutdown`/`_on_resize`/`_begin_frame`/`_end_frame`), textures
 (`_load_texture`/`_create_texture`/`_update_texture`/`_destroy_texture`), `renderer_set_camera`,
 sprite and procedural-effect submission (`_draw_sprite`, `_draw_mapped_sprite`, `_draw_starfield`,
 `_draw_sunburst`, `_draw_starsurface`, `_draw_planetsurface`, `_draw_heat_map`, `_draw_nebula`),
+the ship-portrait offscreen scopes (`_portrait_begin`/`_thumb_begin`/`_portrait_end` — capture
+sprite submissions into per-scope ranges rendered fullbright into persistent targets the RmlUi
+HUD samples via the reserved texture names "bs:portrait" and "bs:thumbs"; a thumb scope renders
+into one 256x256 slot of the fleet-thumbnail strip),
 lighting and post-process setters, the debug layer (`_draw_line`/`_quad`/`_rect_outline`/
 `_circle`/`_grid`), and frame instrumentation.
 `engine/source/renderer/renderer_types.h` — `bs_texture`, `bs_color`, `bs_rect`, `bs_sprite`,
@@ -20,7 +24,7 @@ lighting and post-process setters, the debug layer (`_draw_line`/`_quad`/`_rect_
 the seven effect-parameter structs, `BS_INVALID_HANDLE`, `BS_LAYER_BLOOM_THRESHOLD`.
 `engine/source/renderer/camera2d.h` — `camera2d_default`, `_view_proj`, `_screen_to_world`,
 `_world_to_screen`.
-`engine/source/renderer/renderer_backend.h` — `struct renderer_backend` (31 function pointers),
+`engine/source/renderer/renderer_backend.h` — `struct renderer_backend` (34 function pointers),
 `renderer_backend_create`/`_destroy`; internal, consumed only by RenderBackend.
 
 **Depends on:** Foundation, MathCore, Diagnostics, Memory, UiFacade.
@@ -94,4 +98,5 @@ RenderBackend.
 `engine/source/renderer/renderer_types.h`, `engine/source/renderer/renderer_backend.h`,
 `engine/source/renderer/camera2d.{cpp,h}`
 
-**Last verified:** 2026-08-07, commit `812680c`
+**Last verified:** 2026-08-12, working tree on `game` (adds the ship-portrait offscreen scopes:
+`renderer_portrait_begin`/`_thumb_begin`/`_end`, vtable 31 → 34)

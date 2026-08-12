@@ -1,10 +1,10 @@
 #include "sim/rts_controls.h"
 #include "game.h"
 #include "core/view_transform.h" // game_screen_to_true_*, render_from_hierpos, game_camera_center_hierpos
-#include "render/fleet_roster.h" // fleet_roster_wants_mouse (panel owns the click over itself)
 #include "sim/ship.h"
 #include "sim/weapon.h"
 #include "sim/fleet.h"
+#include "sim/action_log.h"  // action_log_push (standing-order feedback)
 #include <core/input.h>
 #include <math/math_utils.h>
 #include <renderer/renderer.h>
@@ -293,11 +293,10 @@ void RtsControls::update(f32 dt) {
         // selected exactly as before, so the RMB order path, jump mode's any_selected gate and
         // draw()'s selection rect all behave as they did after a click, with no click.
         Fleet& sel_fleet = m_state->fleet_state.fleet;
-        // The roster is drawn over the world rather than in a layer that arbitrates for itself,
-        // so it has to be asked explicitly -- otherwise a click on a stance chip would also drag
-        // a selection box through the world behind the panel.
-        const b8 ui_free_sel = !bs_imgui_wants_mouse() && !bs_rml_wants_mouse()
-                            && !fleet_roster_wants_mouse(m_state);
+        // The roster is an RmlUi panel now, so bs_rml_wants_mouse covers it: a click on a
+        // stance chip reports the cursor as UI-owned and never also drags a selection box
+        // through the world behind the panel. No per-panel query needed anymore.
+        const b8 ui_free_sel = !bs_imgui_wants_mouse() && !bs_rml_wants_mouse();
         if (m_state->command_overlay_active && ui_free_sel) {
             const b8 lmb_down = input_is_button_down(BUTTON_LEFT);
             const b8 lmb_prev = input_was_button_down(BUTTON_LEFT);
@@ -356,11 +355,34 @@ void RtsControls::update(f32 dt) {
                     }
                 }
             } else if (fleet.any_selected()) {
+                // Standing orders (escort / avoid) are OVERLAY gestures: with the overlay down,
+                // RMB keeps its established meanings (attack a hostile, move to a point) so the
+                // new orders never change what an existing click does outside the bounded moment
+                // the player opened on purpose. Enemy hover is tested first, so attack keeps
+                // priority when a hostile and a friendly marker overlap.
+                const b8 shift_held = input_is_key_down(KEY_LSHIFT) || input_is_key_down(KEY_RSHIFT);
+                const b8 overlay_up = m_state->command_overlay_active;
                 if (m_hovered_enemy_idx >= 0) {
                     CombatEntity* ce = &m_state->combat_entities[m_hovered_enemy_idx];
                     if (ce->active && ce->ship) {
-                        fleet.order_attack(ce->ship);
+                        if (shift_held && overlay_up) {
+                            // Shift inverts the hostile order: keep away instead of engage.
+                            // order_avoid clears any attack order on the same ship itself --
+                            // running from something you are shooting is incoherent.
+                            fleet.order_avoid(ce->ship);
+                            action_log_push(m_state, "Avoiding: %s",
+                                            ce->ship->vessel_name ? ce->ship->vessel_name : "contact");
+                        } else {
+                            fleet.order_attack(ce->ship);
+                        }
                     }
+                } else if (overlay_up && m_hovered_ship_idx >= 0) {
+                    // Escort the hovered friendly. Fleet::order_escort skips a ship escorting
+                    // itself, so a selection containing the target stays coherent.
+                    Ship* buddy = &fleet.at(m_hovered_ship_idx).ship;
+                    fleet.order_escort(buddy);
+                    action_log_push(m_state, "Escorting: %s",
+                                    buddy->vessel_name ? buddy->vessel_name : "ship");
                 } else {
                     fleet.order_move(mouse_hp);
                 }
@@ -382,6 +404,15 @@ void RtsControls::update(f32 dt) {
                         m_state->fleet_state.fleet.at(i).clear_attack_target();
                     }
                 }
+            }
+        }
+        // ---- Rally on flagship (F) -------------------------------------------------------
+        // No target needed: order_rally is order_escort aimed at member 0. Same gate as J/X --
+        // it works whenever the RMB order path does, not only under the overlay.
+        if (input_is_key_down(KEY_F) && !input_was_key_down(KEY_F)) {
+            if (m_state->fleet_state.fleet.any_selected()) {
+                m_state->fleet_state.fleet.order_rally();
+                action_log_push(m_state, "Fleet rallying on flagship.");
             }
         }
         // ---- Number-row piloting selection (1-4) while detached: RETIRED ------------------

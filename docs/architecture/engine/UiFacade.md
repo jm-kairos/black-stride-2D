@@ -14,10 +14,11 @@ implementation**: all 29 of its functions are defined inside `renderer_backend_s
 `engine/source/renderer/bs_rml.h` — `bs_rml_document` (opaque `{void* ptr;}`);
 `bs_rml_initialize`, `_shutdown`, `_load_fonts`, `_load_document`, `_show`, `_unload_document`,
 `_update`, `_process_event`, `_wants_mouse`, `_wants_keyboard`, `_on_resize`,
-`_debugger_toggle`, `_set_sharpen`; and the HUD tier — `bs_rml_hud_state` (a ~145-field POD
+`_debugger_toggle`, `_set_sharpen`; and the HUD tier — `bs_rml_hud_state` (a ~150-field POD
 snapshot), `bs_rml_log_line`, `bs_rml_disc_line`, `bs_rml_weapon_line`, `bs_rml_bay_line`,
-`bs_rml_gm_cell`, `bs_rml_gm_row`, plus `bs_rml_hud_init`, `_hud_shutdown`, `_hud_update`,
-`_hud_poll_action`. All 23 are `bs__api__`.
+`bs_rml_gm_cell`, `bs_rml_gm_row`, `bs_rml_roster_chip`, `bs_rml_roster_row`, plus
+`bs_rml_hud_init`, `_hud_shutdown`, `_hud_update`, `_hud_poll_action`. All 23 functions are
+`bs__api__`.
 
 **Depends on:** Foundation (its only include).
 **Depended on by:** Platform, RenderFrontend, RenderBackend, Widgets — and the sandbox, which
@@ -73,6 +74,19 @@ a `bs__api__` declaration here plus an implementation at the bottom of the backe
 - Every field is a fixed-size `char` array, so oversized game strings are silently truncated.
 - **`BS_RML_GROUP_MAX` is annotated "SHIP_WEAPON_GROUPS game-side"** (`bs_rml.h:99`) — a
   duplicated constant across the engine/game boundary with no compile-time check.
+  `BS_RML_ROSTER_MAX` ("FLEET_MAX_SHIPS game-side") repeats the pattern for the fleet roster
+  rows.
+- **The per-frame dirty-everything in `bs_rml_hud_update` breaks per-row `data-attr-*`
+  bindings.** Reapplying an attribute every frame churns the element, so a press/release pair
+  never lands on one instance — clicks (and hover) silently die on any data-for row carrying a
+  data-attr binding, and an `<img>` child has the same effect. Discovered building the
+  inspector's fleet list; the workaround is statically authored rows with literal actions and
+  decorator-painted images (text and class bindings are idempotent and safe). A real fix is
+  per-variable dirtying.
+- **RmlUi overflow scrolling is effectively unusable in this integration.** A container that
+  actually overflows with `overflow-y: auto` loses hit-testing for its children, and a nested
+  fixed-height scroll region drops its content from layout entirely. The inspector is sized so
+  nothing overflows; treat `overflow` as display-only (clipping) until this is understood.
 - Comments reference external design docs (`docs/POINT_DEFENSE_AND_MISSILES.md`) and a shader
   (`rml.frag.hlsl`, for the sharpening contract), so the header depends on artifacts outside the
   code.
@@ -85,4 +99,9 @@ a `bs__api__` declaration here plus an implementation at the bottom of the backe
 **Source paths:** `engine/source/renderer/bs_imgui.h`, `engine/source/renderer/bs_rml.h`
 (implementation: `engine/source/renderer/backend/renderer_backend_sdlgpu.cpp`)
 
-**Last verified:** 2026-08-07, commit `812680c`
+**Last verified:** 2026-08-12, working tree on `game` (the inspector became a single-window UI:
+`bs_rml_insp_ship` fleet-list rows + `insp_show_loadout`/`_doctrine` tab flags join the
+snapshot, action grammar gains `"insp_tab:N"`; the reserved texture names "bs:portrait" and
+"bs:thumbs" resolve to the engine's live offscreen targets. Earlier the same day: `insp_status`,
+`bs_rml_roster_row::action_insp`, `"insp:N"`; previously the fleet-roster rows —
+`bs_rml_roster_row`/`_chip`, `BS_RML_ROSTER_MAX`, `"fsel:N"`, `"fstance:N:S"`)

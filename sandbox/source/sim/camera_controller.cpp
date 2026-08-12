@@ -36,6 +36,9 @@ void update_zoom_and_mode(game_state* s, f32 dt) {
     // feels smooth instead of snapping. Easing is done in LOG space because zoom is multiplicative
     // and spans many decades (ZOOM_GLOBAL_MIN..ZOOM_MAX) -> constant *perceived* zoom speed.
     i32 wheel = input_get_mouse_wheel();
+    // The ship inspector is modal: still CONSUME the wheel accumulator (the engine clears it
+    // per poll), but discard it so the world zoom cannot change under the window.
+    if (s->show_flagship_inspector) wheel = 0;
     if (wheel != 0) {
         f32 step = ZOOM_STEP;
         // Zooming IN toward a captured planet: ease the zoom-in speed down as it nears its framed

@@ -17,7 +17,7 @@ The object is a `game_state` member, so it is reached through the hub rather tha
 no other subsystem includes this header.
 
 **Depends on:** FleetControl, ShipCombatModel, CoordinateFrames, GalaxyMapRendering
-(`galaxy_pick_planet`), InWorldOverlays (`fleet_roster_wants_mouse`), GameStateModel;
+(`galaxy_pick_planet`), ActionLog (standing-order feedback), GameStateModel;
 engine `core/input.h`, `renderer/renderer.h`,
 `renderer/camera2d.h`, `renderer/bs_imgui.h`, `renderer/bs_rml.h`, `math/math_utils.h`,
 `renderer/renderer_types.h`, `defines.h`.
@@ -72,9 +72,18 @@ FrameOrchestrator.
   which is why `game_init` placement-news it separately (`new (&s->rts_controls)
   RtsControls(s)`) — the only `game_state` member needing a constructor argument. The default
   constructor leaves `m_state` null and runs first during the struct's placement-new.
-- Three accessors exist solely to feed the RmlUi HUD snapshot (`piloted_index`,
-  `jump_mode_active`, `hud_toggle_pilot_mode`), documented as such — the HUD reads private state
-  through a narrow window.
+- **Standing orders are overlay gestures; RMB keeps its established meanings outside it.** With
+  the command overlay up: RMB on a hovered friendly issues `order_escort`, shift-RMB on a
+  hovered hostile issues `order_avoid`; F issues `order_rally` under the same gate as J/X
+  (whenever the camera is detached or the overlay is up). Enemy hover keeps priority over
+  friendly hover, so attack primacy is preserved when markers overlap. Each dispatch pushes an
+  action-log line. *Known conflict:* LSHIFT also toggles the alternative movement scheme while
+  the camera is attached (`game.cpp`), so a shift-RMB avoid issued mid-pilot flips the flight
+  controls too — unresolved, awaiting a binding decision.
+- Four accessors exist solely to feed the RmlUi HUD snapshot (`piloted_index`,
+  `jump_mode_active`, `hovered_index`, `hud_toggle_pilot_mode`), documented as such — the HUD
+  reads private state through a narrow window (`hovered_index` drives the RML roster's row
+  hover cue).
 
 **Extension points:** A new order or selection gesture is handled in `RtsControls::update`
 (input interpretation and transition) and issued through a `Fleet` method — the split the header
@@ -87,11 +96,10 @@ drain.
 - **`HOVER_CIRCLE_LAYER` is the literal `50` with the comment "same as `LAYER_UI` in
   game.cpp"** — a hand-copied layer constant rather than an include of `core/render_layers.h`,
   so the two can drift.
-- **A `sim/` module includes `render/` headers — now two of them.** `galaxy_pick_planet` from
-  `render/galaxy_map_render.h`, and `fleet_roster_wants_mouse` from `render/fleet_roster.h`
-  (the roster is drawn over the world rather than in a layer that arbitrates for itself, so it
-  must be asked explicitly or a chip click also drags a selection box behind the panel). If a
-  third appears, extract an input-arbitration seam instead.
+- **A `sim/` module includes a `render/` header — back to one.** `galaxy_pick_planet` from
+  `render/galaxy_map_render.h`. The second inverted edge (`fleet_roster_wants_mouse`) died with
+  the roster's migration to the RML HUD — `bs_rml_wants_mouse` covers it now. If more appear,
+  extract an input-arbitration seam instead.
 - **The class both owns input state and draws**, with seven private rendering helpers, so it
   spans simulation and presentation in one object — unlike every other sim module, which
   exposes state for a render pass to consume.
@@ -111,6 +119,7 @@ drain.
 
 **Source paths:** `sandbox/source/sim/rts_controls.{cpp,h}`
 
-**Last verified:** 2026-08-10, working tree on `game` (box/click selection restored behind the
-command overlay; roster consulted for cursor ownership). The RTS number row stays retired — keys
-1–5 are the weapon fire-group selector.
+**Last verified:** 2026-08-11, working tree on `game` (standing-order gestures wired: RMB
+escort / shift-RMB avoid under the overlay, F rally; the roster is an RML HUD panel now, so the
+per-panel cursor query is gone). The RTS number row stays retired — keys 1–5 are the weapon
+fire-group selector.

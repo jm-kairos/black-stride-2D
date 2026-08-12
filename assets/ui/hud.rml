@@ -31,6 +31,26 @@
         </div>
     </div>
 
+    <!-- Fleet roster (top-left): one row per fleet member while the command overlay is up.
+         The row-select click lives on roster-main, NOT the row container: chips sit inside the
+         row and RML clicks bubble, so a container handler would turn every stance change into a
+         selection change as well. -->
+    <div id="roster" class="hud-panel" data-if="roster_visible">
+        <div class="roster-hdr">FLEET</div>
+        <div class="roster-row" data-for="r : roster"
+             data-class-selected="r.selected" data-class-hovered="r.hovered">
+            <div class="roster-main" data-event-click="hud_action(r.action)">
+                <div class="roster-label" data-class-piloted="r.piloted">{{ r.label }}</div>
+                <div class="roster-status">{{ r.status }}</div>
+            </div>
+            <div class="roster-chips">
+                <span class="roster-chip insp" data-event-click="hud_action(r.action_insp)">i</span>
+                <span class="roster-chip" data-for="ch : r.chip" data-class-on="ch.on"
+                      data-event-click="hud_action(ch.action)">{{ ch.label }}</span>
+            </div>
+        </div>
+    </div>
+
     <!-- Action log (bottom-right; whole-panel opacity driven by the game's idle fade) -->
     <div id="log" class="hud-panel" data-if="log_visible" data-style-opacity="log_alpha">
         <div class="log-line" data-for="line : log">{{ line.text }}</div>
@@ -98,13 +118,130 @@
          hardpoint box to mount; drag a mounted item back into the bay well to unmount ('baydrop',
          routed game-side by dragged kind). Drag sources also emit 'dragend' so a release over the
          world can hit-test the cruiser's hardpoint boxes and install directly (game.cpp). -->
-    <div id="inspector" class="panel" data-if="inspector_visible"
+    <div id="inspector" data-if="inspector_visible"
          data-event-dragdrop="hud_action('uidrop')">
-        <div class="win-title">FLAGSHIP INSPECTOR<span class="win-close" data-event-click="hud_action('close_inspector')">Collapse</span></div>
-        <div class="insp-tabs">
-            <div class="insp-tab active">Modules</div>
+        <!-- ONE window, three sections. The container paints the window plate but stays
+             click-through (pointer-events none): the sections opt back in, while the middle
+             zone passes input to the game-side portrait hit-test (drag-mounting). NOTHING in
+             this window may overflow -- RmlUi overflow containers break hit-testing and
+             nested layout here, so every section is sized to fit (the tabs exist for that). -->
+        <div class="insp-titlebar">SHIP INSPECTOR<span class="win-close" data-event-click="hud_action('close_inspector')">Collapse</span></div>
+        <div class="insp-left">
+            <div class="insp-section-hdr">Fleet</div>
+            <!-- Entries are STATICALLY authored (no data-for, fixed sprite classes, literal
+                 actions): the HUD snapshot dirties every variable every frame, so per-row
+                 data-attr bindings re-apply each frame and churn the elements -- a churned
+                 element can never complete a press/release pair. Text and class bindings are
+                 idempotent, and thumbnails paint as DECORATORS (an <img> child also killed
+                 clicks on generated entries). -->
+            <div class="insp-fleet-list">
+                <div class="insp-fleet-entry" data-if="insp_ship_count > 0"
+                     data-class-selected="insp_ships[0].selected" data-event-click="hud_action('insp:0')">
+                    <div class="insp-fleet-thumb thumb-0"></div>
+                    <div class="insp-fleet-text">{{ insp_ships[0].name }}<span class="insp-fleet-status">{{ insp_ships[0].status }}</span></div>
+                </div>
+                <div class="insp-fleet-entry" data-if="insp_ship_count > 1"
+                     data-class-selected="insp_ships[1].selected" data-event-click="hud_action('insp:1')">
+                    <div class="insp-fleet-thumb thumb-1"></div>
+                    <div class="insp-fleet-text">{{ insp_ships[1].name }}<span class="insp-fleet-status">{{ insp_ships[1].status }}</span></div>
+                </div>
+                <div class="insp-fleet-entry" data-if="insp_ship_count > 2"
+                     data-class-selected="insp_ships[2].selected" data-event-click="hud_action('insp:2')">
+                    <div class="insp-fleet-thumb thumb-2"></div>
+                    <div class="insp-fleet-text">{{ insp_ships[2].name }}<span class="insp-fleet-status">{{ insp_ships[2].status }}</span></div>
+                </div>
+                <div class="insp-fleet-entry" data-if="insp_ship_count > 3"
+                     data-class-selected="insp_ships[3].selected" data-event-click="hud_action('insp:3')">
+                    <div class="insp-fleet-thumb thumb-3"></div>
+                    <div class="insp-fleet-text">{{ insp_ships[3].name }}<span class="insp-fleet-status">{{ insp_ships[3].status }}</span></div>
+                </div>
+                <div class="insp-fleet-entry" data-if="insp_ship_count > 4"
+                     data-class-selected="insp_ships[4].selected" data-event-click="hud_action('insp:4')">
+                    <div class="insp-fleet-thumb thumb-4"></div>
+                    <div class="insp-fleet-text">{{ insp_ships[4].name }}<span class="insp-fleet-status">{{ insp_ships[4].status }}</span></div>
+                </div>
+                <div class="insp-fleet-entry" data-if="insp_ship_count > 5"
+                     data-class-selected="insp_ships[5].selected" data-event-click="hud_action('insp:5')">
+                    <div class="insp-fleet-thumb thumb-5"></div>
+                    <div class="insp-fleet-text">{{ insp_ships[5].name }}<span class="insp-fleet-status">{{ insp_ships[5].status }}</span></div>
+                </div>
+                <div class="insp-fleet-entry" data-if="insp_ship_count > 6"
+                     data-class-selected="insp_ships[6].selected" data-event-click="hud_action('insp:6')">
+                    <div class="insp-fleet-thumb thumb-6"></div>
+                    <div class="insp-fleet-text">{{ insp_ships[6].name }}<span class="insp-fleet-status">{{ insp_ships[6].status }}</span></div>
+                </div>
+                <div class="insp-fleet-entry" data-if="insp_ship_count > 7"
+                     data-class-selected="insp_ships[7].selected" data-event-click="hud_action('insp:7')">
+                    <div class="insp-fleet-thumb thumb-7"></div>
+                    <div class="insp-fleet-text">{{ insp_ships[7].name }}<span class="insp-fleet-status">{{ insp_ships[7].status }}</span></div>
+                </div>
+            </div>
         </div>
-        <div class="rule"></div>
+        <div class="insp-center">
+            <img class="insp-portrait" src="bs:portrait"
+                 data-style-left="insp_portrait_left" data-style-top="insp_portrait_top"
+                 data-style-width="insp_portrait_size" data-style-height="insp_portrait_size"/>
+            <div class="insp-tabpanel">
+                <div class="insp-tabs">
+                    <div class="insp-tab" data-class-active="insp_show_loadout" data-event-click="hud_action('insp_tab:0')">Loadout</div>
+                    <div class="insp-tab" data-class-active="insp_show_doctrine" data-event-click="hud_action('insp_tab:1')">Doctrine</div>
+                </div>
+                <div class="insp-tabbody" data-if="insp_show_loadout">
+                    <div class="insp-ship-name">{{ insp_ship_name }}</div>
+                    <div class="insp-status">{{ insp_status }}</div>
+                </div>
+                <div class="insp-tabbody" data-if="insp_show_doctrine">
+                    <div class="insp-doctrine-col">
+                        <div class="insp-section-hdr" data-if="gm_visible">Fire groups</div>
+                        <div class="gm-table" data-if="gm_visible">
+                <div class="gm-hdr-row">
+                    <div class="gm-corner">key</div>
+                    <div class="gm-col-hdr" data-for="cname : gm_col">{{ cname }}</div>
+                </div>
+                <div class="gm-row" data-for="r : gm_row" data-class-active="r.selected">
+                    <div class="gm-row-hdr">{{ r.label }}</div>
+                    <div class="gm-cell" data-for="cl : r.cell" data-class-on="cl.on"
+                         data-event-click="hud_action(cl.action)"><span data-if="cl.on">X</span></div>
+                </div>
+            </div>
+                    </div>
+                    <div class="insp-doctrine-col">
+                        <div class="insp-section-hdr" data-if="pd_visible">Point defense</div>
+                        <div class="pd-doctrine" data-if="pd_visible">
+                <div class="pd-row">
+                    <span class="pd-lbl">Stance</span>
+                    <span class="pd-opt" data-class-active="pd_stance == 0" data-event-click="hud_action('pd:stance:0')">Hold
+                        <div class="pd-tip">Laser offline. Drains no energy &#8212; and stops nothing. Stay dark, or bank every drop of capacitor for the guns. Hotkey P cycles stance.</div></span>
+                    <span class="pd-opt" data-class-active="pd_stance == 1" data-event-click="hud_action('pd:stance:1')">Standard
+                        <div class="pd-tip">Balanced auto-fire. Steady beam damage at a drain the reactor can almost sustain. The default watch setting.</div></span>
+                    <span class="pd-opt" data-class-active="pd_stance == 2" data-event-click="hud_action('pd:stance:2')">Overdrive
+                        <div class="pd-tip">Double beam damage, triple energy drain, faster retargeting. Empties a full capacitor in seconds &#8212; switch on when a salvo is inbound, off when it passes.</div></span>
+                </div>
+                <div class="pd-row">
+                    <span class="pd-lbl">Priority</span>
+                    <span class="pd-opt" data-class-active="pd_priority == 0" data-event-click="hud_action('pd:pri:0')">Impact time
+                        <div class="pd-tip">Burn whatever will hit this ship soonest, missile or shell. The best all-round choice against mixed incoming fire.</div></span>
+                    <span class="pd-opt" data-class-active="pd_priority == 1" data-event-click="hud_action('pd:pri:1')">Missiles first
+                        <div class="pd-tip">Always target missiles before cannon shells, even distant ones. Choose this when missiles are the real killer and stray shells can be absorbed.</div></span>
+                    <span class="pd-opt" data-class-active="pd_priority == 2" data-event-click="hud_action('pd:pri:2')">Nearest
+                        <div class="pd-tip">Shoot the closest threat, nothing fancier. Predictable &#8212; but easily distracted by harmless near-misses that were never going to hit.</div></span>
+                </div>
+                <div class="pd-row">
+                    <span class="pd-lbl">Gate</span>
+                    <span class="pd-opt" data-class-active="pd_gate == 0" data-event-click="hud_action('pd:gate:0')">Near 60%
+                        <div class="pd-tip">Hold fire until threats are deep inside range. Wastes no energy on targets that might still miss or turn away &#8212; but leaves no margin if the beam fails to kill.</div></span>
+                    <span class="pd-opt" data-class-active="pd_gate == 1" data-event-click="hud_action('pd:gate:1')">Mid 80%
+                        <div class="pd-tip">A working compromise: earlier engagement than NEAR without chasing everything at the edge of range.</div></span>
+                    <span class="pd-opt" data-class-active="pd_gate == 2" data-event-click="hud_action('pd:gate:2')">Full 100%
+                        <div class="pd-tip">Engage at maximum laser range. Longest time on target and a second chance at leakers &#8212; at the cost of energy spent on threats that might never have connected.</div></span>
+                </div>
+            </div>
+                    </div>
+                </div>
+            </div>
+            <div class="insp-center-hint">Drag bay items onto the hull's hardpoint boxes to mount &#8212; drag a mounted item off the ship or into the bay to unmount</div>
+        </div>
+        <div class="insp-right">
         <div class="insp-section-hdr">Module bay</div>
         <div class="weapon-queue inv-drop" data-event-dragdrop="hud_action('baydrop')">
             <div class="weapon-symbol" data-for="w : bay"
@@ -129,50 +266,8 @@
                 </div>
             </div>
         </div>
-        <div class="insp-section-hdr" data-if="pd_visible">Point defense</div>
-        <div class="pd-doctrine" data-if="pd_visible">
-            <div class="pd-row">
-                <span class="pd-lbl">Stance</span>
-                <span class="pd-opt" data-class-active="pd_stance == 0" data-event-click="hud_action('pd:stance:0')">Hold
-                    <div class="pd-tip">Laser offline. Drains no energy &#8212; and stops nothing. Stay dark, or bank every drop of capacitor for the guns. Hotkey P cycles stance.</div></span>
-                <span class="pd-opt" data-class-active="pd_stance == 1" data-event-click="hud_action('pd:stance:1')">Standard
-                    <div class="pd-tip">Balanced auto-fire. Steady beam damage at a drain the reactor can almost sustain. The default watch setting.</div></span>
-                <span class="pd-opt" data-class-active="pd_stance == 2" data-event-click="hud_action('pd:stance:2')">Overdrive
-                    <div class="pd-tip">Double beam damage, triple energy drain, faster retargeting. Empties a full capacitor in seconds &#8212; switch on when a salvo is inbound, off when it passes.</div></span>
-            </div>
-            <div class="pd-row">
-                <span class="pd-lbl">Priority</span>
-                <span class="pd-opt" data-class-active="pd_priority == 0" data-event-click="hud_action('pd:pri:0')">Impact time
-                    <div class="pd-tip">Burn whatever will hit this ship soonest, missile or shell. The best all-round choice against mixed incoming fire.</div></span>
-                <span class="pd-opt" data-class-active="pd_priority == 1" data-event-click="hud_action('pd:pri:1')">Missiles first
-                    <div class="pd-tip">Always target missiles before cannon shells, even distant ones. Choose this when missiles are the real killer and stray shells can be absorbed.</div></span>
-                <span class="pd-opt" data-class-active="pd_priority == 2" data-event-click="hud_action('pd:pri:2')">Nearest
-                    <div class="pd-tip">Shoot the closest threat, nothing fancier. Predictable &#8212; but easily distracted by harmless near-misses that were never going to hit.</div></span>
-            </div>
-            <div class="pd-row">
-                <span class="pd-lbl">Gate</span>
-                <span class="pd-opt" data-class-active="pd_gate == 0" data-event-click="hud_action('pd:gate:0')">Near 60%
-                    <div class="pd-tip">Hold fire until threats are deep inside range. Wastes no energy on targets that might still miss or turn away &#8212; but leaves no margin if the beam fails to kill.</div></span>
-                <span class="pd-opt" data-class-active="pd_gate == 1" data-event-click="hud_action('pd:gate:1')">Mid 80%
-                    <div class="pd-tip">A working compromise: earlier engagement than NEAR without chasing everything at the edge of range.</div></span>
-                <span class="pd-opt" data-class-active="pd_gate == 2" data-event-click="hud_action('pd:gate:2')">Full 100%
-                    <div class="pd-tip">Engage at maximum laser range. Longest time on target and a second chance at leakers &#8212; at the cost of energy spent on threats that might never have connected.</div></span>
-            </div>
+        <div class="ship-preview-label">Hover a tile for its stat card - drag onto the ship to mount - drag a mounted item back into the bay to unmount</div>
         </div>
-        <div class="insp-section-hdr" data-if="gm_visible">Fire groups</div>
-        <div class="gm-table" data-if="gm_visible">
-            <div class="gm-hdr-row">
-                <div class="gm-corner">key</div>
-                <div class="gm-col-hdr" data-for="cname : gm_col">{{ cname }}</div>
-            </div>
-            <div class="gm-row" data-for="r : gm_row" data-class-active="r.selected">
-                <div class="gm-row-hdr">{{ r.label }}</div>
-                <div class="gm-cell" data-for="cl : r.cell" data-class-on="cl.on"
-                     data-event-click="hud_action(cl.action)"><span data-if="cl.on">X</span></div>
-            </div>
-        </div>
-        <div class="ship-preview-label">Hover a tile for its stat card - drag onto the ship to mount - drag a mounted item back into the bay to unmount - check a Fire groups box to assign that weapon to that key</div>
-        <div class="ship-preview-name">{{ insp_ship_name }}</div>
     </div>
 
     <!-- Galaxy-map hover tooltip (cursor-anchored; position set game-side via tip_left/tip_top) -->

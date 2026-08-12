@@ -82,6 +82,26 @@ bs__api__ f32  renderer_get_draw_alpha();
 // regular sprites so it participates in bloom. MUST be called between begin_frame and end_frame.
 bs__api__ void renderer_draw_mapped_sprite(const bs_mapped_sprite* sprite);
 
+// ---- Ship-portrait offscreen pass ---------------------------------------------------------
+// Between begin and end, every sprite submission (draw_sprite, draw_mapped_sprite, and the
+// line/quad/circle debug primitives built from sprites) is captured into a separate batch and
+// rendered with `camera` into a persistent square offscreen target during end_frame, BEFORE
+// the scene passes -- the scene itself is unaffected. The RmlUi HUD document samples the
+// target through the reserved texture source name "bs:portrait" (an <img> whose src ends with
+// that name). The portrait renders fullbright: scene lights and bloom do not apply. `camera`
+// maps world units to the target's pixels (the target is square; frame accordingly). Must be
+// called between renderer_begin_frame and renderer_end_frame; scopes do not nest, and a second
+// begin in one frame replaces the first portrait. Costs nothing in frames where it is unused.
+bs__api__ void renderer_portrait_begin(Camera2D camera);
+bs__api__ void renderer_portrait_end(void);
+
+// Fleet-thumbnail variant of the portrait scope: identical capture semantics, but the scope
+// renders into 256x256 slot `slot` (0..7) of a persistent thumbnail STRIP the HUD samples via
+// the reserved texture name "bs:thumbs" (256 x 2048; slot N occupies rect "0 N*256 256 256").
+// Close with renderer_portrait_end. Several scopes may run per frame -- typically the main
+// portrait plus one thumbnail per fleet member.
+bs__api__ void renderer_thumb_begin(i32 slot, Camera2D camera);
+
 // Draw a procedural parallax starfield layer using a custom GPU pipeline.
 // `params` carries the per-layer virtual camera, seed, tile size, and density.
 // The backend queues the parameters and renders during end_frame (no render pass

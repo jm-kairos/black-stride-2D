@@ -98,6 +98,7 @@ bs__api__ void bs_rml_set_sharpen(f32 amount);
 #define BS_RML_BAY_MAX     12   // flagship-inspector Modules bay tiles (6 x 2 grid, socket-padded)
 #define BS_RML_GROUP_MAX   5    // fleet-ship HUD fire-group rows (SHIP_WEAPON_GROUPS game-side)
 #define BS_RML_GM_COLS     8    // fire-group matrix: max weapon columns (mounted weapons)
+#define BS_RML_ROSTER_MAX  8    // fleet roster rows (FLEET_MAX_SHIPS game-side)
 #define BS_RML_ACTION_CAP  32   // max bytes (incl. NUL) for a polled action string
 
 // One action-log line (already formatted, newest last).
@@ -164,6 +165,43 @@ typedef struct bs_rml_gm_row
     bs_rml_gm_cell cell[BS_RML_GM_COLS];
 } bs_rml_gm_row;
 
+// One stance chip of a fleet-roster row: `label` is the chip letter, `action` ("fstance:R:S")
+// is enqueued on click, `on` highlights the ship's active stance.
+typedef struct bs_rml_roster_chip
+{
+    char label[4];
+    char action[16];
+    b8   on;
+} bs_rml_roster_chip;
+
+// One fleet-roster row (the command-overlay fleet panel). All text pre-formatted game-side.
+// Row click enqueues `action` ("fsel:N"); additive (shift) selection is resolved game-side at
+// drain time, so the engine carries no modifier state.
+typedef struct bs_rml_roster_row
+{
+    char               label[32];   // "1 Vessel Name"
+    char               status[12];  // live order readout: "IDLE" / "MOVE" / "ATTACK" / ...
+    char               action[16];  // "fsel:N" enqueued on row click
+    char               action_insp[16]; // "insp:N" enqueued by the row's inspect button
+    b8                 selected;    // row highlight + bright left edge
+    b8                 piloted;     // the manually-piloted ship (name tinted)
+    b8                 hovered;     // cursor is over this hull in the world
+    bs_rml_roster_chip chip[4];     // stance chips (Aggressive/Defensive/Passive/Hold fire)
+} bs_rml_roster_row;
+
+// One fleet-list entry of the ship inspector: a live-thumbnail slice + label. `sprite` names
+// an RCSS spritesheet entry over the "bs:thumbs" strip ("bs-thumb-N" = this member's 256x256
+// slot -- the sprite route, NOT an <img rect>, because per-frame rect reapplication breaks
+// RmlUi hit-testing); `action` ("insp:N") is enqueued on click to retarget the inspector.
+typedef struct bs_rml_insp_ship
+{
+    char sprite[16];
+    char name[32];
+    char status[12];   // live order readout, same vocabulary as the roster rows
+    char action[16];
+    b8   selected;     // the currently inspected member
+} bs_rml_insp_ship;
+
 // Full per-frame HUD snapshot. Zero-initialize, fill the visible sections, then push it.
 typedef struct bs_rml_hud_state
 {
@@ -221,6 +259,12 @@ typedef struct bs_rml_hud_state
     char               fleet_pd_label[40];    // "PD: OVERDRIVE - missiles first - 80%"
     b8                 fleet_pd_warn;         // TRUE when stance != STANDARD (amber cue)
 
+    // Fleet roster (top-left, command overlay only): one row per fleet member, so the panel
+    // answers "what is every ship doing" while the player is commanding.
+    b8                roster_visible;
+    i32               roster_count;               // valid rows in roster[0..count-1]
+    bs_rml_roster_row roster[BS_RML_ROSTER_MAX];
+
     // Jump-mode banner (bottom-center; "Currently in Jump Mode").
     b8 jump_visible;
 
@@ -235,17 +279,38 @@ typedef struct bs_rml_hud_state
     char tip_top[16];
     char tip_text[1024];
 
-    // Flagship inspector: a persistent window opened via the bottom-center "Inspector" button.
-    // inspector_btn_visible shows the launcher button during gameplay; inspector_visible shows the
-    // window while it is open. The single MODULES tab lists the flagship's UNMOUNTED inventory as
-    // ONE unified bay grid: weapons ("inv:K"), the point-defense ("defdrag") and ship modules
-    // ("mod:K") together, padded to BS_RML_BAY_MAX with inert empty sockets. The bay well is a
-    // single unmount drop target ("baydrop"; the game routes by dragged kind). Mounted items live
-    // on the SHIP itself (world hardpoint boxes), not in the window; an item is shown in EITHER
-    // the bay OR on a hardpoint, never both.
+    // Ship inspector: a FULL-SCREEN three-zone window (left status column, see-through center,
+    // right bay column) opened via the bottom-center "Inspector" button (piloted ship) or a
+    // roster row's "insp:N" (any fleet member). inspector_btn_visible shows the launcher during
+    // gameplay; inspector_visible shows the window while it is open. The bay lists the
+    // FLEET-WIDE pool of unmounted inventory as ONE unified grid: weapons ("inv:K"), the
+    // point-defense ("defdrag") and ship modules ("mod:K") together, padded to BS_RML_BAY_MAX
+    // with inert empty sockets. The bay well is a single unmount drop target ("baydrop"; the
+    // game routes by dragged kind). Mounted items live on the INSPECTED SHIP itself (world
+    // hardpoint boxes visible through the center zone), not in the window; an item is shown in
+    // EITHER the bay OR on a hardpoint, never both.
     b8                 inspector_btn_visible;
     b8                 inspector_visible;
     char               insp_ship_name[64];
+    // Left-column status block for the inspected ship, pre-formatted game-side with '\n'
+    // line breaks (stance, live order, capacitor, PD doctrine, mount occupancy).
+    char               insp_status[512];
+    // Portrait element placement, as CSS px strings that must ALWAYS hold a valid length
+    // (data-style bindings evaluate even while hidden -- same rule as tip_left/tip_top).
+    // left/top are relative to the inspector's middle zone. The game computes the square from
+    // its own layout constants, so the RML element and the game-side portrait hit-test share
+    // one rect. The element's source is the reserved texture name "bs:portrait", which the
+    // engine resolves to the live portrait render target.
+    char               insp_portrait_left[16];
+    char               insp_portrait_top[16];
+    char               insp_portrait_size[16];
+    // Fleet list (inspector left section): live thumbnails of every member.
+    i32                insp_ship_count;
+    bs_rml_insp_ship   insp_ships[BS_RML_ROSTER_MAX];
+    // Middle-section tab visibility (0 = Loadout, 1 = Doctrine), round-tripped via
+    // "insp_tab:N" actions -- the station inspector's tab pattern.
+    b8                 insp_show_loadout;
+    b8                 insp_show_doctrine;
     i32                bay_count;              // valid tiles in bay[0..count-1]
     bs_rml_bay_line    bay[BS_RML_BAY_MAX];
 

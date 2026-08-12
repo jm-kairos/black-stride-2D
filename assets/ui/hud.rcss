@@ -157,7 +157,7 @@ body {
    Utilitarian: no pulse, just a clear pressed-metal exit control. */
 #inspector .win-close {
     float: right;
-    margin-top: -3px;                       /* seat the button within the header band */
+    margin-top: -2px;                       /* seat the button within the title bar */
     padding: 3px 12px;
     color: #e8d6c8;
     decorator: ninepatch(copper-btn, copper-btn-inner);   /* oxidized copper cap */
@@ -390,6 +390,107 @@ body {
     border-color: #5c4a24;
 }
 
+/* --- Fleet roster (top-left, command overlay): one row per fleet member ------------ */
+/* pointer-events:auto on the container makes the whole panel a solid commanding surface:
+   bs_rml_wants_mouse() reports the cursor as UI-owned over it, which is what keeps a roster
+   click from also starting a selection drag in the world behind it (the arbitration the old
+   self-drawn panel had to answer for itself via fleet_roster_wants_mouse). */
+#roster {
+    position: absolute;
+    top: 120px;
+    left: 16px;
+    width: 244px;
+    pointer-events: auto;
+}
+
+.roster-hdr {
+    color: #7fd4e8;
+    font-size: 12px;
+    letter-spacing: 2px;
+    margin-bottom: 4px;
+}
+
+.roster-row {
+    display: block;
+    background-color: #191d23d9;
+    border-left: 2px transparent;
+    padding: 3px 6px;
+    margin-bottom: 3px;
+}
+
+.roster-row.selected {
+    background-color: #24424ce8;
+    border-left: 2px #59d9f2;
+}
+
+/* World-hover cue: the cursor is over this ship's hull out in the world. */
+.roster-row.hovered {
+    background-color: #2e333a;
+}
+
+.roster-main {
+    display: block;
+}
+
+.roster-main:hover {
+    background-color: #2e333a;
+}
+
+.roster-label {
+    color: #d0dae2;
+    font-size: 12px;
+}
+
+.roster-label.piloted {
+    color: #59ff8c;              /* the manually-piloted ship */
+}
+
+.roster-status {
+    display: inline-block;
+    color: #808f9a;
+    font-size: 10px;
+    margin-left: 8px;            /* breathing room after the name on the shared line */
+}
+
+.roster-chips {
+    display: block;
+    text-align: right;
+    margin-top: -12px;           /* chips share the status line, right-aligned */
+}
+
+.roster-chip {
+    display: inline-block;
+    width: 22px;
+    color: #6e7a84;
+    background-color: #23272cd9;
+    font-size: 10px;
+    text-align: center;
+    padding: 1px 0;
+    margin-left: 3px;
+}
+
+.roster-chip:hover {
+    color: #d0dae2;
+    background-color: #2e333a;
+}
+
+.roster-chip.on {
+    color: #14171b;
+    background-color: #d99e40;   /* amber: the ship's active stance */
+}
+
+/* Per-row inspect button ("i"): opens the full-screen ship inspector on that member. Cyan
+   family, not amber -- it navigates, it does not set a stance. */
+.roster-chip.insp {
+    color: #7fd4e8;
+    background-color: #14262cd9;
+}
+
+.roster-chip.insp:hover {
+    color: #14171b;
+    background-color: #59d9f2;
+}
+
 .weapon-row {
     display: block;
     color: #ddd6c4;
@@ -503,19 +604,184 @@ body {
     color: #f2ead6;
 }
 
-/* --- Flagship inspector window (floating, right side; planet-inspector footprint) -- */
-/* pointer-events:auto makes the window a solid panel (clicks over it never reach the world).
-   Weapon firing is additionally suppressed game-side while the window is open (see game.cpp),
-   so a left-click anywhere -- inside or outside the window -- never fires the active weapon.
-   The world (and the cruiser) stays visible beside it; world-side drops land next phase. */
+/* --- Ship inspector (FULL-SCREEN, three zones) ------------------------------------- */
+/* The container is click-through scaffolding; the two side columns are solid plates that opt
+   back in with pointer-events:auto. The CENTER band stays open to the world so the inspected
+   hull's hardpoint boxes remain visible and drag-mountable "through" the window -- phase 2
+   swaps that band for an offscreen-rendered portrait. Weapon firing is additionally
+   suppressed game-side while the window is open (see game.cpp), so a left-click anywhere --
+   inside or outside the columns -- never fires the active weapon. */
+/* ONE window: the container paints the plate but stays click-through; sections opt back in.
+   NOTHING here may overflow -- RmlUi overflow containers break hit-testing and nested layout,
+   so every section is sized to fit (that is what the middle tabs are for). Layout constants
+   (insets, title height, column widths, tab-panel height) are mirrored in ship_scene.cpp. */
 #inspector {
     position: absolute;
-    top: 96px;
-    right: 32px;
-    width: 380px;
-    max-height: 720px;
-    overflow-y: auto;
-    pointer-events: auto;        /* solid window; does not pass clicks through to the world */
+    top: 60px;
+    left: 16px;
+    right: 16px;
+    bottom: 52px;
+    decorator: ninepatch(plate, plate-inner);
+    pointer-events: none;
+}
+
+.insp-titlebar {
+    position: absolute;
+    left: 6px; right: 6px; top: 6px;
+    height: 40px;
+    padding: 10px 16px 0 16px;
+    box-sizing: border-box;
+    decorator: ninepatch(rail, rail-inner);
+    color: #f2ead6;
+    font-size: 15px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 3px;
+}
+
+.insp-left {
+    position: absolute;
+    left: 0; top: 46px; bottom: 0;
+    width: 250px;
+    box-sizing: border-box;
+    padding: 10px 8px 10px 22px;
+    pointer-events: auto;
+}
+
+.insp-right {
+    position: absolute;
+    right: 0; top: 46px; bottom: 0;
+    width: 400px;
+    box-sizing: border-box;
+    padding: 10px 22px 10px 8px;
+    pointer-events: auto;
+}
+
+.insp-center {
+    position: absolute;
+    left: 250px; right: 400px; top: 46px; bottom: 0;
+    pointer-events: none;        /* input passes to the game-side portrait hit-test */
+}
+
+.insp-tabpanel {
+    position: absolute;
+    left: 8px; right: 8px; bottom: 8px;
+    height: 200px;
+    box-sizing: border-box;
+    padding: 6px 10px;
+    background-color: #14171bd0;  /* recessed well under the portrait */
+    pointer-events: auto;
+}
+
+.insp-doctrine-col {
+    display: inline-block;
+    width: 46%;
+    margin-right: 12px;
+    vertical-align: top;
+}
+
+.insp-center-hint {
+    position: absolute;
+    bottom: 6px; left: 24px; right: 24px;
+    color: #8a8069;
+    font-size: 12px;
+    text-align: center;
+}
+
+/* The live hull portrait (offscreen render target via the reserved "bs:portrait" source).
+   left/top/width/height arrive per-frame from the game; click-through so the game-side
+   portrait hit-test owns every interaction over it. */
+.insp-portrait {
+    position: absolute;
+    pointer-events: none;
+}
+
+/* Fleet list (inspector): live thumbnail entries sliced from the "bs:thumbs" strip; a click
+   retargets the inspector ("insp:N"). The slices are a SPRITESHEET (like the ui-icons the bay
+   uses), not <img rect> -- per-frame rect attribute reapplication broke RmlUi hit-testing. */
+@spritesheet fleet-thumbs {
+    src: bs:thumbs;
+    bs-thumb-0: 0px    0px 256px 256px;
+    bs-thumb-1: 0px  256px 256px 256px;
+    bs-thumb-2: 0px  512px 256px 256px;
+    bs-thumb-3: 0px  768px 256px 256px;
+    bs-thumb-4: 0px 1024px 256px 256px;
+    bs-thumb-5: 0px 1280px 256px 256px;
+    bs-thumb-6: 0px 1536px 256px 256px;
+    bs-thumb-7: 0px 1792px 256px 256px;
+}
+
+.insp-fleet-list {
+    display: block;
+    margin-bottom: 6px;
+}
+
+.insp-fleet-entry {
+    display: block;
+    background-color: #191d23d9;
+    border: 1px transparent;
+    margin: 0 0 4px 0;
+    padding: 4px;
+    pointer-events: auto;
+}
+
+.insp-fleet-entry:hover {
+    background-color: #2e333a;
+}
+
+.insp-fleet-entry.selected {
+    border: 1px #59d9f2;
+    background-color: #24424ce8;
+}
+
+.insp-fleet-thumb {
+    display: inline-block;
+    width: 48px;
+    height: 48px;
+    vertical-align: middle;
+}
+
+/* Thumbnails paint as DECORATORS on plain divs, not <img> children: an img child (static or
+   data-bound) silently killed click handling on the whole entry, while decorators are pure
+   paint with no element-tree implications. */
+.thumb-0 { decorator: image(bs-thumb-0 contain); }
+.thumb-1 { decorator: image(bs-thumb-1 contain); }
+.thumb-2 { decorator: image(bs-thumb-2 contain); }
+.thumb-3 { decorator: image(bs-thumb-3 contain); }
+.thumb-4 { decorator: image(bs-thumb-4 contain); }
+.thumb-5 { decorator: image(bs-thumb-5 contain); }
+.thumb-6 { decorator: image(bs-thumb-6 contain); }
+.thumb-7 { decorator: image(bs-thumb-7 contain); }
+
+.insp-fleet-text {
+    display: inline-block;
+    color: #d0dae2;
+    font-size: 12px;
+    margin-left: 8px;
+    vertical-align: middle;
+}
+
+.insp-fleet-status {
+    color: #808f9a;
+    font-size: 10px;
+    margin-left: 6px;
+}
+
+.insp-ship-name {
+    display: block;
+    color: #e8b45a;
+    font-size: 16px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    margin-bottom: 4px;
+}
+
+.insp-status {
+    display: block;
+    color: #d0dae2;
+    font-size: 12px;
+    white-space: pre;            /* honour '\n' rows + the fill's key-column padding */
+    margin-bottom: 6px;
 }
 
 /* Floating side window: stamped header rail bleeding to the panel's top edges (margins
@@ -533,6 +799,7 @@ body {
 
 .insp-tab {
     display: inline-block;
+    pointer-events: auto;
     padding: 4px 12px;
     color: #a89a7e;
     font-size: 13px;

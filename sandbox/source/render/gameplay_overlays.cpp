@@ -12,7 +12,6 @@
 #include "render/weapon_hub.h"    // weapon_hub_draw (middle-mouse weapon micro-selection)
 #include "render/projectile_marker.h" // projectile_markers_draw (screen-constant shot markers)
 #include "render/projectile_fx.h"     // projectile_fx_draw (muzzle / impact / burst / intercept)
-#include "render/fleet_roster.h"      // fleet_roster_draw (command-overlay fleet panel)
 #include "core/render_layers.h" // LAYER_UI / LAYER_PROJECTILE / LAYER_GIZMO / LAYER_DEBUG
 #include "sim/galaxy_history.h"  // galaxy_history_faction_label / faction_is_hostile
 #include "sim/ai_ship.h"         // ShipArchetype (role marker shapes)
@@ -182,10 +181,8 @@ void draw_gameplay_overlays(game_state* s) {
     // ---- RTS controls overlay (hover selection, etc.) ------------------------------------
     s->rts_controls.draw();
 
-    // ---- Fleet roster (command overlay only) ---------------------------------------------
-    // Drawn after the RTS overlay so its panel sits above the selection rect rather than being
-    // crossed by it. Self-gating: nothing is submitted while the overlay is down.
-    fleet_roster_draw(s);
+    // (The fleet roster is an RmlUi HUD panel now -- filled by game_push_hud, drawn by the
+    // engine's RML pass above every world overlay; nothing to submit here.)
 
     // ---- Static enemy reticle (always visible so the hostile stays locatable) ------------
     draw_enemy_marker(s);

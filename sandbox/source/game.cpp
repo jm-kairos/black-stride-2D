@@ -18,7 +18,7 @@
 
 #include "render/projectile_fx.h" // projectile_fx_render_init (bakes the VFX textures)
 
-#include "render/fleet_roster.h"  // fleet_roster_update (command-overlay fleet panel input)
+#include <core/event.h>  // event_fire(EVENT_CODE_APPLICATION_QUIT): game-side ESC-quit policy
 
 #include "sim/ss_generation.h"
 
@@ -376,6 +376,8 @@ b8 game_init(Game* game_inst) {
     s->show_discoveries = false;
 
     s->show_flagship_inspector = false;
+    s->inspected_ship_idx = 0;
+    s->insp_tab = 0;
     s->hovered_station_id = -1;
     s->station_menu_visible = false;
     s->station_menu_station_id = -1;
@@ -442,6 +444,11 @@ b8 game_init(Game* game_inst) {
 
         fs.ship.faction_id = FACTION_PLAYER;
 
+        // Named at spawn like the escorts below: the roster, the stance action-log lines and
+        // the fleet readout all print vessel_name, and every one of them showed an empty
+        // flagship before this was set.
+        fs.ship.vessel_name = "Flagship";
+
         fs.ship.glow   = s->render.glow_params;
 
         fs.ship.radiation_emission = 0.05f;
@@ -450,8 +457,8 @@ b8 game_init(Game* game_inst) {
         // onto hardpoints from the Arsenal inspector (ship_load cleared all hardpoint mounts).
         // A deliberately diverse starting rack -- baseline gauss, rapid autocannon (flak
         // platform), salvo artillery, and a missile rack -- so the stat cards read differently
-        // from minute one. The rack is SHIP_MAX_WEAPONS (4) wide, so it holds one of each
-        // archetype rather than the duplicate gauss it used to carry.
+        // from minute one. The stash is the FLEET-WIDE pool: the escorts' cannons join it at
+        // their spawn below (escorts start unarmed), so SHIP_MAX_WEAPONS covers 4 + 4.
         fs.ship.weapon_stash[0]     = weapon_instantiate(weapon_registry_find(&s->weapon_registry, "gauss_mk1"),      fs.ship.faction);
 
         fs.ship.weapon_stash[1]     = weapon_instantiate(weapon_registry_find(&s->weapon_registry, "trident_mk1"),    fs.ship.faction);
@@ -531,16 +538,16 @@ b8 game_init(Game* game_inst) {
 
             fs.ship.radiation_emission = 0.05f;
 
-            // Auto-mount the escort's cannon on its first free weapon hardpoint.
-            i32 whp = ship_first_free_hardpoint(&fs.ship, MODULE_TYPE_WEAPON);
+            // Escorts spawn UNARMED: their cannon goes into the FLEET-WIDE pool (the
+            // flagship's stash) instead of auto-mounting, so arming ANY hull is the player's
+            // act in the Arsenal inspector -- the same philosophy the flagship follows. Until
+            // armed, an escort contributes stances and screening geometry but no fire.
+            Ship& pool = s->fleet_state.fleet.flagship().ship;
 
-            if (whp >= 0) {
+            if (pool.weapon_stash_count < SHIP_MAX_WEAPONS)
 
-                fs.ship.mounts[whp]       = weapon_instantiate(weapon_registry_find(&s->weapon_registry, "gauss_mk1"), fs.ship.faction);
-
-                fs.ship.active_weapon_idx = whp;
-
-            }
+                pool.weapon_stash[pool.weapon_stash_count++] =
+                    weapon_instantiate(weapon_registry_find(&s->weapon_registry, "gauss_mk1"), pool.faction);
 
         }
 
@@ -993,25 +1000,28 @@ static void hardpoint_short_id(const HardpointDef& hp, char* out, i32 cap) {
     out[c] = '\0';
 }
 
-// Resolve the armed arsenal drag (pending_weapon_drag / _kind) dropping onto flagship
+// Resolve the armed arsenal drag (pending_weapon_drag / _kind) dropping onto INSPECTED-ship
 // hardpoint dst. Shared by the inspector's slot strip ("slot:M" dragdrop) and world-side
-// drops straight onto the cruiser's hardpoint boxes ("dragend" released over the ship).
+// drops straight onto the hull's hardpoint boxes ("dragend" released over the ship).
 // TYPE-GATED by the hardpoint's accepts-mask (weapons need a weapon slot, the point-defense
 // a defense slot, modules must fit type AND size). A displaced occupant returns to its own
-// inventory (weapon -> offensive stash, point-defense -> defensive inventory, module ->
-// rack). Always disarms the pending drag.
+// inventory -- and every stash/rack here is the FLEET-WIDE POOL stored on the flagship, so
+// refitting an escort draws from and returns to the same inventory as refitting the flagship.
+// Per-ship point defense is the exception: each hull owns its own device. Always disarms the
+// pending drag.
 static void arsenal_drop_on_slot(game_state* s, i32 dst) {
-    Ship& fs = s->player_ship();
+    Ship& fs   = s->inspected_ship();   // the hull being refitted
+    Ship& pool = s->player_ship();      // the fleet-wide inventory lives on the flagship
     i32 src  = s->pending_weapon_drag;
     i32 kind = s->pending_weapon_drag_kind;
     if (dst >= 0 && dst < fs.hardpoint_count) {
         const HardpointDef& dhp = fs.hardpoints[dst];
         b8 dst_takes_weapon  = hardpoint_accepts(&dhp, MODULE_TYPE_WEAPON);
         b8 dst_takes_defense = hardpoint_accepts(&dhp, MODULE_TYPE_DEFENSE);
-        if (kind == 1 && src >= 0 && src < fs.weapon_stash_count) {
+        if (kind == 1 && src >= 0 && src < pool.weapon_stash_count) {
             // Mount an unmounted offensive weapon onto hardpoint dst; evict any occupant.
             // Size-gated like modules: a weapon mounts on slots of its own size or LARGER.
-            Weapon* mounting = fs.weapon_stash[src];
+            Weapon* mounting = pool.weapon_stash[src];
             if (!dst_takes_weapon) {
                 action_log_push(s, "'%s' is a %s slot - weapons don't fit.",
                                 dhp.id, hardpoint_kind_label(dhp.accepts));
@@ -1024,14 +1034,14 @@ static void arsenal_drop_on_slot(game_state* s, i32 dst) {
                                 fs.module_mounts[dst]->name);
             } else {
                 if (fs.mounts[dst]) {
-                    ship_stash_append(fs, fs.mounts[dst]);        // occupant weapon -> offensive stash
+                    ship_stash_append(pool, fs.mounts[dst]);      // occupant weapon -> pool stash
                 } else if (fs.point_defense_mount == dst) {
-                    fs.point_defense_mount   = -1;                // occupant PD -> defensive inventory
+                    fs.point_defense_mount   = -1;                // occupant PD -> this hull's inventory
                     fs.point_defense.enabled = FALSE;
                 }
                 fs.mounts[dst] = mounting;
                 fs.mount_groups[dst] = 1;                         // fresh mount -> group 1
-                ship_stash_remove_at(fs, src);
+                ship_stash_remove_at(pool, src);
                 if (fs.active_weapon_idx < 0) fs.active_weapon_idx = dst; // first mount becomes active
                 ship_rehome_weapons(fs);
                 action_log_push(s, "%s mounted on '%s'.",
@@ -1098,7 +1108,7 @@ static void arsenal_drop_on_slot(game_state* s, i32 dst) {
                                 fs.module_mounts[dst]->name);
             } else {
                 if (fs.mounts[dst]) {
-                    ship_stash_append(fs, fs.mounts[dst]);        // occupant weapon -> offensive stash
+                    ship_stash_append(pool, fs.mounts[dst]);      // occupant weapon -> pool stash
                     fs.mounts[dst] = nullptr;
                 }
                 fs.point_defense_mount   = dst;
@@ -1130,9 +1140,9 @@ static void arsenal_drop_on_slot(game_state* s, i32 dst) {
                 ship_rehome_weapons(fs);
                 action_log_push(s, "Point Defense Laser moved to '%s'.", dhp.id);
             }
-        } else if (kind == 4 && src >= 0 && src < fs.module_stash_count) {
+        } else if (kind == 4 && src >= 0 && src < pool.module_stash_count) {
             // Install a rack module onto hardpoint dst; evict any occupant (weapon/PD/module).
-            const ModuleDef* m = fs.module_stash[src];
+            const ModuleDef* m = pool.module_stash[src];
             if (!hardpoint_fits_module(&dhp, m)) {
                 if (!(dhp.accepts & m->type))
                     action_log_push(s, "'%s' is a %s slot - %s modules don't fit.",
@@ -1146,15 +1156,15 @@ static void arsenal_drop_on_slot(game_state* s, i32 dst) {
                                 fs.module_mounts[dst]->name);
             } else {
                 if (fs.mounts[dst]) {
-                    ship_stash_append(fs, fs.mounts[dst]);        // occupant weapon -> offensive stash
+                    ship_stash_append(pool, fs.mounts[dst]);      // occupant weapon -> pool stash
                     fs.mounts[dst] = nullptr;
                     ship_rehome_weapons(fs);
                 } else if (fs.point_defense_mount == dst) {
-                    fs.point_defense_mount   = -1;                // occupant PD -> defensive inventory
+                    fs.point_defense_mount   = -1;                // occupant PD -> this hull's inventory
                     fs.point_defense.enabled = FALSE;
                 }
                 fs.module_mounts[dst] = m;
-                ship_module_stash_remove_at(fs, src);
+                ship_module_stash_remove_at(pool, src);
                 ship_recompute_stats(&fs);
                 action_log_push(s, "%s installed in '%s'.", m->name, dhp.id);
             }
@@ -1195,11 +1205,25 @@ static void arsenal_drop_on_slot(game_state* s, i32 dst) {
     s->pending_weapon_drag = -1;
 }
 
-// Which flagship hardpoint box (if any) sits under the mouse cursor? Boxes are tested in
-// ship-local space, each rotated by its mount's facing, with a grace margin over the drawn
-// overlay box; when boxes overlap the nearest center wins. -1 = no box under the cursor.
-static i32 flagship_hardpoint_at_cursor(game_state* s) {
-    Ship& fs   = s->player_ship();
+// Which INSPECTED-ship hardpoint box (if any) sits under the mouse cursor? While the
+// full-screen inspector is open the hull lives in the PORTRAIT, so the portrait mapping is
+// tried first; a cursor inside the portrait square that hits no box is a MISS (it must not
+// fall through to the world hull hidden behind the panel). Outside the square, the world-space
+// test still runs -- the hull can poke out beyond the portrait when the camera happens to
+// frame it. Boxes are tested in ship-local space, each rotated by its mount's facing, with a
+// grace margin over the drawn overlay box; when boxes overlap the nearest center wins.
+static i32 inspected_hardpoint_at_cursor(game_state* s) {
+    if (s->show_flagship_inspector) {
+        i32 pmx = 0, pmy = 0;
+        input_get_mouse_position(&pmx, &pmy);
+        i32 hit = ship_portrait_hardpoint_at(s, (f32)pmx, (f32)pmy);
+        if (hit >= 0) return hit;
+        f32 rx, ry, rs;
+        ship_portrait_rect(s, &rx, &ry, &rs);
+        if ((f32)pmx >= rx && (f32)pmx <= rx + rs && (f32)pmy >= ry && (f32)pmy <= ry + rs)
+            return -1;
+    }
+    Ship& fs   = s->inspected_ship();
     Vec2  lp   = ship_world_to_local(&fs, mouse_true_hierpos(s));
     i32   hit  = -1;
     f32   best = 1.0e30f;
@@ -1262,9 +1286,13 @@ static void game_push_hud(game_state* s, f32 dt) {
         i32 day = (i32)((total_hours % HOURS_PER_YEAR) / HOURS_PER_DAY) + 1;
         snprintf(hud.time_date, sizeof(hud.time_date), "Year %d, Day %d",
                  s->galaxy.clock.present_year, day);
-        // Active tier index for button highlight (0=Pause,1=1x,2=3x,3=5x,4=10x).
+        // Active tier index for button highlight (0=Pause,1=1x,2=3x,3=5x,4=10x). A dilated
+        // scale between 0 and 1 (the command overlay's 0.25x) matches NO tier (-1, which no
+        // button binds to) -- it used to fall through to 0 and claim the game was paused
+        // while it was merely slowed.
         f32 ts = s->time_scale;
-        hud.time_tier = (ts >= 10.0f) ? 4 : (ts >= 5.0f) ? 3 : (ts >= 3.0f) ? 2 : (ts >= 1.0f) ? 1 : 0;
+        hud.time_tier = (ts >= 10.0f) ? 4 : (ts >= 5.0f) ? 3 : (ts >= 3.0f) ? 2 : (ts >= 1.0f) ? 1
+                      : (ts <= 0.0f) ? 0 : -1;
     }
 
     // ---- Encounter modal (centered) -----------------------------------------------------
@@ -1380,6 +1408,48 @@ static void game_push_hud(game_state* s, f32 dt) {
         }
     }
 
+    // ---- Fleet roster (top-left; command overlay only) ----------------------------------
+    // One row per fleet member: label, live order readout, stance chips. The roster follows
+    // the command overlay: it is a commanding surface, so it appears exactly when commanding
+    // is what the player is doing. All interaction is action strings ("fsel:N" /
+    // "fstance:N:S") drained below; shift-additive selection is resolved at drain time so the
+    // engine carries no modifier state.
+    if (s->command_overlay_active && s->fleet_state.fleet.count() > 0 &&
+        !s->editor.edit_mode_active) {
+        Fleet& roster_fleet = s->fleet_state.fleet;
+        hud.roster_visible = TRUE;
+        i32 rn = roster_fleet.count();
+        if (rn > BS_RML_ROSTER_MAX) rn = BS_RML_ROSTER_MAX;
+        hud.roster_count = rn;
+        const i32 piloted_row = roster_fleet.piloted_index();
+        const i32 hovered_row = s->rts_controls.hovered_index();
+        static const char* const STANCE_CHIP[4] = { "A", "D", "P", "H" };
+        for (i32 i = 0; i < rn; ++i) {
+            const FleetShip& fs = roster_fleet.at(i);
+            bs_rml_roster_row& row = hud.roster[i];
+            const char* nm = fs.ship.vessel_name ? fs.ship.vessel_name : "ship";
+            snprintf(row.label, sizeof(row.label), "%d %.24s", i + 1, nm);
+            // Order state, so the roster answers "what is this ship doing" without a second
+            // panel. Attack is orthogonal to the position orders and wins the readout.
+            const char* what = "IDLE";
+            if      (fs.has_attack_target) what = "ATTACK";
+            else if (fs.has_escort_target) what = "ESCORT";
+            else if (fs.has_avoid_target)  what = "AVOID";
+            else if (fs.has_move_target)   what = "MOVE";
+            snprintf(row.status, sizeof(row.status), "%s", what);
+            snprintf(row.action, sizeof(row.action), "fsel:%d", i);
+            snprintf(row.action_insp, sizeof(row.action_insp), "insp:%d", i);
+            row.selected = roster_fleet.is_selected(i);
+            row.piloted  = (i == piloted_row);
+            row.hovered  = (i == hovered_row);
+            for (i32 st = 0; st < 4; ++st) {
+                snprintf(row.chip[st].label,  sizeof(row.chip[st].label),  "%s", STANCE_CHIP[st]);
+                snprintf(row.chip[st].action, sizeof(row.chip[st].action), "fstance:%d:%d", i, st);
+                row.chip[st].on = (fs.stance == (u8)st) ? TRUE : FALSE;
+            }
+        }
+    }
+
     // ---- FTL jump-mode banner (bottom-center) -------------------------------------------
     if (!s->editor.edit_mode_active && s->rts_controls.jump_mode_active())
         hud.jump_visible = TRUE;
@@ -1481,18 +1551,91 @@ static void game_push_hud(game_state* s, f32 dt) {
             snprintf(row.card_foot, sizeof(row.card_foot), "[T] switches fire mode on the active group");
         }
     };
+    // Portrait element placement: must ALWAYS hold valid CSS lengths (the data-style bindings
+    // evaluate even while the inspector is hidden -- same rule as tip_left/tip_top). left/top
+    // are relative to the inspector's middle zone; the same rect drives the game-side portrait
+    // hardpoint hit-test, so the element and the hit-test cannot drift from each other.
+    {
+        f32 prx, pry, prs, pcx, pcy;
+        ship_portrait_rect(s, &prx, &pry, &prs);
+        ship_portrait_center_origin(s, &pcx, &pcy);
+        snprintf(hud.insp_portrait_left, sizeof(hud.insp_portrait_left), "%.0fpx", prx - pcx);
+        snprintf(hud.insp_portrait_top,  sizeof(hud.insp_portrait_top),  "%.0fpx", pry - pcy);
+        snprintf(hud.insp_portrait_size, sizeof(hud.insp_portrait_size), "%.0fpx", prs);
+    }
     if (!s->editor.edit_mode_active) {
         hud.inspector_btn_visible = TRUE;
         if (s->show_flagship_inspector) {
-            Ship& fs = s->player_ship();
+            Ship& fs   = s->inspected_ship();   // the hull under inspection
+            Ship& pool = s->player_ship();      // fleet-wide inventory (flagship's stash arrays)
             hud.inspector_visible = TRUE;
             snprintf(hud.insp_ship_name, sizeof(hud.insp_ship_name), "%s",
-                     fs.vessel_name ? fs.vessel_name : "Flagship");
-            // ---- Unified Modules bay ------------------------------------------------------
+                     fs.vessel_name ? fs.vessel_name : "Ship");
+            // ---- Left-column status block (pre-formatted; '\n' rows) ----------------------
+            {
+                i32 ii = s->inspected_ship_idx;
+                if (ii < 0 || ii >= s->fleet_state.fleet.count()) ii = 0;
+                const FleetShip& ifs = s->fleet_state.fleet.at(ii);
+                static const char* const ST_NAME[4] =
+                    { "AGGRESSIVE", "DEFENSIVE", "PASSIVE", "HOLD FIRE" };
+                const char* what = "IDLE";
+                if      (ifs.has_attack_target) what = "ATTACK";
+                else if (ifs.has_escort_target) what = "ESCORT";
+                else if (ifs.has_avoid_target)  what = "AVOID";
+                else if (ifs.has_move_target)   what = "MOVE";
+                i32 fitted = 0;
+                for (i32 h = 0; h < fs.hardpoint_count; ++h)
+                    if (fs.mounts[h] || fs.module_mounts[h] || fs.point_defense_mount == h)
+                        ++fitted;
+                static const char* PD_ST[3] = { "HOLD", "STANDARD", "OVERDRIVE" };
+                static const char* PD_PR[3] = { "IMPACT", "MISSILES", "NEAREST" };
+                static const char* PD_GT[3] = { "60%", "80%", "100%" };
+                const DefenseLaser& ipd = fs.point_defense;
+                snprintf(hud.insp_status, sizeof(hud.insp_status),
+                         "MEMBER     %d of %d\n"
+                         "STANCE     %s\n"
+                         "ORDER      %s\n"
+                         "CAPACITOR  %.0f / %.0f\n"
+                         "PD         %s - %s - %s\n"
+                         "MOUNTS     %d of %d fitted",
+                         ii + 1, s->fleet_state.fleet.count(),
+                         ST_NAME[ifs.stance & 3], what,
+                         fs.cap_current, fs.cap_max,
+                         PD_ST[ipd.stance % 3], PD_PR[ipd.priority % 3], PD_GT[ipd.gate_tier % 3],
+                         fitted, fs.hardpoint_count);
+            }
+            hud.insp_show_loadout  = (s->insp_tab == 0) ? TRUE : FALSE;
+            hud.insp_show_doctrine = (s->insp_tab == 1) ? TRUE : FALSE;
+            // ---- Fleet list: one live-thumbnail entry per member; click retargets the
+            // inspector via the existing "insp:N" action. rect slices the "bs:thumbs" strip.
+            {
+                Fleet& fl = s->fleet_state.fleet;
+                i32 n = fl.count();
+                if (n > BS_RML_ROSTER_MAX) n = BS_RML_ROSTER_MAX;
+                hud.insp_ship_count = n;
+                i32 cur = s->inspected_ship_idx;
+                if (cur < 0 || cur >= fl.count()) cur = 0;
+                for (i32 i = 0; i < n; ++i) {
+                    const FleetShip& m = fl.at(i);
+                    bs_rml_insp_ship& e = hud.insp_ships[i];
+                    snprintf(e.sprite, sizeof(e.sprite), "bs-thumb-%d", i);
+                    snprintf(e.name, sizeof(e.name), "%s",
+                             m.ship.vessel_name ? m.ship.vessel_name : "Ship");
+                    const char* mwhat = "IDLE";
+                    if      (m.has_attack_target) mwhat = "ATTACK";
+                    else if (m.has_escort_target) mwhat = "ESCORT";
+                    else if (m.has_avoid_target)  mwhat = "AVOID";
+                    else if (m.has_move_target)   mwhat = "MOVE";
+                    snprintf(e.status, sizeof(e.status), "%s", mwhat);
+                    snprintf(e.action, sizeof(e.action), "insp:%d", i);
+                    e.selected = (i == cur) ? TRUE : FALSE;
+                }
+            }
+            // ---- Unified Modules bay (the FLEET-WIDE pool: drag sources "inv:K"/"mod:K") --
             i32 nb = 0;
-            // 1) Weapons from the loadout stash (drag sources "inv:K").
-            for (i32 k = 0; k < fs.weapon_stash_count && nb < BS_RML_BAY_MAX; ++k) {
-                Weapon* w = fs.weapon_stash[k];
+            // 1) Weapons from the pool stash (drag sources "inv:K").
+            for (i32 k = 0; k < pool.weapon_stash_count && nb < BS_RML_BAY_MAX; ++k) {
+                Weapon* w = pool.weapon_stash[k];
                 if (!w) continue;
                 bs_rml_bay_line& row = hud.bay[nb++];
                 const char* name = w->name ? w->name : "?";
@@ -1545,9 +1688,9 @@ static void game_push_hud(game_state* s, f32 dt) {
                 row.card_mode_b[0] = row.card_mode_b_stats[0] = '\0';
                 snprintf(row.card_foot, sizeof(row.card_foot), "[P] cycles stance - doctrine below");
             }
-            // 3) Ship modules from the rack (drag sources "mod:K").
-            for (i32 k = 0; k < fs.module_stash_count && nb < BS_RML_BAY_MAX; ++k) {
-                const ModuleDef* m = fs.module_stash[k];
+            // 3) Ship modules from the pool rack (drag sources "mod:K").
+            for (i32 k = 0; k < pool.module_stash_count && nb < BS_RML_BAY_MAX; ++k) {
+                const ModuleDef* m = pool.module_stash[k];
                 if (!m) continue;
                 bs_rml_bay_line& row = hud.bay[nb++];
                 snprintf(row.glyph,  sizeof(row.glyph),  "%s", m->glyph);
@@ -2018,13 +2161,47 @@ static void game_push_hud(game_state* s, f32 dt) {
             }
             continue;
         }
-        // Fire-group matrix checkbox: toggle flagship weapon (hardpoint H) in group G. Refuses
-        // to orphan a weapon from all groups.
+        // Fleet roster: row click selects that ship. Shift is read at drain time (the same
+        // frame as the click) for additive toggle -- the engine carries no modifier state.
+        if (strncmp(action, "fsel:", 5) == 0) {
+            i32 i = atoi(action + 5);
+            Fleet& fleet = s->fleet_state.fleet;
+            if (i >= 0 && i < fleet.count()) {
+                if (input_is_key_down(KEY_LSHIFT) || input_is_key_down(KEY_RSHIFT)) {
+                    fleet.set_selected(i, fleet.is_selected(i) ? FALSE : TRUE);
+                } else {
+                    fleet.clear_selection();
+                    fleet.set_selected(i, TRUE);
+                }
+            }
+            continue;
+        }
+        // Fleet roster stance chip: acts on the whole selection when the clicked ship is part
+        // of it, and on that ship alone otherwise. That keeps "set the wing defensive" one
+        // click without a stray click on an unselected row silently retuning the whole fleet.
+        if (strncmp(action, "fstance:", 8) == 0) {
+            i32 i = atoi(action + 8);
+            const char* colon = strchr(action + 8, ':');
+            i32 st = colon ? atoi(colon + 1) : -1;
+            Fleet& fleet = s->fleet_state.fleet;
+            if (i >= 0 && i < fleet.count() && st >= 0 && st < 4) {
+                static const char* const STANCE_NAME[4] =
+                    { "AGGRESSIVE", "DEFENSIVE", "PASSIVE", "HOLD FIRE" };
+                if (fleet.is_selected(i)) fleet.set_selected_stance((u8)st);
+                else                      fleet.at(i).stance = (u8)st;
+                action_log_push(s, "%s: %s",
+                                fleet.at(i).ship.vessel_name ? fleet.at(i).ship.vessel_name : "Ship",
+                                STANCE_NAME[st]);
+            }
+            continue;
+        }
+        // Fire-group matrix checkbox: toggle INSPECTED-ship weapon (hardpoint H) in group G.
+        // Refuses to orphan a weapon from all groups.
         if (strncmp(action, "gm:", 3) == 0) {
             i32 h = atoi(action + 3);
             const char* colon = strchr(action + 3, ':');
             i32 g = colon ? atoi(colon + 1) : -1;
-            Ship& fsh = s->player_ship();
+            Ship& fsh = s->inspected_ship();
             if (h >= 0 && h < fsh.hardpoint_count && g >= 0 && g < SHIP_WEAPON_GROUPS &&
                 fsh.mounts[h]) {
                 Weapon* w = fsh.mounts[h];
@@ -2044,13 +2221,36 @@ static void game_push_hud(game_state* s, f32 dt) {
             }
             continue;
         }
-        // Flagship inspector: toggle/close the window + arsenal weapon selection (flagship-targeted).
+        // Ship inspector: toggle/close the window. The bottom-center button inspects the
+        // PILOTED ship (the hull the player is flying); the roster's per-row "i" buttons
+        // arrive as "insp:N" below and pick any member.
         if (strcmp(action, "toggle_inspector") == 0) {
             s->show_flagship_inspector = !s->show_flagship_inspector;
+            if (s->show_flagship_inspector)
+                s->inspected_ship_idx = s->fleet_state.fleet.piloted_index();
             continue;
         }
         if (strcmp(action, "close_inspector") == 0) {
             s->show_flagship_inspector = false;
+            continue;
+        }
+        // Inspector middle-section tabs: 0 = Loadout (status), 1 = Doctrine (groups + PD).
+        if (strncmp(action, "insp_tab:", 9) == 0) {
+            s->insp_tab = (action[9] == '1') ? 1 : 0;
+            continue;
+        }
+        // Roster inspect button: open the full-screen inspector on fleet member N. When the
+        // free camera is up, snap it onto that hull so the inspected ship is the one on screen
+        // (the center zone is the world -- phase 2's portrait replaces this with an offscreen
+        // render and the snap can go).
+        if (strncmp(action, "insp:", 5) == 0) {
+            i32 i = atoi(action + 5);
+            if (i >= 0 && i < s->fleet_state.fleet.count()) {
+                s->inspected_ship_idx      = i;
+                s->show_flagship_inspector = true;
+                if (s->camera_state.free_camera_active && !s->camera_state.recentering)
+                    s->camera_state.free_camera_pos = s->fleet_state.fleet.at(i).ship.origin;
+            }
             continue;
         }
         if (strcmp(action, "station_inspect") == 0) {
@@ -2094,8 +2294,9 @@ static void game_push_hud(game_state* s, f32 dt) {
             continue;
         }
         // Point-defense doctrine chips (Phase C): "pd:stance:N" / "pd:pri:N" / "pd:gate:N".
+        // Targets the INSPECTED ship -- each hull owns its own PD device and doctrine.
         if (strncmp(action, "pd:", 3) == 0) {
-            DefenseLaser& pd = s->player_ship().point_defense;
+            DefenseLaser& pd = s->inspected_ship().point_defense;
             if (strncmp(action + 3, "stance:", 7) == 0) {
                 i32 v = atoi(action + 10);
                 if (v >= 0 && v <= 2) {
@@ -2125,13 +2326,14 @@ static void game_push_hud(game_state* s, f32 dt) {
         // armed drag's kind (0 = mounted weapon, 3 = mounted point-defense, 5 = mounted module).
         // Drops from bay sources onto the bay itself are no-ops (kind 1/2/4 fall through).
         if (strcmp(action, "baydrop") == 0) {
-            Ship& fs = s->player_ship();
+            Ship& fs   = s->inspected_ship();   // unmount FROM the inspected hull...
+            Ship& pool = s->player_ship();      // ...INTO the fleet-wide pool
             i32 src  = s->pending_weapon_drag;
             i32 kind = s->pending_weapon_drag_kind;
             if (kind == 0 && src >= 0 && src < fs.hardpoint_count && fs.mounts[src]) {
                 Weapon* w = fs.mounts[src];
                 fs.mounts[src] = nullptr;
-                ship_stash_append(fs, w);
+                ship_stash_append(pool, w);
                 ship_rehome_weapons(fs);
                 action_log_push(s, "%s returned to the module bay.", w->name ? w->name : "Weapon");
             } else if (kind == 3 && fs.point_defense_mount >= 0) {
@@ -2143,11 +2345,11 @@ static void game_push_hud(game_state* s, f32 dt) {
                                 fs.hardpoints[slot].id);
             } else if (kind == 5 && src >= 0 && src < fs.hardpoint_count && fs.module_mounts[src]) {
                 const ModuleDef* m = fs.module_mounts[src];
-                if (fs.module_stash_count >= SHIP_MAX_MODULES) {
+                if (pool.module_stash_count >= SHIP_MAX_MODULES) {
                     action_log_push(s, "Module rack full - can't remove '%s'.", m->name);
                 } else {
                     fs.module_mounts[src] = nullptr;
-                    ship_module_stash_append(fs, m);
+                    ship_module_stash_append(pool, m);
                     ship_recompute_stats(&fs);
                     action_log_push(s, "%s returned to the module bay.", m->name);
                 }
@@ -2171,7 +2373,7 @@ static void game_push_hud(game_state* s, f32 dt) {
         // catch-all "uidrop" dragdrop (queued before this dragend).
         if (strcmp(action, "dragend") == 0) {
             if (s->pending_weapon_drag >= 0 && !bs_imgui_wants_mouse()) {
-                i32 hit = flagship_hardpoint_at_cursor(s);
+                i32 hit = inspected_hardpoint_at_cursor(s);
                 if (hit >= 0) arsenal_drop_on_slot(s, hit);
                 else          action_log_push(s, "No hardpoint there - drag cancelled.");
             }
@@ -2270,7 +2472,8 @@ b8 game_update(Game* game_inst, f32 dt) {
     // render look. The `view.mode == MODE_GLOBAL` term it used to carry was implied by
     // !free_camera_active back when the zoom crossing force-detached; now that piloting persists at
     // any zoom, keeping it would have made the toggle silently dead below ZOOM_MIN.
-    if (input_is_key_down(KEY_LSHIFT) && !input_was_key_down(KEY_LSHIFT) && !s->camera_state.free_camera_active) {
+    if (input_is_key_down(KEY_LSHIFT) && !input_was_key_down(KEY_LSHIFT) && !s->camera_state.free_camera_active &&
+        !s->show_flagship_inspector) {
 
         s->view.alt_movement_active = !s->view.alt_movement_active;
 
@@ -2286,7 +2489,8 @@ b8 game_update(Game* game_inst, f32 dt) {
 
     // ---- R key: toggle radiation detector overlay in global mode -------------------------
 
-    if (input_is_key_down(KEY_R) && !input_was_key_down(KEY_R) && s->view.mode == MODE_GLOBAL) {
+    if (input_is_key_down(KEY_R) && !input_was_key_down(KEY_R) && s->view.mode == MODE_GLOBAL &&
+        !s->show_flagship_inspector) {
 
         s->show_metaball_ui = !s->show_metaball_ui;
 
@@ -2296,7 +2500,8 @@ b8 game_update(Game* game_inst, f32 dt) {
 
     // ---- V key: toggle the flagship's three-layer sensor rings in global mode -----------
 
-    if (input_is_key_down(KEY_V) && !input_was_key_down(KEY_V) && s->view.mode == MODE_GLOBAL) {
+    if (input_is_key_down(KEY_V) && !input_was_key_down(KEY_V) && s->view.mode == MODE_GLOBAL &&
+        !s->show_flagship_inspector) {
 
         s->show_sensor_layers = !s->show_sensor_layers;
 
@@ -2312,7 +2517,23 @@ b8 game_update(Game* game_inst, f32 dt) {
     // Time drops to 0.25x for as long as it is up. The saved tier is restored on close so the
     // overlay and the HUD speed buttons cannot fight over the same global; if the player was
     // paused, 0.0 is restored and the overlay simply gave them a readable screen.
-    if (input_is_key_down(KEY_SPACE) && !input_was_key_down(KEY_SPACE)) {
+    // ---- ESC: collapse the ship inspector; otherwise quit the application. --------------
+    // The engine's hardcoded ESC-quit moved HERE (core/application.cpp no longer fires it)
+    // so the key can be modal-aware: the press that collapses the inspector is CONSUMED by
+    // it, and only a separate, later press quits. Edge-triggered, so one physical press can
+    // never both collapse and quit -- no debounce timer needed. First game-side use of the
+    // engine's exported event bus (event_fire).
+    if (input_is_key_down(KEY_ESCAPE) && !input_was_key_down(KEY_ESCAPE)) {
+        if (s->show_flagship_inspector) {
+            s->show_flagship_inspector = false;
+        } else {
+            event_context quit_ctx = {};
+            event_fire(EVENT_CODE_APPLICATION_QUIT, 0, quit_ctx);
+        }
+    }
+
+    if (input_is_key_down(KEY_SPACE) && !input_was_key_down(KEY_SPACE) &&
+        !s->show_flagship_inspector) {
         s->command_overlay_active = !s->command_overlay_active;
         if (s->command_overlay_active) {
             s->command_overlay_saved_time_scale = s->time_scale;
@@ -2324,14 +2545,14 @@ b8 game_update(Game* game_inst, f32 dt) {
         }
     }
 
-    // Roster input runs BEFORE rts_controls so a click that lands on the panel is consumed here
-    // and never also reaches the world as a box-select drag underneath it.
-    if (!bs_imgui_wants_mouse() && !bs_rml_wants_mouse()) fleet_roster_update(s);
+    // The fleet roster is an RmlUi HUD panel now: its clicks arrive as "fsel:"/"fstance:"
+    // action strings in the drain above, and bs_rml_wants_mouse() reports the cursor as
+    // UI-owned over it, which is what keeps a roster click from also reaching the world.
 
     // ---- TAB key: toggle pilot <-> auto-pilot/RTS. Piloting -> instant detach to the free camera
     // at the current view. Auto-pilot -> smooth glide back onto the ship, ending in ship-follow. --
 
-    if (input_is_key_down(KEY_TAB) && !input_was_key_down(KEY_TAB)) {
+    if (input_is_key_down(KEY_TAB) && !input_was_key_down(KEY_TAB) && !s->show_flagship_inspector) {
 
         s->planet_approach.engaged = FALSE; s->planet_approach.weight = 0.0f; // TAB toggle releases any planet capture
 
@@ -2465,7 +2686,7 @@ b8 game_update(Game* game_inst, f32 dt) {
 
     // Point-defense stance cycle (Phase C doctrine): HOLD -> STANDARD -> OVERDRIVE -> HOLD.
     // One combat-time control; priorities and the engagement gate live in the inspector.
-    if (input_is_key_down(KEY_P) && !input_was_key_down(KEY_P)) {
+    if (input_is_key_down(KEY_P) && !input_was_key_down(KEY_P) && !s->show_flagship_inspector) {
 
         DefenseLaser& pd = s->player_ship().point_defense;
 
@@ -2501,7 +2722,7 @@ b8 game_update(Game* game_inst, f32 dt) {
 
     }
 
-    if (input_is_key_down(KEY_H) && !input_was_key_down(KEY_H)) {
+    if (input_is_key_down(KEY_H) && !input_was_key_down(KEY_H) && !s->show_flagship_inspector) {
 
         s->galaxy.show_houses = s->galaxy.show_houses ? FALSE : TRUE;
 
@@ -2536,7 +2757,7 @@ b8 game_update(Game* game_inst, f32 dt) {
     // reinforcement column, blue ring = patrol, orange chevron = pirate sortie), red pulsing lanes
     // across borders at war, and garrison / lane-risk readouts at contested nodes. Pair with F3
     // (jump to a war frontier, forcing the war if needed) to watch a war unfold in real time.
-    if (input_is_key_down(KEY_G) && !input_was_key_down(KEY_G)) {
+    if (input_is_key_down(KEY_G) && !input_was_key_down(KEY_G) && !s->show_flagship_inspector) {
 
         s->galaxy.map_war_room = !s->galaxy.map_war_room;
 
@@ -2761,7 +2982,10 @@ b8 game_update(Game* game_inst, f32 dt) {
 
         Ship* psh = &pf->ship;
 
-        turn_commanded = control_ship_global(s, pf, sim_dt);
+        // The inspector is MODAL: while it is open the player is a shipwright, not a pilot,
+        // so flight input is fully suppressed and the hull coasts on its momentum. The
+        // world-drag pickup block below stays live -- it IS inspector interaction.
+        turn_commanded = s->show_flagship_inspector ? FALSE : control_ship_global(s, pf, sim_dt);
 
         // ---- Ship-side loadout drag (inspector open) --------------------------------------
         // Pick a mounted item straight off one of the flagship's hardpoint boxes: press on an
@@ -2771,12 +2995,13 @@ b8 game_update(Game* game_inst, f32 dt) {
         // its inventory. Safe alongside firing: firing is fully suppressed while the inspector
         // is open.
         if (s->show_flagship_inspector && !s->editor.edit_mode_active) {
-            Ship& fsh      = s->player_ship();
+            Ship& fsh      = s->inspected_ship();  // the hull being refitted
+            Ship& pool     = s->player_ship();     // fleet-wide inventory (stow target)
             b8    pressed  = input_is_button_down(BUTTON_LEFT) && !input_was_button_down(BUTTON_LEFT);
             b8    released = !input_is_button_down(BUTTON_LEFT) && input_was_button_down(BUTTON_LEFT);
             if (pressed && !s->world_module_drag && s->pending_weapon_drag < 0 &&
                 !bs_imgui_wants_mouse() && !bs_rml_wants_mouse()) {
-                i32 hp = flagship_hardpoint_at_cursor(s);
+                i32 hp = inspected_hardpoint_at_cursor(s);
                 if (hp >= 0) {
                     if (fsh.mounts[hp]) {
                         s->pending_weapon_drag = hp;  s->pending_weapon_drag_kind = 0;   // mounted weapon
@@ -2795,15 +3020,16 @@ b8 game_update(Game* game_inst, f32 dt) {
                 // Releasing over any UI window counts as "off the ship": stow, don't hit-test
                 // boxes that may sit behind the panel.
                 i32 hit  = (bs_imgui_wants_mouse() || bs_rml_wants_mouse())
-                               ? -1 : flagship_hardpoint_at_cursor(s);
+                               ? -1 : inspected_hardpoint_at_cursor(s);
                 if (hit >= 0 && hit != src) {
                     arsenal_drop_on_slot(s, hit);                 // move/swap; disarms the drag
                 } else if (hit < 0 && src >= 0 && src < fsh.hardpoint_count) {
-                    // Released off the ship: unmount back to the item's own inventory.
+                    // Released off the ship: unmount back into the fleet-wide pool (the PD is
+                    // per-hull and simply goes dormant on its own ship).
                     if (kind == 0 && fsh.mounts[src]) {
                         Weapon* w = fsh.mounts[src];
                         fsh.mounts[src] = nullptr;
-                        ship_stash_append(fsh, w);
+                        ship_stash_append(pool, w);
                         ship_rehome_weapons(fsh);
                         action_log_push(s, "%s returned to inventory.", w->name ? w->name : "Weapon");
                     } else if (kind == 3 && fsh.point_defense_mount == src) {
@@ -2813,11 +3039,11 @@ b8 game_update(Game* game_inst, f32 dt) {
                         action_log_push(s, "Point Defense Laser returned to inventory.");
                     } else if (kind == 5 && fsh.module_mounts[src]) {
                         const ModuleDef* m = fsh.module_mounts[src];
-                        if (fsh.module_stash_count >= SHIP_MAX_MODULES) {
+                        if (pool.module_stash_count >= SHIP_MAX_MODULES) {
                             action_log_push(s, "Module rack full - can't remove '%s'.", m->name);
                         } else {
                             fsh.module_mounts[src] = nullptr;
-                            ship_module_stash_append(fsh, m);
+                            ship_module_stash_append(pool, m);
                             ship_recompute_stats(&fsh);
                             action_log_push(s, "%s returned to the module rack.", m->name);
                         }
@@ -2845,7 +3071,7 @@ b8 game_update(Game* game_inst, f32 dt) {
         // Fire groups are combat input in BOTH control modes, and the weapon hub they drive was
         // never mode-gated, so suppressing the row left the hub showing a group the player had
         // no keyboard way to change while detached.
-        if (!s->editor.edit_mode_active &&
+        if (!s->editor.edit_mode_active && !s->show_flagship_inspector &&
             !bs_imgui_wants_keyboard() && !bs_rml_wants_keyboard()) {
 
             ship_groups_sanitize(psh);
@@ -3058,7 +3284,11 @@ b8 game_update(Game* game_inst, f32 dt) {
 
     s->profiler.begin(PROF_RTS);
 
-    s->rts_controls.update(dt);
+    // Gated while the ship inspector is open (modal): one gate kills orders, selection, the
+    // J/X/F keys and free-camera movement together. The piloted index cannot change while
+    // modal (TAB and the HUD pilot button are both gated/hidden), so skipping the update's
+    // piloted-index sync cannot go stale in a way that matters.
+    if (!s->show_flagship_inspector) s->rts_controls.update(dt);
 
     s->profiler.end(PROF_RTS);
 

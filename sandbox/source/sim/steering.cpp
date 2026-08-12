@@ -37,8 +37,14 @@ Vec2 standoff(Vec2 to_target, f32 dist, f32 standoff_dist, f32 max_speed) {
     return vec2_scale(dir, max_speed * t);
 }
 
+Vec2 separation(Vec2 to_other, f32 dist, f32 min_sep, f32 max_speed) {
+    if (min_sep <= 0.0f || dist >= min_sep || dist < 0.001f) return Vec2{ 0.0f, 0.0f };
+    f32 t = 1.0f - dist / min_sep;                   // 0 at the ring -> 1 at contact
+    return vec2_scale(to_other, -(max_speed * t) / dist);
+}
+
 static void apply_impl(Ship* sh, ShipFlight* fl, Vec2 desired_vel, const Vec2* face_dir,
-                       f32 accel, f32 max_speed, f32 turn_rate, f32 dt) {
+                       f32 accel, f32 max_speed, f32 turn_rate, f32 dt, b8 integrate) {
     // Accel-clamp the velocity toward the desired velocity.
     Vec2 err = vec2_sub(desired_vel, fl->velocity);
     f32 a  = accel * dt;
@@ -59,17 +65,24 @@ static void apply_impl(Ship* sh, ShipFlight* fl, Vec2 desired_vel, const Vec2* f
         if (d < -mr) d = -mr;
         sh->angle += d;
     }
-    // Integrate the pose (precision-safe HierPos2 add).
-    sh->origin = hierpos_add_vec2(&sh->origin, vec2_scale(fl->velocity, dt));
+    // Integrate the pose (precision-safe HierPos2 add) -- skipped for ships whose integrator
+    // runs elsewhere (control_face).
+    if (integrate)
+        sh->origin = hierpos_add_vec2(&sh->origin, vec2_scale(fl->velocity, dt));
 }
 
 void apply(Ship* sh, ShipFlight* fl, Vec2 desired_vel, f32 accel, f32 max_speed, f32 turn_rate, f32 dt) {
-    apply_impl(sh, fl, desired_vel, nullptr, accel, max_speed, turn_rate, dt);
+    apply_impl(sh, fl, desired_vel, nullptr, accel, max_speed, turn_rate, dt, TRUE);
 }
 
 void apply_face(Ship* sh, ShipFlight* fl, Vec2 desired_vel, Vec2 face_dir,
                 f32 accel, f32 max_speed, f32 turn_rate, f32 dt) {
-    apply_impl(sh, fl, desired_vel, &face_dir, accel, max_speed, turn_rate, dt);
+    apply_impl(sh, fl, desired_vel, &face_dir, accel, max_speed, turn_rate, dt, TRUE);
+}
+
+void control_face(Ship* sh, ShipFlight* fl, Vec2 desired_vel, Vec2 face_dir,
+                  f32 accel, f32 max_speed, f32 turn_rate, f32 dt) {
+    apply_impl(sh, fl, desired_vel, &face_dir, accel, max_speed, turn_rate, dt, FALSE);
 }
 
 } // namespace steering

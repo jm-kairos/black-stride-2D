@@ -42,6 +42,9 @@ public:
     // HUD accessors: the FLEET SHIP readout + FTL jump banner are now RmlUi documents driven from
     // game_update (game_push_hud); these expose the private state the snapshot / handlers need.
     b8 jump_mode_active() const { return m_jump_mode; }
+    // Fleet member under the cursor in the WORLD (or -1) -- feeds the RML roster's row
+    // hover cue, the fourth accessor existing solely for the HUD snapshot.
+    i32 hovered_index() const { return m_hovered_ship_idx; }
     // "Pilot unit" / "Auto-pilot / RTS" toggle, invoked when the HUD button is clicked. No-op
     // while a recenter glide is already in flight (the button renders dimmed in that state).
     void hud_toggle_pilot_mode();

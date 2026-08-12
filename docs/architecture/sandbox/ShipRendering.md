@@ -69,8 +69,9 @@ with it. A new *procedural* mount art kind still follows `draw_turret` /
   header states that five other modules depend on this pass having run.
 - **`arsenal_drag_fits` duplicates loadout validation from `game.cpp`**, acknowledged in-comment
   as a mirror. A render module encodes gameplay rules.
-- **The two-entity assumption leaks in.** The flagship-inspector sub-pass gates on
-  `ship == &s->player_ship()`, matching WorldEditor's hardcoded player/enemy model.
+- **The two-entity assumption leaks in** via WorldEditor's hardcoded player/enemy model. *(The
+  inspector sub-pass no longer contributes: it gates on `ship == &s->inspected_ship()`, any
+  fleet member, and `arsenal_drag_fits` takes the fleet-wide pool ship as a second parameter.)*
 - Per-ship light direction is recomputed for every hull from that ship toward `s->star_pos`,
   which the code itself concedes is redundant for a distant star.
 - It iterates `NPC_SHIP_MAX` (384) unconditionally and sets `render_pos` even for undiscovered
@@ -98,7 +99,12 @@ with it. A new *procedural* mount art kind still follows `draw_turret` /
 **Source paths:** `sandbox/source/render/ship_scene.{cpp,h}`,
 `sandbox/source/render/ship_render.{cpp,h}`
 
-**Last verified:** 2026-08-10, working tree on `game` (mount draw units now come from
-`ship_hardpoint_unit`, adding the slot's `art_scale`). Previously verified 2026-08-08, commit
-`65f1ccb` (`draw_turret` draws authored art via
-`draw_mount_art` when the mounted weapon's def has one)
+**Last verified:** 2026-08-12, working tree on `game` (adds the ship-portrait sub-pass in
+`ship_scene.cpp`: `ship_portrait_submit` captures the inspected hull + mounts + hardpoint
+skeleton + drag fit-feedback into the engine's offscreen portrait scope with its own camera,
+plus one thumbnail scope per fleet member (`renderer_thumb_begin`, `portrait_fit_camera`) for
+the inspector's live fleet list; `ship_portrait_hardpoint_at` maps the cursor through the
+portrait rect for the drag-mount flow, and the layout constants now mirror the one-window
+inspector (title bar, 250/400 columns, tab panel). The world-side inspector sub-pass is
+retired, `draw_weapon_group_digits` retired in place with it). Previously verified 2026-08-10 (mount draw units from
+`ship_hardpoint_unit`, adding the slot's `art_scale`)

@@ -29,8 +29,10 @@ static const bs_color COLLIDER_COLOR = bs_color{ 1.00f, 0.18f, 0.85f, 1.0f };
 
 // Mirror of arsenal_drop_on_slot's type/size gates (game.cpp): can the armed arsenal drag
 // (kind/src, see game_state.pending_weapon_drag_kind) land on hardpoint dst? Drives the
-// green/red world-box feedback while a drag is airborne.
-static b8 arsenal_drag_fits(const Ship& fs, i32 kind, i32 src, i32 dst) {
+// green/red world-box feedback while a drag is airborne. `fs` is the INSPECTED hull the boxes
+// belong to; `pool` is the fleet-wide inventory (the flagship's stash arrays) that bay-sourced
+// kinds (1 = stash weapon, 4 = rack module) index into -- the same split the drop code makes.
+static b8 arsenal_drag_fits(const Ship& fs, const Ship& pool, i32 kind, i32 src, i32 dst) {
     const HardpointDef& dhp = fs.hardpoints[dst];
     switch (kind) {
         // Weapons: slot must take weapons AND be at least the weapon's size (mirror of the
@@ -39,11 +41,11 @@ static b8 arsenal_drag_fits(const Ship& fs, i32 kind, i32 src, i32 dst) {
                        && src >= 0 && src < fs.hardpoint_count && fs.mounts[src]
                        && fs.mounts[src]->size <= (u8)dhp.size;
         case 1: return hardpoint_accepts(&dhp, MODULE_TYPE_WEAPON)
-                       && src >= 0 && src < fs.weapon_stash_count && fs.weapon_stash[src]
-                       && fs.weapon_stash[src]->size <= (u8)dhp.size;
+                       && src >= 0 && src < pool.weapon_stash_count && pool.weapon_stash[src]
+                       && pool.weapon_stash[src]->size <= (u8)dhp.size;
         case 2: case 3: return hardpoint_accepts(&dhp, MODULE_TYPE_DEFENSE);
-        case 4: return (src >= 0 && src < fs.module_stash_count)
-                           ? hardpoint_fits_module(&dhp, fs.module_stash[src]) : FALSE;
+        case 4: return (src >= 0 && src < pool.module_stash_count)
+                           ? hardpoint_fits_module(&dhp, pool.module_stash[src]) : FALSE;
         case 5: return (src >= 0 && src < fs.hardpoint_count && fs.module_mounts[src])
                            ? hardpoint_fits_module(&dhp, fs.module_mounts[src]) : FALSE;
         default: return FALSE;
@@ -54,7 +56,11 @@ static b8 arsenal_drag_fits(const Ship& fs, i32 kind, i32 src, i32 dst) {
 // the weapon belongs to. Digits render bright on the weapons that ACTUALLY FIRE on click (the
 // active group, or the single overridden mount when the micro-selection hub has picked one),
 // dim elsewhere. Screen-anchored bitmap text so the labels stay readable at any zoom.
-static void draw_weapon_group_digits(game_state* s, const Ship* ship) {
+// RETIRED IN PLACE with the world-side inspector sub-pass: the loadout surface lives in the
+// PORTRAIT now, and text_draw anchors to the window framebuffer, not the portrait target, so
+// the digits cannot follow yet. Re-drive from ship_portrait_submit once portrait-space text
+// exists.
+[[maybe_unused]] static void draw_weapon_group_digits(game_state* s, const Ship* ship) {
     const Camera2D* cam = &s->camera_state.camera;
     f32 zoom = cam->zoom > 1.0e-6f ? cam->zoom : 1.0e-6f;
     const f32 scale = 1.5f;                          // 12 px glyphs
@@ -277,34 +283,10 @@ void draw_ship_scene(game_state* s) {
                             ship_speed_ratio, 1.0f, s->elapsed_time);
         // ---- DEBUG collider overlay.
         draw_collider_outline(ship, COLLIDER_COLOR, 1.5f);
-        // Hardpoint skeleton: only on the flagship while its inspector is open (the loadout
-        // surface). During an airborne arsenal drag each box also gets fit feedback - pulsing
-        // green where the dragged item can land, dim red where the slot rejects it. The
-        // hardpoint editor draws its own overlay (editor_ui.cpp).
-        if (s->show_flagship_inspector && ship == &s->player_ship()) {
-            draw_hardpoint_overlay(ship, 1.5f);
-            draw_weapon_group_digits(s, ship);
-            if (s->pending_weapon_drag >= 0) {
-                for (i32 h = 0; h < ship->hardpoint_count; ++h)
-                    draw_hardpoint_drag_feedback(ship, h,
-                        arsenal_drag_fits(*ship, s->pending_weapon_drag_kind,
-                                          s->pending_weapon_drag, h),
-                        s->elapsed_time);
-            }
-            // Ship-side pick-up carry cue: pulse the source box white and tether it to the
-            // cursor so the lifted item visibly rides the mouse.
-            if (s->world_module_drag && s->pending_weapon_drag >= 0 &&
-                s->pending_weapon_drag < ship->hardpoint_count) {
-                i32 src = s->pending_weapon_drag;
-                draw_hardpoint_highlight(ship, src, s->elapsed_time);
-                Vec2 c0 = vec2_add(ship->render_pos,
-                                   ship_local_dir(ship, ship->hardpoints[src].pos_local));
-                bs_math::HierPos2 mw = mouse_true_hierpos(s);
-                Vec2 cur = render_from_hierpos(s, &mw);
-                renderer_draw_line(c0, cur, 1.5f, bs_color{ 1.0f, 1.0f, 1.0f, 0.65f },
-                                   LAYER_GIZMO);
-            }
-        }
+        // (The hardpoint skeleton + drag fit-feedback moved into the PORTRAIT pass below --
+        // the full-screen inspector shows the hull through its offscreen portrait now, so the
+        // loadout surface lives there. The hardpoint editor still draws its own world overlay
+        // from editor_ui.cpp.)
     }
     // ---- NPC AI ships (General Ship AI): moving, civ-coloured hulls ---------------------
     for (i32 i = 0; i < NPC_SHIP_MAX; ++i) {
@@ -342,4 +324,135 @@ void draw_ship_scene(game_state* s) {
     // ---- Ship type emblem + velocity overlay (combat mode now lives in system mode).
     // Emblems are clustered by type so overlapping emblems at low zoom fuse into one.
     draw_fleet_emblems(s);
+}
+
+// =====================================================================================
+// Ship portrait (the full-screen inspector's hull view)
+// =====================================================================================
+// The engine's portrait target is a fixed square (BS_PORTRAIT_SIZE engine-side); the camera
+// below maps world units onto those pixels. PORTRAIT_PX must match that engine constant.
+static constexpr f32 PORTRAIT_PX   = 1024.0f;
+static constexpr f32 PORTRAIT_FILL = 0.80f;   // hull bounding circle fills this fraction
+
+// The full-screen inspector's layout, mirrored from hud.rcss (#inspector insets, title bar,
+// column widths, and the middle section's bottom tab panel). The portrait square is centred
+// in the middle zone between the columns, ABOVE the tab panel. The RML element takes its rect
+// from game_push_hud, which calls the helpers below -- so markup and hit-test can only drift
+// from the RCSS values here, never from each other.
+static constexpr f32 INSP_INSET_L = 16.0f, INSP_INSET_R = 16.0f;
+static constexpr f32 INSP_INSET_T = 60.0f, INSP_INSET_B = 52.0f;
+static constexpr f32 INSP_TITLE_H = 46.0f;                        // .insp-titlebar height
+static constexpr f32 INSP_COL_L   = 250.0f, INSP_COL_R  = 400.0f; // fleet list / module bay
+static constexpr f32 INSP_TABS_H  = 216.0f;                       // .insp-tabpanel height
+static constexpr f32 PORTRAIT_MARGIN = 16.0f;
+
+// Frame `ship` inside a square target of `target_px` pixels: bounding circle at PORTRAIT_FILL.
+static Camera2D portrait_fit_camera(const Ship* ship, f32 target_px) {
+    Camera2D cam{};
+    cam.position = ship->render_pos;
+    f32 r = ship_bounding_radius(ship);
+    cam.zoom     = (target_px * PORTRAIT_FILL) / (2.0f * (r > 1.0f ? r : 1.0f));
+    // Nose-up would set rotation = ship->angle here; kept 0 until camera2d_screen_to_world's
+    // rotation path is verified (the game pins the scene camera's rotation to 0, so it has
+    // never been exercised).
+    cam.rotation = 0.0f;
+    return cam;
+}
+
+static Camera2D ship_portrait_camera(const Ship* ship) {
+    return portrait_fit_camera(ship, PORTRAIT_PX);
+}
+
+void ship_portrait_center_origin(const game_state* s, f32* out_x, f32* out_y) {
+    *out_x = INSP_INSET_L + INSP_COL_L;
+    *out_y = INSP_INSET_T + INSP_TITLE_H;
+}
+
+void ship_portrait_rect(const game_state* s, f32* out_x, f32* out_y, f32* out_size) {
+    f32 cx0, cy0;
+    ship_portrait_center_origin(s, &cx0, &cy0);
+    f32 cx1 = (f32)s->fb_width  - INSP_INSET_R - INSP_COL_R;
+    f32 cy1 = (f32)s->fb_height - INSP_INSET_B - INSP_TABS_H;   // above the tab panel
+    f32 cw = cx1 - cx0, ch = cy1 - cy0;
+    f32 side = ((cw < ch) ? cw : ch) - PORTRAIT_MARGIN * 2.0f;
+    if (side < 64.0f) side = 64.0f;
+    *out_x    = cx0 + (cw - side) * 0.5f;
+    *out_y    = cy0 + (ch - side) * 0.5f;
+    *out_size = side;
+}
+
+void ship_portrait_submit(game_state* s) {
+    if (!s->show_flagship_inspector || s->editor.edit_mode_active) return;
+    Ship* ship = &s->inspected_ship();
+    Camera2D pcam = ship_portrait_camera(ship);
+    // The frontend divides debug-line thickness by ITS stored camera zoom, so the hardpoint
+    // boxes need the portrait camera installed for the duration of the scope. Restored to the
+    // scene camera immediately after -- render_scene calls this pass LAST, but the restore
+    // keeps the invariant local rather than an ordering contract.
+    renderer_set_camera(pcam);
+    renderer_portrait_begin(pcam);
+    // Fixed studio key light for the normal-mapped hull layers, independent of the star.
+    bs_math::Vec3 studio_light = bs_math::Vec3{ -0.38f, -0.45f, 0.81f };
+    draw_ship_visual_ex(ship, 1.0f, studio_light,
+                        bs_color{ 1.0f, 1.0f, 1.0f, 1.0f }, BLEND_ALPHA,
+                        bs_color{ 1.0f, 0.0f, 0.0f, 0.0f });
+    draw_ship_mounts(ship, s->elapsed_time, 1.0f);
+    draw_hardpoint_overlay(ship, 1.5f);
+    // (Weapon-group digits are skipped here: text_draw anchors to the WINDOW framebuffer,
+    // not the portrait target, so the glyphs would land at wrong positions.)
+    if (s->pending_weapon_drag >= 0) {
+        for (i32 h = 0; h < ship->hardpoint_count; ++h)
+            draw_hardpoint_drag_feedback(ship, h,
+                arsenal_drag_fits(*ship, s->player_ship(), s->pending_weapon_drag_kind,
+                                  s->pending_weapon_drag, h),
+                s->elapsed_time);
+    }
+    renderer_portrait_end();
+    renderer_set_camera(s->camera_state.camera);
+
+    // ---- Fleet-list thumbnails: one 256x256 strip slot per member -----------------------
+    // Live by construction: the same hull + mount submission as the world, re-captured every
+    // frame the inspector is open, so a loadout change shows in the list next frame. No
+    // hardpoint boxes here (identity + loadout, not a work surface) and no camera swap --
+    // thumbs draw no zoom-divided line primitives.
+    const f32 THUMB_PX = 256.0f;   // == the engine's BS_THUMB_SLOT_PX
+    for (i32 i = 0; i < s->fleet_state.fleet.count() && i < 8; ++i) {
+        Ship* member = &s->fleet_state.fleet.at(i).ship;
+        renderer_thumb_begin(i, portrait_fit_camera(member, THUMB_PX));
+        draw_ship_visual_ex(member, 1.0f, studio_light,
+                            bs_color{ 1.0f, 1.0f, 1.0f, 1.0f }, BLEND_ALPHA,
+                            bs_color{ 1.0f, 0.0f, 0.0f, 0.0f });
+        draw_ship_mounts(member, s->elapsed_time, 1.0f);
+        renderer_portrait_end();
+    }
+}
+
+i32 ship_portrait_hardpoint_at(game_state* s, f32 mx, f32 my) {
+    if (!s->show_flagship_inspector) return -1;
+    f32 rx, ry, rs;
+    ship_portrait_rect(s, &rx, &ry, &rs);
+    if (mx < rx || mx > rx + rs || my < ry || my > ry + rs) return -1;
+    Ship* ship = &s->inspected_ship();
+    Camera2D pcam = ship_portrait_camera(ship);
+    // Cursor -> portrait pixels -> render-space world point -> ship-local units (the same
+    // conversion ship_world_to_local performs, but anchored on render_pos -- the portrait
+    // camera frames the RENDERED hull, which is what the player is pointing at).
+    Vec2 ppx = Vec2{ (mx - rx) / rs * PORTRAIT_PX, (my - ry) / rs * PORTRAIT_PX };
+    Vec2 world = camera2d_screen_to_world(&pcam, (u16)PORTRAIT_PX, (u16)PORTRAIT_PX, ppx);
+    Vec2 rel = vec2_sub(world, ship->render_pos);
+    Vec2 lp  = vec2_scale(vec2_rotate(rel, -ship->angle), 1.0f / ship->world_scale);
+    // Same box test as the world-side inspected_hardpoint_at_cursor: grace margin over the
+    // drawn overlay box, nearest center wins where boxes overlap.
+    i32 hit = -1;
+    f32 best = 1.0e30f;
+    for (i32 i = 0; i < ship->hardpoint_count; ++i) {
+        const HardpointDef& hp = ship->hardpoints[i];
+        Vec2 d = vec2_rotate(vec2_sub(lp, hp.pos_local), -hp.facing);
+        f32  e = hardpoint_half_extent(hp.size) * 1.5f;
+        if (fabsf(d.x) <= e && fabsf(d.y) <= e) {
+            f32 d2 = d.x * d.x + d.y * d.y;
+            if (d2 < best) { best = d2; hit = i; }
+        }
+    }
+    return hit;
 }

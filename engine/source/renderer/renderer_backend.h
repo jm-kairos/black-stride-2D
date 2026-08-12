@@ -52,6 +52,15 @@ typedef struct renderer_backend
     // Append a 4-map mapped sprite to the current frame. Rendered inside the scene pass.
     void (*draw_mapped_sprite)(struct renderer_backend* backend, const bs_mapped_sprite* sprite);
 
+    // Ship-portrait offscreen scope: between begin and end, sprite submissions are captured
+    // into a separate batch and rendered fullbright with `camera` into the persistent portrait
+    // target during end_frame, before the scene passes. The RmlUi HUD samples the target
+    // through the reserved texture source name "bs:portrait".
+    void (*portrait_begin)(struct renderer_backend* backend, Camera2D camera);
+    void (*portrait_end)(struct renderer_backend* backend);
+    // Thumbnail variant: same capture, rendered into slot `slot` of the thumbnail strip.
+    void (*thumb_begin)(struct renderer_backend* backend, i32 slot, Camera2D camera);
+
     // Draw a procedural parallax starfield layer via custom GPU pipeline.
     // Parameters are queued and rendered during end_frame.
     void (*draw_starfield)(struct renderer_backend* backend, const bs_starfield_params* params);

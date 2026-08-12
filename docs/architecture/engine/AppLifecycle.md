@@ -65,8 +65,11 @@ init-list, so the order is hand-maintained. New global bus handlers are added by
 - Failures are logged with `BS_LOG_FATAL` *before* `logger_initialize()` runs
   (`entry.h:23` vs `application.cpp:50`) — safe only because the logger's init is currently an
   empty stub.
-- **`ESCAPE` is a hardcoded quit binding** in the application layer (`application.cpp:226-231`),
-  not in any config or key-map.
+- ~~**`ESCAPE` is a hardcoded quit binding** in the application layer~~ — **moved to game
+  policy** (2026-08-12): `application_on_key` no longer fires the quit; `game.cpp`'s
+  edge-triggered ESC handler closes an open ship inspector first and otherwise fires
+  `EVENT_CODE_APPLICATION_QUIT` through the exported `event_fire` — the EventBus's first
+  game-side caller.
 - Six `BS_LOG_*` test messages are left in `application_init` behind a `// TODO: remove this`
   (`application.cpp:53-59`), firing on every launch.
 - The 60 FPS software frame cap is a hardcoded `1.0 / 60.0` (`application.cpp:177`) with no

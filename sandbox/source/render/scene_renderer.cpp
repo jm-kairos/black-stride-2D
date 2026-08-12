@@ -43,4 +43,10 @@ void render_scene(game_state* s, f32 dt) {
     // ---- Gameplay overlays (projectiles, RTS, gizmos, travel, sensor, heat map) --
     // render/gameplay_overlays.cpp.
     draw_gameplay_overlays(s);
+
+    // ---- Ship portrait (inspector) -- render/ship_scene.cpp. Captures the inspected hull
+    // into the engine's offscreen portrait target for the full-screen inspector's center
+    // zone. Runs LAST: it needs draw_ship_scene's render_pos, and it temporarily swaps the
+    // submitted camera. No-op (and free) while the inspector is closed.
+    ship_portrait_submit(s);
 }

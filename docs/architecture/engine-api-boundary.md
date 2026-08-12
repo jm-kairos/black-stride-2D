@@ -45,8 +45,9 @@ could not verify directly is marked as such.
   `BSIMPORT`. The flag is inert.
 - The block carries one comment: `// TODO: Explain this further.` (`defines.h:85`).
 
-**Export surface: 153 `bs__api__` functions across 14 headers, plus 4 `bs__api__`-annotated
-structs.** Per-header counts (`grep -c bs__api__`):
+**Export surface: 156 `bs__api__` functions across 14 headers, plus 4 `bs__api__`-annotated
+structs** (`renderer_portrait_begin`/`_thumb_begin`/`_portrait_end` joined `renderer.h`
+2026-08-12). Per-header counts (`grep -c bs__api__`, before those additions):
 
 | header | decls | header | decls |
 |---|--:|---|--:|
@@ -177,9 +178,12 @@ and is called only by `renderer/backend/renderer_backend_sdlgpu.cpp`. The single
 for `platform_get_absolute_time` is a comment in `sandbox/source/core/profiler.h:13` noting it
 is engine-internal — which is why the sandbox uses `std::chrono` instead.
 
-### EventBus — 3 exported, 0 called
-`event_register`, `event_unregister`, `event_fire` (`core/event.h:44-46`) are exported and
-**never used by the sandbox**. The engine's event bus has no game-side consumer.
+### EventBus — 3 exported, 1 called
+`event_register`, `event_unregister`, `event_fire` (`core/event.h:44-46`). As of 2026-08-12
+`event_fire` has its first sandbox caller: `game.cpp`'s ESC handler fires
+`EVENT_CODE_APPLICATION_QUIT` (quit-on-ESC moved out of `application_on_key` so the key can be
+modal-aware — the press that collapses the ship inspector is consumed by it). `event_register`
+and `event_unregister` remain unused by the sandbox.
 
 ### AppLifecycle — see §4.
 
@@ -365,7 +369,7 @@ any symbol-level audit:
   (`renderer_types.h:23,119,304`) — the last is read by
   `sandbox/source/core/render_layers.h:15-16` to derive `LAYER_DEBUG`/`LAYER_GIZMO`, so the
   game's draw-order constants are pinned to an engine macro at compile time.
-- `BS_RML_*` capacities (`bs_rml.h:96-101`) — six macros sizing arrays inside the HUD snapshot
+- `BS_RML_*` capacities (`bs_rml.h:96-102`) — seven macros sizing arrays inside the HUD snapshot
   struct the sandbox fills.
 
 ### 7.3 Engine structs embedded by value in sandbox state — undetectable ABI coupling

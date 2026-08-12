@@ -25,6 +25,9 @@ b8 renderer_backend_create(ERendererBackend type, renderer_backend* out_backend)
             out_backend->set_camera = sdlgpu_backend_set_camera;
             out_backend->draw_sprite = sdlgpu_backend_draw_sprite;
             out_backend->draw_mapped_sprite = sdlgpu_backend_draw_mapped_sprite;
+            out_backend->portrait_begin = sdlgpu_backend_portrait_begin;
+            out_backend->portrait_end = sdlgpu_backend_portrait_end;
+            out_backend->thumb_begin = sdlgpu_backend_thumb_begin;
             out_backend->draw_starfield = sdlgpu_backend_draw_starfield;
             out_backend->draw_sunburst = sdlgpu_backend_draw_sunburst;
             out_backend->draw_starsurface = sdlgpu_backend_draw_starsurface;
@@ -65,6 +68,9 @@ void renderer_backend_destroy(renderer_backend* backend)
     backend->set_camera = 0;
     backend->draw_sprite = 0;
     backend->draw_mapped_sprite = 0;
+    backend->portrait_begin = 0;
+    backend->portrait_end = 0;
+    backend->thumb_begin = 0;
     backend->draw_starfield = 0;
     backend->draw_sunburst = 0;
     backend->draw_starsurface = 0;

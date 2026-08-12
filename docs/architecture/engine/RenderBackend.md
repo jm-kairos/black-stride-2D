@@ -131,7 +131,16 @@ deliberate, because that pass is where the tone map converts HDR back to 8 bits.
 `engine/source/renderer/renderer_backend.cpp`, and the post-chain shaders under
 `assets/shaders/src/bloom_*.frag.hlsl`
 
-**Last verified:** 2026-08-09, working tree on `game` (offscreen targets moved to `RGBA16F`
+**Last verified:** 2026-08-12, working tree on `game` (adds the ship-portrait passes: capture
+runs as per-frame SCOPE RECORDS — the main portrait plus one 256x256 fleet-thumbnail slot per
+member — sharing one capture array with per-scope sub-range sorts; targets are the fixed-size
+`portrait_rt` and the `thumb_rt` strip, both in `offscreen_format`, rendered as pre-passes
+before the main path split (the strip in one pass with a viewport per slot). The RML render
+interface's reserved "bs:portrait"/"bs:thumbs" texture names resolve to the live targets —
+ReleaseTexture skips them, shutdown owns them, and the resize path deliberately does not touch
+them. The vtable is 34 entries now — both hand-maintained lists in `renderer_backend.cpp`
+updated together).
+Previously verified 2026-08-09 (offscreen targets moved to `RGBA16F`
 with a capability probe; tone-map added to `bloom_composite`; `bloom_extract`'s normaliser
 rewritten — it divided by `max(1 - threshold, 0.0001)`, which silently zeroed all bloom at the
 shipped 1.2 threshold and would have multiplied the scene by ~10,000 once HDR made that

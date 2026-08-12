@@ -173,6 +173,22 @@ typedef struct batched_sprite
     u32        sort_key; // packed (layer<<20)|(blend<<18)|(texture_index) — see make_sort_key
 } batched_sprite;
 
+// Portrait-family capture limits and one recorded scope (see the portrait fields in
+// sdlgpu_state below for the full story).
+#define BS_PORTRAIT_SIZE          1024
+#define BS_THUMB_SLOT_PX          256
+#define BS_THUMB_SLOTS            8
+#define BS_MAX_PORTRAIT_SPRITES   2048
+#define BS_MAX_PORTRAIT_MAPPED    64
+#define BS_MAX_PORTRAIT_SCOPES    12
+typedef struct portrait_scope
+{
+    i32      slot;          // -1 = the main portrait target; 0..BS_THUMB_SLOTS-1 = strip slot
+    Camera2D camera;
+    u32      sprite_start, sprite_end;   // range in portrait_batch
+    u32      mapped_start, mapped_end;   // range in portrait_mapped
+} portrait_scope;
+
 // Backend-owned state. Frontend sees this only as opaque internal_state.
 typedef struct sdlgpu_state
 {
@@ -345,6 +361,24 @@ typedef struct sdlgpu_state
     b8             aux_bloom_mode;
     batched_sprite aux_batch[BS_MAX_SPRITES];
     u32            aux_batch_count;
+
+    // Ship-portrait offscreen passes (inspector): sprites captured between a
+    // portrait/thumb_begin and portrait_end render fullbright with that scope's camera into
+    // one of two persistent FIXED-SIZE targets (fixed so the Rml::TextureHandles handed out
+    // for the reserved source names "bs:portrait" / "bs:thumbs" stay valid for the HUD
+    // document's whole life). Several scopes may run per frame -- the main portrait plus one
+    // 256x256 thumbnail slot per fleet member -- all sharing ONE capture array, each scope
+    // recording its contiguous sub-range. Targets are created lazily on first use in
+    // offscreen_format so the offscreen sprite pipelines render into them.
+    SDL_GPUTexture*  portrait_rt;
+    SDL_GPUTexture*  thumb_rt;          // BS_THUMB_SLOT_PX x (BS_THUMB_SLOT_PX*BS_THUMB_SLOTS)
+    b8               portrait_active;   // a scope is currently open
+    portrait_scope   portrait_scopes[BS_MAX_PORTRAIT_SCOPES];
+    u32              portrait_scope_count;
+    batched_sprite   portrait_batch[BS_MAX_PORTRAIT_SPRITES];
+    u32              portrait_batch_count;
+    bs_mapped_sprite portrait_mapped[BS_MAX_PORTRAIT_MAPPED];
+    u32              portrait_mapped_count;
 
     // Starfield layer queue: parameters queued during game_render, drawn in end_frame.
     // 2 starfield layers × 3 passes each = 6, round up to 8 for headroom.
@@ -1538,6 +1572,10 @@ void sdlgpu_backend_shutdown(struct renderer_backend* backend)
     if (g_sdl.nebula_rt)  SDL_ReleaseGPUTexture(g_sdl.device, g_sdl.nebula_rt);
     if (g_sdl.heat_rt)    SDL_ReleaseGPUTexture(g_sdl.device, g_sdl.heat_rt);
     if (g_sdl.ui_backdrop_rt) SDL_ReleaseGPUTexture(g_sdl.device, g_sdl.ui_backdrop_rt);
+    // Portrait-family targets: fixed-size, so they are NOT touched by the resize path above --
+    // this shutdown release is their only teardown.
+    if (g_sdl.portrait_rt) SDL_ReleaseGPUTexture(g_sdl.device, g_sdl.portrait_rt);
+    if (g_sdl.thumb_rt)    SDL_ReleaseGPUTexture(g_sdl.device, g_sdl.thumb_rt);
     if (g_sdl.pipeline_extract)   SDL_ReleaseGPUGraphicsPipeline(g_sdl.device, g_sdl.pipeline_extract);
     if (g_sdl.pipeline_blur_h)    SDL_ReleaseGPUGraphicsPipeline(g_sdl.device, g_sdl.pipeline_blur_h);
     if (g_sdl.pipeline_blur_v)    SDL_ReleaseGPUGraphicsPipeline(g_sdl.device, g_sdl.pipeline_blur_v);
@@ -1628,6 +1666,10 @@ b8 sdlgpu_backend_begin_frame(struct renderer_backend* backend, f32 dt)
     g_sdl.pass              = NULL;
     g_sdl.batch_count       = 0; // reset CPU batch; the game refills it via draw_sprite
     g_sdl.mapped_batch_count = 0; // reset mapped sprite queue
+    g_sdl.portrait_batch_count  = 0; // reset ship-portrait capture
+    g_sdl.portrait_mapped_count = 0;
+    g_sdl.portrait_active       = FALSE; // a scope never survives a frame boundary
+    g_sdl.portrait_scope_count  = 0;
     g_sdl.starfield_queue_count = 0; // reset starfield layer queue
     g_sdl.sunburst_queue_count  = 0; // reset sunburst star queue
     g_sdl.starsurface_queue_count = 0; // reset star surface queue
@@ -1841,6 +1883,100 @@ void sdlgpu_backend_set_aux_bloom_mode(struct renderer_backend* backend, b8 enab
     if (enabled) g_sdl.aux_batch_count = 0;
 }
 
+// Lazily create a persistent portrait-family target. Fixed sizes (the RmlUi handles handed
+// out for "bs:portrait"/"bs:thumbs" must stay valid for the HUD document's life, so the
+// textures are never recreated), offscreen_format (the offscreen sprite pipelines must be
+// able to render into them -- SDL rejects a pass whose pipeline and target formats disagree),
+// SAMPLER usage so the RML pass can read them. Also called from the RML LoadTexture hook,
+// which can run at HUD init before any portrait_begin.
+static SDL_GPUTexture* create_portrait_family_rt(u32 w, u32 h, const char* what)
+{
+    if (!g_sdl.device) return NULL;
+    SDL_GPUTextureCreateInfo info;
+    SDL_zero(info);
+    info.type                 = SDL_GPU_TEXTURETYPE_2D;
+    info.format               = g_sdl.offscreen_format;
+    info.usage                = SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER;
+    info.width                = w;
+    info.height               = h;
+    info.layer_count_or_depth = 1;
+    info.num_levels           = 1;
+    SDL_GPUTexture* tex = SDL_CreateGPUTexture(g_sdl.device, &info);
+    if (!tex) BS_LOG_ERROR("%s: SDL_CreateGPUTexture failed: %s", what, SDL_GetError());
+    return tex;
+}
+
+static void ensure_portrait_rt(void)
+{
+    if (!g_sdl.portrait_rt)
+        g_sdl.portrait_rt = create_portrait_family_rt(BS_PORTRAIT_SIZE, BS_PORTRAIT_SIZE,
+                                                      "ensure_portrait_rt");
+}
+
+static void ensure_thumb_rt(void)
+{
+    if (!g_sdl.thumb_rt)
+        g_sdl.thumb_rt = create_portrait_family_rt(BS_THUMB_SLOT_PX,
+                                                   BS_THUMB_SLOT_PX * BS_THUMB_SLOTS,
+                                                   "ensure_thumb_rt");
+}
+
+// Open a capture scope. Scopes may not nest; an unbalanced or over-budget begin is dropped
+// with a warning and the matching end becomes a no-op.
+static void portrait_scope_open(i32 slot, Camera2D camera)
+{
+    if (g_sdl.portrait_active)
+    {
+        BS_LOG_WARN("portrait_begin: scope already open; ignoring nested begin.");
+        return;
+    }
+    if (g_sdl.portrait_scope_count >= BS_MAX_PORTRAIT_SCOPES)
+    {
+        BS_LOG_WARN("portrait_begin: scope budget (%u) exhausted this frame; dropping.",
+                    (u32)BS_MAX_PORTRAIT_SCOPES);
+        return;
+    }
+    portrait_scope* sc = &g_sdl.portrait_scopes[g_sdl.portrait_scope_count];
+    sc->slot         = slot;
+    sc->camera       = camera;
+    sc->sprite_start = sc->sprite_end = g_sdl.portrait_batch_count;
+    sc->mapped_start = sc->mapped_end = g_sdl.portrait_mapped_count;
+    g_sdl.portrait_active = TRUE;
+}
+
+void sdlgpu_backend_portrait_begin(struct renderer_backend* backend, Camera2D camera)
+{
+    (void)backend;
+    ensure_portrait_rt();
+    portrait_scope_open(-1, camera);
+}
+
+void sdlgpu_backend_thumb_begin(struct renderer_backend* backend, i32 slot, Camera2D camera)
+{
+    (void)backend;
+    if (slot < 0 || slot >= BS_THUMB_SLOTS)
+    {
+        BS_LOG_WARN("thumb_begin: slot %d out of range (0..%d); ignoring.", slot, BS_THUMB_SLOTS - 1);
+        return;
+    }
+    ensure_thumb_rt();
+    portrait_scope_open(slot, camera);
+}
+
+void sdlgpu_backend_portrait_end(struct renderer_backend* backend)
+{
+    (void)backend;
+    if (!g_sdl.portrait_active) return;   // matching a dropped/unbalanced begin
+    portrait_scope* sc = &g_sdl.portrait_scopes[g_sdl.portrait_scope_count];
+    sc->sprite_end = g_sdl.portrait_batch_count;
+    sc->mapped_end = g_sdl.portrait_mapped_count;
+    // An empty scope is discarded rather than recorded, so the passes below only run for
+    // scopes that actually captured something.
+    if (sc->sprite_end > sc->sprite_start || sc->mapped_end > sc->mapped_start)
+        ++g_sdl.portrait_scope_count;
+    g_sdl.portrait_active = FALSE;
+}
+
 void sdlgpu_backend_draw_starfield(struct renderer_backend* backend, const bs_starfield_params* params)
 {
     (void)backend;
@@ -1969,11 +2105,6 @@ void sdlgpu_backend_draw_sprite(struct renderer_backend* backend, const bs_sprit
 {
     (void)backend;
     if (!sprite) return;
-    if (g_sdl.batch_count >= BS_MAX_SPRITES)
-    {
-        BS_LOG_WARN("draw_sprite: batch full (%u); dropping sprite.", (u32)BS_MAX_SPRITES);
-        return;
-    }
 
     // Resolve the texture to a pool index for the sort key (id 0 / stale => white texture).
     gpu_texture* slot = pool_resolve_texture(sprite->texture);
@@ -1988,6 +2119,28 @@ void sdlgpu_backend_draw_sprite(struct renderer_backend* backend, const bs_sprit
     }
 
     u32 sort_key = make_sort_key(sprite->layer, sprite->blend, tex_index);
+
+    // Portrait capture: while a portrait scope is open the sprite belongs to the portrait
+    // batch ONLY -- it must never also appear in the scene (or the aux streak batch).
+    if (g_sdl.portrait_active)
+    {
+        if (g_sdl.portrait_batch_count >= BS_MAX_PORTRAIT_SPRITES)
+        {
+            BS_LOG_WARN("draw_sprite: portrait batch full (%u); dropping sprite.",
+                        (u32)BS_MAX_PORTRAIT_SPRITES);
+            return;
+        }
+        batched_sprite* p = &g_sdl.portrait_batch[g_sdl.portrait_batch_count++];
+        p->sprite   = *sprite;
+        p->sort_key = sort_key;
+        return;
+    }
+
+    if (g_sdl.batch_count >= BS_MAX_SPRITES)
+    {
+        BS_LOG_WARN("draw_sprite: batch full (%u); dropping sprite.", (u32)BS_MAX_SPRITES);
+        return;
+    }
 
     batched_sprite* b = &g_sdl.batch[g_sdl.batch_count++];
     b->sprite   = *sprite;
@@ -2006,6 +2159,18 @@ void sdlgpu_backend_draw_mapped_sprite(struct renderer_backend* backend, const b
 {
     (void)backend;
     if (!sprite) return;
+    // Portrait capture: same exclusivity as draw_sprite above.
+    if (g_sdl.portrait_active)
+    {
+        if (g_sdl.portrait_mapped_count >= BS_MAX_PORTRAIT_MAPPED)
+        {
+            BS_LOG_WARN("draw_mapped_sprite: portrait batch full (%u); dropping sprite.",
+                        (u32)BS_MAX_PORTRAIT_MAPPED);
+            return;
+        }
+        g_sdl.portrait_mapped[g_sdl.portrait_mapped_count++] = *sprite;
+        return;
+    }
     if (g_sdl.mapped_batch_count >= BS_MAX_MAPPED_SPRITES)
     {
         BS_LOG_WARN("draw_mapped_sprite: batch full (%u); dropping sprite.", (u32)BS_MAX_MAPPED_SPRITES);
@@ -2198,20 +2363,44 @@ b8 sdlgpu_backend_end_frame(struct renderer_backend* backend, f32 dt)
     if (aux_count > 1)
         SDL_qsort(g_sdl.aux_batch, aux_count, sizeof(batched_sprite), batch_compare);
 
+    // Sort each portrait SCOPE's sub-range independently (a whole-array sort would interleave
+    // scopes) -- vertices are written below in this order, the same contract as the other
+    // regions.
+    for (u32 si = 0; si < g_sdl.portrait_scope_count; ++si)
+    {
+        portrait_scope* sc = &g_sdl.portrait_scopes[si];
+        if (sc->sprite_end - sc->sprite_start > 1)
+            SDL_qsort(g_sdl.portrait_batch + sc->sprite_start, sc->sprite_end - sc->sprite_start,
+                      sizeof(batched_sprite), batch_compare);
+    }
+
+    // The three regions share one vertex buffer sized BS_MAX_SPRITES; if they overflow it
+    // combined, the portrait scopes (the only optional cosmetic region) are dropped wholesale.
+    if (aux_count + g_sdl.batch_count + g_sdl.portrait_batch_count > BS_MAX_SPRITES)
+    {
+        BS_LOG_WARN("end_frame: sprite regions exceed %u combined; dropping the portrait scopes.",
+                    (u32)BS_MAX_SPRITES);
+        g_sdl.portrait_batch_count = 0;
+        g_sdl.portrait_scope_count = 0;
+    }
+
     // ---- 2 & 3: build vertices and upload (only if we have sprites) ----
-    if (g_sdl.batch_count > 0)
+    if (g_sdl.batch_count + g_sdl.portrait_batch_count > 0)
     {
         sprite_vertex* verts = (sprite_vertex*)SDL_MapGPUTransferBuffer(g_sdl.device, g_sdl.vtransfer, true);
 
-        // Write aux-batch vertices first (if any), then regular-batch vertices.
+        // Write aux-batch vertices first (if any), then regular-batch, then portrait-batch.
         u32 aux_count     = g_sdl.aux_batch_count;
-        u32 total_sprites = aux_count + g_sdl.batch_count;
+        u32 total_sprites = aux_count + g_sdl.batch_count + g_sdl.portrait_batch_count;
 
-        for (u32 pass = 0; pass < 2; ++pass)
+        batched_sprite* region_src[3]   = { g_sdl.aux_batch, g_sdl.batch, g_sdl.portrait_batch };
+        u32             region_count[3] = { aux_count, g_sdl.batch_count, g_sdl.portrait_batch_count };
+        u32             region_base[3]  = { 0, aux_count, aux_count + g_sdl.batch_count };
+        for (u32 pass = 0; pass < 3; ++pass)
         {
-            u32 count  = (pass == 0) ? aux_count : g_sdl.batch_count;
-            u32 vbase  = (pass == 0) ? 0 : aux_count;
-            batched_sprite* src_sprites = (pass == 0) ? g_sdl.aux_batch : g_sdl.batch;
+            u32 count  = region_count[pass];
+            u32 vbase  = region_base[pass];
+            batched_sprite* src_sprites = region_src[pass];
 
             for (u32 i = 0; i < count; ++i)
             {
@@ -2262,13 +2451,25 @@ b8 sdlgpu_backend_end_frame(struct renderer_backend* backend, f32 dt)
         SDL_EndGPUCopyPass(cp);
     }
 
-    // ---- 2b & 3b: build and upload mapped sprite vertices ----
-    if (g_sdl.mapped_batch_count > 0)
+    // ---- 2b & 3b: build and upload mapped sprite vertices (main region + portrait region) ----
+    if (g_sdl.mapped_batch_count + g_sdl.portrait_mapped_count > BS_MAX_MAPPED_SPRITES)
+    {
+        BS_LOG_WARN("end_frame: mapped regions exceed %u combined; dropping the portrait mapped batch.",
+                    (u32)BS_MAX_MAPPED_SPRITES);
+        g_sdl.portrait_mapped_count = 0;
+        // Keep the scopes' sprite content but void their mapped ranges so they stay in sync.
+        for (u32 si = 0; si < g_sdl.portrait_scope_count; ++si)
+            g_sdl.portrait_scopes[si].mapped_start = g_sdl.portrait_scopes[si].mapped_end = 0;
+    }
+    u32 total_mapped = g_sdl.mapped_batch_count + g_sdl.portrait_mapped_count;
+    if (total_mapped > 0)
     {
         mapped_vertex* mverts = (mapped_vertex*)SDL_MapGPUTransferBuffer(g_sdl.device, g_sdl.mapped_vtransfer, true);
-        for (u32 i = 0; i < g_sdl.mapped_batch_count; ++i)
+        for (u32 i = 0; i < total_mapped; ++i)
         {
-            const bs_mapped_sprite& s = g_sdl.mapped_batch[i];
+            const bs_mapped_sprite& s = (i < g_sdl.mapped_batch_count)
+                ? g_sdl.mapped_batch[i]
+                : g_sdl.portrait_mapped[i - g_sdl.mapped_batch_count];
             f32 ox = s.origin.x * s.size.x;
             f32 oy = s.origin.y * s.size.y;
             Vec2 corners[4] = {
@@ -2301,7 +2502,7 @@ b8 sdlgpu_backend_end_frame(struct renderer_backend* backend, f32 dt)
         src.transfer_buffer = g_sdl.mapped_vtransfer; src.offset = 0;
         SDL_GPUBufferRegion dst; SDL_zero(dst);
         dst.buffer = g_sdl.mapped_vbuffer; dst.offset = 0;
-        dst.size   = sizeof(mapped_vertex) * 4u * g_sdl.mapped_batch_count;
+        dst.size   = sizeof(mapped_vertex) * 4u * total_mapped;
         SDL_UploadToGPUBuffer(cp, &src, &dst, true);
         SDL_EndGPUCopyPass(cp);
     }
@@ -2343,17 +2544,21 @@ b8 sdlgpu_backend_end_frame(struct renderer_backend* backend, f32 dt)
     u64 rec_t0 = SDL_GetPerformanceCounter();
 
     // ---- Helper: draw a sub-range of a sprite batch into the CURRENT render pass ----
-    auto draw_sprite_batch = [&](b8 render_to_offscreen, batched_sprite* sprites, u32 sprite_count, u32 index_offset, u32 batch_start, u32 batch_end) -> u32
+    // vp_override / fullbright serve the portrait pass: its target is not the swapchain, so it
+    // brings its own view-proj, and scene lights must not apply to it.
+    auto draw_sprite_batch = [&](b8 render_to_offscreen, batched_sprite* sprites, u32 sprite_count, u32 index_offset, u32 batch_start, u32 batch_end,
+                                 const Mat4* vp_override, b8 fullbright) -> u32
     {
         u32 calls = 0;
         if (batch_start >= batch_end || batch_start >= sprite_count) return calls;
         batch_end = (batch_end > sprite_count) ? sprite_count : batch_end;
 
-        Mat4 view_proj = camera2d_view_proj(&g_sdl.camera, (u16)g_sdl.swap_width, (u16)g_sdl.swap_height);
+        Mat4 view_proj = vp_override ? *vp_override
+                       : camera2d_view_proj(&g_sdl.camera, (u16)g_sdl.swap_width, (u16)g_sdl.swap_height);
 
         gpu_lights lit;
         SDL_zero(lit);
-        lit.params[0]  = (f32)g_sdl.light_count;
+        lit.params[0]  = fullbright ? 0.0f : (f32)g_sdl.light_count;
         lit.params[1]  = 0.0f;
         lit.params[2]  = (f32)g_sdl.swap_width;
         lit.params[3]  = (f32)g_sdl.swap_height;
@@ -2431,7 +2636,7 @@ b8 sdlgpu_backend_end_frame(struct renderer_backend* backend, f32 dt)
             SDL_PushGPUVertexUniformData(g_sdl.cmd, 0, &view_proj, sizeof(Mat4));
 
             u32 run_layer = (sprites[run_start].sort_key >> 20) & 0xFFFu;
-            lit.params[1] = (g_sdl.light_count > 0 && run_layer < g_sdl.light_unlit_layer) ? 1.0f : 0.0f;
+            lit.params[1] = (!fullbright && g_sdl.light_count > 0 && run_layer < g_sdl.light_unlit_layer) ? 1.0f : 0.0f;
             fill_glow(run_glow);
             SDL_PushGPUFragmentUniformData(g_sdl.cmd, 0, &lit, sizeof(gpu_lights));
 
@@ -2453,20 +2658,23 @@ b8 sdlgpu_backend_end_frame(struct renderer_backend* backend, f32 dt)
         return calls;
     };
 
-    // Helper: draw all queued mapped sprites in the current render pass.
-    auto draw_mapped_batch = [&](b8 render_to_offscreen) -> u32
+    // Helper: draw a mapped-sprite region in the current render pass. `vbase` is the region's
+    // first sprite's index into the shared mapped vertex buffer (the portrait region sits after
+    // the main region); vp_override serves the portrait pass, same as draw_sprite_batch.
+    auto draw_mapped_batch = [&](b8 render_to_offscreen, const bs_mapped_sprite* msprites, u32 count,
+                                 u32 vbase, const Mat4* vp_override) -> u32
     {
         u32 calls = 0;
-        u32 count = g_sdl.mapped_batch_count;
         if (count == 0) return calls;
 
-        Mat4 view_proj = camera2d_view_proj(&g_sdl.camera, (u16)g_sdl.swap_width, (u16)g_sdl.swap_height);
+        Mat4 view_proj = vp_override ? *vp_override
+                       : camera2d_view_proj(&g_sdl.camera, (u16)g_sdl.swap_width, (u16)g_sdl.swap_height);
 
         mapped_light lit;
         SDL_zero(lit);
         // Use the first mapped sprite's light direction for the whole batch (all ships share
         // the same star direction this frame). Intensity 1.0, ambient from the scene floor.
-        const bs_mapped_sprite& first = g_sdl.mapped_batch[0];
+        const bs_mapped_sprite& first = msprites[0];
         lit.light_dir[0] = first.light_dir.x;
         lit.light_dir[1] = first.light_dir.y;
         lit.light_dir[2] = first.light_dir.z;
@@ -2497,7 +2705,7 @@ b8 sdlgpu_backend_end_frame(struct renderer_backend* backend, f32 dt)
         // because each ship uses a different set of maps.
         for (u32 i = 0; i < count; ++i)
         {
-            const bs_mapped_sprite& s = g_sdl.mapped_batch[i];
+            const bs_mapped_sprite& s = msprites[i];
             gpu_texture* diffuse_slot  = pool_resolve_texture(s.diffuse_map);
             gpu_texture* normal_slot   = pool_resolve_texture(s.normal_map);
             gpu_texture* depth_slot    = pool_resolve_texture(s.depth_map);
@@ -2517,7 +2725,7 @@ b8 sdlgpu_backend_end_frame(struct renderer_backend* backend, f32 dt)
             tsb[3].texture = position_tex;   tsb[3].sampler = g_sdl.sampler;
             SDL_BindGPUFragmentSamplers(g_sdl.pass, 0, tsb, 4);
 
-            SDL_DrawGPUIndexedPrimitives(g_sdl.pass, 6, 1, i * 6u, 0, 0);
+            SDL_DrawGPUIndexedPrimitives(g_sdl.pass, 6, 1, (vbase + i) * 6u, 0, 0);
             ++calls;
         }
         return calls;
@@ -2648,6 +2856,85 @@ b8 sdlgpu_backend_end_frame(struct renderer_backend* backend, f32 dt)
         SDL_DrawGPUPrimitives(g_sdl.pass, 3, 1, 0, 0);
     };
 
+    // ---- PASS 0.7: ship portrait + fleet-thumbnail scopes (inspector) ----------------------
+    // Pre-passes like the nebula/heat targets above: independent of which main path runs, and
+    // written BEFORE the swapchain pass so the RmlUi HUD samples this frame's content. Both
+    // use the offscreen sprite pipelines (the targets share offscreen_format), each scope's
+    // camera view-proj sized to its viewport, and fullbright lighting. Skipped entirely in
+    // frames with no scope submissions.
+    if (g_sdl.portrait_scope_count > 0)
+    {
+        // Helper: draw one scope's captured ranges with its camera, sized to (vw, vh).
+        auto draw_portrait_scope = [&](const portrait_scope* sc, u16 vw, u16 vh)
+        {
+            Mat4 vp = camera2d_view_proj(&sc->camera, vw, vh);
+            draw_calls += draw_sprite_batch(TRUE, g_sdl.portrait_batch, g_sdl.portrait_batch_count,
+                                            aux_count + g_sdl.batch_count,
+                                            sc->sprite_start, sc->sprite_end, &vp, TRUE);
+            draw_calls += draw_mapped_batch(TRUE,
+                                            g_sdl.portrait_mapped + sc->mapped_start,
+                                            sc->mapped_end - sc->mapped_start,
+                                            g_sdl.mapped_batch_count + sc->mapped_start, &vp);
+        };
+
+        // Main portrait scopes (slot -1) -> portrait_rt. Mostly-transparent smoked-glass
+        // plate: the world stays faintly visible behind the portrait, while the plate
+        // separates the rendered hull from a same-colored world hull behind the square.
+        b8 any_main = FALSE;
+        for (u32 si = 0; si < g_sdl.portrait_scope_count && !any_main; ++si)
+            any_main = (g_sdl.portrait_scopes[si].slot < 0);
+        if (any_main && g_sdl.portrait_rt)
+        {
+            SDL_GPUColorTargetInfo portrait_target;
+            SDL_zero(portrait_target);
+            portrait_target.texture     = g_sdl.portrait_rt;
+            portrait_target.clear_color = SDL_FColor{ 0.02f, 0.05f, 0.06f, 0.55f };
+            portrait_target.load_op     = SDL_GPU_LOADOP_CLEAR;
+            portrait_target.store_op    = SDL_GPU_STOREOP_STORE;
+            g_sdl.pass = SDL_BeginGPURenderPass(g_sdl.cmd, &portrait_target, 1, NULL);
+            for (u32 si = 0; si < g_sdl.portrait_scope_count; ++si)
+                if (g_sdl.portrait_scopes[si].slot < 0)
+                    draw_portrait_scope(&g_sdl.portrait_scopes[si],
+                                        (u16)BS_PORTRAIT_SIZE, (u16)BS_PORTRAIT_SIZE);
+            SDL_EndGPURenderPass(g_sdl.pass);
+            g_sdl.pass = NULL;
+        }
+
+        // Thumbnail scopes -> their slots in thumb_rt, one pass with a viewport per slot.
+        // The viewport confines each scope's NDC output to its 256x256 cell, so the scope
+        // cameras stay square and know nothing about the strip layout.
+        b8 any_thumb = FALSE;
+        for (u32 si = 0; si < g_sdl.portrait_scope_count && !any_thumb; ++si)
+            any_thumb = (g_sdl.portrait_scopes[si].slot >= 0);
+        if (any_thumb && g_sdl.thumb_rt)
+        {
+            SDL_GPUColorTargetInfo thumb_target;
+            SDL_zero(thumb_target);
+            thumb_target.texture     = g_sdl.thumb_rt;
+            thumb_target.clear_color = SDL_FColor{ 0.0f, 0.0f, 0.0f, 0.0f };
+            thumb_target.load_op     = SDL_GPU_LOADOP_CLEAR;
+            thumb_target.store_op    = SDL_GPU_STOREOP_STORE;
+            g_sdl.pass = SDL_BeginGPURenderPass(g_sdl.cmd, &thumb_target, 1, NULL);
+            for (u32 si = 0; si < g_sdl.portrait_scope_count; ++si)
+            {
+                const portrait_scope* sc = &g_sdl.portrait_scopes[si];
+                if (sc->slot < 0) continue;
+                SDL_GPUViewport vpr;
+                SDL_zero(vpr);
+                vpr.x = 0.0f;
+                vpr.y = (f32)(sc->slot * BS_THUMB_SLOT_PX);
+                vpr.w = (f32)BS_THUMB_SLOT_PX;
+                vpr.h = (f32)BS_THUMB_SLOT_PX;
+                vpr.min_depth = 0.0f;
+                vpr.max_depth = 1.0f;
+                SDL_SetGPUViewport(g_sdl.pass, &vpr);
+                draw_portrait_scope(sc, (u16)BS_THUMB_SLOT_PX, (u16)BS_THUMB_SLOT_PX);
+            }
+            SDL_EndGPURenderPass(g_sdl.pass);
+            g_sdl.pass = NULL;
+        }
+    }
+
     b8 use_offscreen = g_sdl.scene_rt && g_sdl.bloom_a && g_sdl.bloom_b;
     b8 need_bloom    = g_sdl.bloom_enabled;
     b8 need_streak   = g_sdl.streak_enabled && aux_count > 0;
@@ -2764,8 +3051,8 @@ b8 sdlgpu_backend_end_frame(struct renderer_backend* backend, f32 dt)
         }
         // Composite the half-res radiation heat map behind the sprite batch (upscaled, premult-over).
         composite_heat(g_sdl.pipeline_nebula_composite);
-        draw_calls = draw_sprite_batch(TRUE, g_sdl.batch, g_sdl.batch_count, aux_count, 0, bloom_split);
-        draw_calls += draw_mapped_batch(TRUE);
+        draw_calls = draw_sprite_batch(TRUE, g_sdl.batch, g_sdl.batch_count, aux_count, 0, bloom_split, NULL, FALSE);
+        draw_calls += draw_mapped_batch(TRUE, g_sdl.mapped_batch, g_sdl.mapped_batch_count, 0, NULL);
         SDL_EndGPURenderPass(g_sdl.pass);
         g_sdl.pass = NULL;
 
@@ -2780,7 +3067,7 @@ b8 sdlgpu_backend_end_frame(struct renderer_backend* backend, f32 dt)
             aux_target.store_op    = SDL_GPU_STOREOP_STORE;
 
             g_sdl.pass = SDL_BeginGPURenderPass(g_sdl.cmd, &aux_target, 1, NULL);
-            draw_calls += draw_sprite_batch(TRUE, g_sdl.aux_batch, aux_count, 0, 0, aux_count);
+            draw_calls += draw_sprite_batch(TRUE, g_sdl.aux_batch, aux_count, 0, 0, aux_count, NULL, FALSE);
             SDL_EndGPURenderPass(g_sdl.pass);
             g_sdl.pass = NULL;
         }
@@ -2971,7 +3258,7 @@ b8 sdlgpu_backend_end_frame(struct renderer_backend* backend, f32 dt)
 
         // ---- PASS 8b: debug / UI overlays directly on swapchain (bypass bloom) ------------
         if (bloom_split < g_sdl.batch_count)
-            draw_calls += draw_sprite_batch(FALSE, g_sdl.batch, g_sdl.batch_count, aux_count, bloom_split, g_sdl.batch_count);
+            draw_calls += draw_sprite_batch(FALSE, g_sdl.batch, g_sdl.batch_count, aux_count, bloom_split, g_sdl.batch_count, NULL, FALSE);
 
         // RmlUi in-game UI, drawn into the swapchain pass beneath the ImGui editor overlay.
         {
@@ -3089,8 +3376,8 @@ b8 sdlgpu_backend_end_frame(struct renderer_backend* backend, f32 dt)
         }
         // Composite the half-res radiation heat map behind the sprite batch (upscaled, premult-over).
         composite_heat(g_sdl.pipeline_nebula_composite_swapchain);
-        draw_calls = draw_sprite_batch(FALSE, g_sdl.batch, g_sdl.batch_count, aux_count, 0, g_sdl.batch_count);
-        draw_calls += draw_mapped_batch(FALSE);
+        draw_calls = draw_sprite_batch(FALSE, g_sdl.batch, g_sdl.batch_count, aux_count, 0, g_sdl.batch_count, NULL, FALSE);
+        draw_calls += draw_mapped_batch(FALSE, g_sdl.mapped_batch, g_sdl.mapped_batch_count, 0, NULL);
 
         // RmlUi in-game UI, drawn into the swapchain pass beneath the ImGui editor overlay.
         {
@@ -3571,6 +3858,36 @@ void BsRmlRenderInterface::ReleaseGeometry(Rml::CompiledGeometryHandle geometry)
 
 Rml::TextureHandle BsRmlRenderInterface::LoadTexture(Rml::Vector2i& texture_dimensions, const Rml::String& source)
 {
+    // Reserved source name: the ship-portrait offscreen target (see renderer_portrait_begin).
+    // Matched by suffix because RmlUi may prefix a document-relative directory onto the source.
+    // The target is engine-owned, fixed-size and never recreated, so the handle stays valid for
+    // the document's whole life; ReleaseTexture skips it, and it is deliberately NOT tagged for
+    // the CAS sharpen pass (it is a live render target, not a 2x-authored atlas).
+    static const char PORTRAIT_NAME[] = "bs:portrait";
+    const size_t pn_len = sizeof(PORTRAIT_NAME) - 1;
+    if (source.size() >= pn_len &&
+        source.compare(source.size() - pn_len, pn_len, PORTRAIT_NAME) == 0)
+    {
+        ensure_portrait_rt();
+        if (!g_sdl.portrait_rt) return 0;
+        texture_dimensions.x = BS_PORTRAIT_SIZE;
+        texture_dimensions.y = BS_PORTRAIT_SIZE;
+        return (Rml::TextureHandle)g_sdl.portrait_rt;
+    }
+    // Same contract for the fleet-thumbnail strip (one 256x256 slot per fleet member, sliced
+    // by the markup's per-row `rect`).
+    static const char THUMBS_NAME[] = "bs:thumbs";
+    const size_t tn_len = sizeof(THUMBS_NAME) - 1;
+    if (source.size() >= tn_len &&
+        source.compare(source.size() - tn_len, tn_len, THUMBS_NAME) == 0)
+    {
+        ensure_thumb_rt();
+        if (!g_sdl.thumb_rt) return 0;
+        texture_dimensions.x = BS_THUMB_SLOT_PX;
+        texture_dimensions.y = BS_THUMB_SLOT_PX * BS_THUMB_SLOTS;
+        return (Rml::TextureHandle)g_sdl.thumb_rt;
+    }
+
     // stb_image is built with STBI_NO_STDIO (see stb_image_impl.cpp), so decode from a memory
     // buffer rather than a file path. SDL_LoadFile reads the bytes relative to the CWD, matching
     // RmlUi's default FileInterface (which resolves texture paths the same way).
@@ -3635,6 +3952,9 @@ Rml::TextureHandle BsRmlRenderInterface::GenerateTexture(Rml::Span<const Rml::by
 void BsRmlRenderInterface::ReleaseTexture(Rml::TextureHandle texture)
 {
     if (!texture) return;
+    // The portrait-family targets are engine-owned (released in backend shutdown), not RmlUi's.
+    if ((SDL_GPUTexture*)texture == g_sdl.portrait_rt) return;
+    if ((SDL_GPUTexture*)texture == g_sdl.thumb_rt) return;
     // Untag from the sharpen table (no-op for generated textures).
     for (i32 i = 0; i < g_rml.sharpen_tex_count; ++i) {
         if (g_rml.sharpen_tex[i].tex == (SDL_GPUTexture*)texture) {
@@ -4389,6 +4709,34 @@ struct BsRmlHudGmRow
     Rml::Vector<BsRmlHudGmCell> cell;
 };
 
+struct BsRmlHudRosterChip
+{
+    Rml::String label;
+    Rml::String action;
+    bool        on = false;
+};
+
+struct BsRmlHudInspShip
+{
+    Rml::String sprite;
+    Rml::String name;
+    Rml::String status;
+    Rml::String action;
+    bool        selected = false;
+};
+
+struct BsRmlHudRosterRow
+{
+    Rml::String                     label;
+    Rml::String                     status;
+    Rml::String                     action;
+    Rml::String                     action_insp;
+    bool                            selected = false;
+    bool                            piloted  = false;
+    bool                            hovered  = false;
+    Rml::Vector<BsRmlHudRosterChip> chip;
+};
+
 // The engine-side mirror of bs_rml_hud_state, using RmlUi string/array types the data model binds
 // to. Populated by bs_rml_hud_update from the game's POD snapshot.
 struct BsRmlHudModel
@@ -4424,6 +4772,9 @@ struct BsRmlHudModel
     Rml::String                 fleet_pd_label;       // "PD: STANDARD - impact time - 100%"
     bool                        fleet_pd_warn = false;
 
+    bool                            roster_visible = false;
+    Rml::Vector<BsRmlHudRosterRow>  roster;
+
     bool                     jump_visible = false;
 
     bool                     debug_visible = false;
@@ -4435,6 +4786,14 @@ struct BsRmlHudModel
     bool                        inspector_btn_visible = false;
     bool                        inspector_visible = false;
     Rml::String                 insp_ship_name;
+    Rml::String                 insp_status;
+    Rml::String                 insp_portrait_left = "0px";
+    Rml::String                 insp_portrait_top  = "0px";
+    Rml::String                 insp_portrait_size = "64px";
+    int                           insp_ship_count = 0;
+    Rml::Vector<BsRmlHudInspShip> insp_ships;
+    bool                          insp_show_loadout  = true;
+    bool                          insp_show_doctrine = false;
     Rml::Vector<BsRmlHudBay>    bay;      // unified Modules-bay tiles (weapons + PD + modules)
 
     Rml::Vector<Rml::String>    gm_col;   // fire-group matrix column headers (mounted weapons)
@@ -4570,6 +4929,36 @@ b8 bs_rml_hud_init(const char* rml_path)
     c.RegisterArray<Rml::Vector<BsRmlHudGmRow>>();
     c.RegisterArray<Rml::Vector<Rml::String>>();
 
+    if (auto h = c.RegisterStruct<BsRmlHudInspShip>())
+    {
+        h.RegisterMember("sprite",   &BsRmlHudInspShip::sprite);
+        h.RegisterMember("name",     &BsRmlHudInspShip::name);
+        h.RegisterMember("status",   &BsRmlHudInspShip::status);
+        h.RegisterMember("action",   &BsRmlHudInspShip::action);
+        h.RegisterMember("selected", &BsRmlHudInspShip::selected);
+    }
+    c.RegisterArray<Rml::Vector<BsRmlHudInspShip>>();
+
+    if (auto h = c.RegisterStruct<BsRmlHudRosterChip>())
+    {
+        h.RegisterMember("label",  &BsRmlHudRosterChip::label);
+        h.RegisterMember("action", &BsRmlHudRosterChip::action);
+        h.RegisterMember("on",     &BsRmlHudRosterChip::on);
+    }
+    c.RegisterArray<Rml::Vector<BsRmlHudRosterChip>>();
+    if (auto h = c.RegisterStruct<BsRmlHudRosterRow>())
+    {
+        h.RegisterMember("label",       &BsRmlHudRosterRow::label);
+        h.RegisterMember("status",      &BsRmlHudRosterRow::status);
+        h.RegisterMember("action",      &BsRmlHudRosterRow::action);
+        h.RegisterMember("action_insp", &BsRmlHudRosterRow::action_insp);
+        h.RegisterMember("selected", &BsRmlHudRosterRow::selected);
+        h.RegisterMember("piloted",  &BsRmlHudRosterRow::piloted);
+        h.RegisterMember("hovered",  &BsRmlHudRosterRow::hovered);
+        h.RegisterMember("chip",     &BsRmlHudRosterRow::chip);
+    }
+    c.RegisterArray<Rml::Vector<BsRmlHudRosterRow>>();
+
     // Scalar bindings.
     c.Bind("nav_visible",  &g_hud_model.nav_visible);
     c.Bind("nav_sector",   &g_hud_model.nav_sector);
@@ -4612,6 +5001,9 @@ b8 bs_rml_hud_init(const char* rml_path)
     c.Bind("fleet_pd_label",     &g_hud_model.fleet_pd_label);
     c.Bind("fleet_pd_warn",      &g_hud_model.fleet_pd_warn);
 
+    c.Bind("roster_visible", &g_hud_model.roster_visible);
+    c.Bind("roster",         &g_hud_model.roster);
+
     c.Bind("jump_visible", &g_hud_model.jump_visible);
 
     c.Bind("debug_visible", &g_hud_model.debug_visible);
@@ -4625,6 +5017,14 @@ b8 bs_rml_hud_init(const char* rml_path)
     c.Bind("inspector_btn_visible", &g_hud_model.inspector_btn_visible);
     c.Bind("inspector_visible",     &g_hud_model.inspector_visible);
     c.Bind("insp_ship_name",        &g_hud_model.insp_ship_name);
+    c.Bind("insp_status",           &g_hud_model.insp_status);
+    c.Bind("insp_portrait_left",    &g_hud_model.insp_portrait_left);
+    c.Bind("insp_portrait_top",     &g_hud_model.insp_portrait_top);
+    c.Bind("insp_portrait_size",    &g_hud_model.insp_portrait_size);
+    c.Bind("insp_ship_count",       &g_hud_model.insp_ship_count);
+    c.Bind("insp_ships",            &g_hud_model.insp_ships);
+    c.Bind("insp_show_loadout",     &g_hud_model.insp_show_loadout);
+    c.Bind("insp_show_doctrine",    &g_hud_model.insp_show_doctrine);
     c.Bind("bay",                   &g_hud_model.bay);
     c.Bind("gm_col",                &g_hud_model.gm_col);
     c.Bind("gm_row",                &g_hud_model.gm_row);
@@ -4783,6 +5183,33 @@ void bs_rml_hud_update(const bs_rml_hud_state* s)
         }
     }
 
+    g_hud_model.roster_visible = s->roster_visible ? true : false;
+    {
+        i32 n = s->roster_count;
+        if (n < 0) n = 0;
+        if (n > BS_RML_ROSTER_MAX) n = BS_RML_ROSTER_MAX;
+        g_hud_model.roster.resize((size_t)n);
+        for (i32 i = 0; i < n; ++i)
+        {
+            const bs_rml_roster_row& src = s->roster[i];
+            BsRmlHudRosterRow&       dst = g_hud_model.roster[(size_t)i];
+            bs_rml_assign(dst.label,       src.label,       sizeof(src.label));
+            bs_rml_assign(dst.status,      src.status,      sizeof(src.status));
+            bs_rml_assign(dst.action,      src.action,      sizeof(src.action));
+            bs_rml_assign(dst.action_insp, src.action_insp, sizeof(src.action_insp));
+            dst.selected = src.selected ? true : false;
+            dst.piloted  = src.piloted ? true : false;
+            dst.hovered  = src.hovered ? true : false;
+            dst.chip.resize(4);
+            for (i32 k = 0; k < 4; ++k)
+            {
+                bs_rml_assign(dst.chip[(size_t)k].label,  src.chip[k].label,  sizeof(src.chip[k].label));
+                bs_rml_assign(dst.chip[(size_t)k].action, src.chip[k].action, sizeof(src.chip[k].action));
+                dst.chip[(size_t)k].on = src.chip[k].on ? true : false;
+            }
+        }
+    }
+
     g_hud_model.jump_visible = s->jump_visible ? true : false;
 
     g_hud_model.debug_visible = s->debug_visible ? true : false;
@@ -4796,6 +5223,40 @@ void bs_rml_hud_update(const bs_rml_hud_state* s)
     g_hud_model.inspector_btn_visible = s->inspector_btn_visible ? true : false;
     g_hud_model.inspector_visible     = s->inspector_visible ? true : false;
     bs_rml_assign(g_hud_model.insp_ship_name, s->insp_ship_name, sizeof(s->insp_ship_name));
+    bs_rml_assign(g_hud_model.insp_status,    s->insp_status,    sizeof(s->insp_status));
+    bs_rml_assign(g_hud_model.insp_portrait_left, s->insp_portrait_left, sizeof(s->insp_portrait_left));
+    bs_rml_assign(g_hud_model.insp_portrait_top,  s->insp_portrait_top,  sizeof(s->insp_portrait_top));
+    bs_rml_assign(g_hud_model.insp_portrait_size, s->insp_portrait_size, sizeof(s->insp_portrait_size));
+    g_hud_model.insp_show_loadout  = s->insp_show_loadout ? true : false;
+    g_hud_model.insp_show_doctrine = s->insp_show_doctrine ? true : false;
+    {
+        i32 n = s->insp_ship_count;
+        if (n < 0) n = 0;
+        if (n > BS_RML_ROSTER_MAX) n = BS_RML_ROSTER_MAX;
+        g_hud_model.insp_ship_count = n;
+        // The vector ALWAYS holds the full capacity: the markup addresses entries by literal
+        // index (insp_ships[K].name) even while hidden, because data-if only toggles display
+        // -- the bindings still evaluate, so every index must stay valid.
+        g_hud_model.insp_ships.resize((size_t)BS_RML_ROSTER_MAX);
+        for (i32 i = 0; i < BS_RML_ROSTER_MAX; ++i)
+        {
+            BsRmlHudInspShip& dst = g_hud_model.insp_ships[(size_t)i];
+            if (i < n)
+            {
+                const bs_rml_insp_ship& src = s->insp_ships[i];
+                bs_rml_assign(dst.sprite, src.sprite, sizeof(src.sprite));
+                bs_rml_assign(dst.name,   src.name,   sizeof(src.name));
+                bs_rml_assign(dst.status, src.status, sizeof(src.status));
+                bs_rml_assign(dst.action, src.action, sizeof(src.action));
+                dst.selected = src.selected ? true : false;
+            }
+            else
+            {
+                dst.sprite.clear(); dst.name.clear(); dst.status.clear(); dst.action.clear();
+                dst.selected = false;
+            }
+        }
+    }
     {
         i32 n = s->bay_count;
         if (n < 0) n = 0;

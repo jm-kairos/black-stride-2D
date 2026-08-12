@@ -21,6 +21,12 @@ static constexpr f32 RTS_STRAFE_GAIN = 3.0f;
 // Formation layout.
 static constexpr f32 FORMATION_SPACING_MUL = 2.5f;   // x max bounding radius
 static constexpr f32 FORMATION_MIN_SPACING = 400.0f; // world units floor
+// Minimum fleet-ship separation: center distance below the SUM of the two hulls' bounding radii
+// times this counts as too close, so at 1.0 the bounding circles never overlap. Sized from the
+// hulls, never a constant, like escort's station ring -- and deliberately below both
+// FORMATION_SPACING_MUL (2.5x one radius) and ESCORT_STATION_MUL (2.6x), so holding a formation
+// slot or an escort station never puts a ship inside the ring it is pushed out of.
+static constexpr f32 FLEET_MIN_SEPARATION_MUL = 1.0f;
 // =====================================================================================
 static f32 normalize_angle(f32 a) {
     while (a > BS_PI) a -= 2.0f * BS_PI;
@@ -271,7 +277,9 @@ void FleetShip::update_escort(f32 dt) {
     // Face the escortee rather than the travel heading: a screening ship should keep its guns
     // and shields oriented on what it is protecting, not on whichever way station-keeping
     // happens to be nudging it that frame.
-    steering::apply_face(sh, &flight, desired, to_t, m.accel, m.max_speed, m.max_turn, dt);
+    // control_face, not apply_face: FleetShip::simulate integrates every fleet member's pose,
+    // so the integrating form moved the ship twice per frame -- escorts flew at double speed.
+    steering::control_face(sh, &flight, desired, to_t, m.accel, m.max_speed, m.max_turn, dt);
 }
 // How far outside the threat's reach an avoiding ship tries to get. Slightly over 1 so it does
 // not sit exactly on the boundary and flip between running and idling every frame.
@@ -296,7 +304,8 @@ void FleetShip::update_avoid(f32 dt) {
     // Nose stays ON the threat while running: backing away facing the enemy keeps forward
     // weapons and the strongest arc pointed at it, which is what withdrawing under fire wants.
     Vec2 desired = steering::flee(to_t, m.max_speed);
-    steering::apply_face(sh, &flight, desired, to_t, m.accel, m.max_speed, m.max_turn, dt);
+    // control_face for the same reason as update_escort: simulate owns pose integration.
+    steering::control_face(sh, &flight, desired, to_t, m.accel, m.max_speed, m.max_turn, dt);
 }
 // =====================================================================================
 // Fleet
@@ -523,6 +532,32 @@ void Fleet::order_rally() {
     order_escort(&m_ships[0].ship);
 }
 // =====================================================================================
+// One ship's response to a too-close neighbor (`to_other` points at it). A ship with a live
+// order gets an accel-scaled ADDITIVE nudge away -- its controller's closed loop absorbs the
+// bias without losing the order. An orderless ship is DRIVEN toward the repulsion ramp instead:
+// the ramp fades to zero at the ring edge, so the ship glides to rest just outside rather than
+// coasting away forever (nothing else ever damps an idle ship's velocity). The piloted ship is
+// never adjusted -- the player's stick is authoritative, its partner does all the yielding, the
+// same immovability convention resolve_ship_collision applies to the enemy hull.
+static void separation_adjust(FleetShip* fs, Vec2 to_other, f32 dist, f32 min_sep,
+                              b8 piloted, f32 dt) {
+    if (piloted || dist < 0.001f) return;   // coincident pair has no direction; collision owns it
+    const ShipMotion& m = fs->ship.motion;
+    b8 regulated = fs->has_move_target || fs->has_escort_target ||
+                   fs->has_avoid_target || fs->has_attack_target;
+    if (regulated) {
+        f32  t    = 1.0f - dist / min_sep;  // penetration: 0 at the ring -> 1 at contact
+        Vec2 away = vec2_scale(to_other, -1.0f / dist);
+        fs->flight.velocity = vec2_add(fs->flight.velocity, vec2_scale(away, m.accel * t * dt));
+    } else {
+        Vec2 desired = steering::separation(to_other, dist, min_sep, m.max_speed);
+        Vec2 delta   = vec2_sub(desired, fs->flight.velocity);
+        f32  step    = m.accel * dt;
+        f32  dl      = vec2_length(delta);
+        if (dl > step) delta = vec2_scale(delta, step / dl);
+        fs->flight.velocity = vec2_add(fs->flight.velocity, delta);
+    }
+}
 void Fleet::update_autopilot(game_state* s, f32 dt, i32 piloted_idx) {
     for (i32 i = 0; i < m_count; ++i) {
         if (i == piloted_idx) continue;
@@ -534,6 +569,21 @@ void Fleet::update_autopilot(game_state* s, f32 dt, i32 piloted_idx) {
         // the ship is outside the threat's reach.
         else if (m_ships[i].has_escort_target) m_ships[i].update_escort(dt);
         else if (m_ships[i].has_avoid_target)  m_ships[i].update_avoid(dt);
+    }
+    // ---- Minimum separation post-pass: fleet ships never crowd inside each other's ring ----
+    // Runs AFTER the order updates so it corrects the frame's final ordered velocities, and
+    // mutates velocities only -- simulate_all owns integration, the same contract as every
+    // other control path. Pairwise over at most FLEET_MAX_SHIPS ships, so the N^2 is trivial.
+    for (i32 i = 0; i < m_count; ++i) {
+        for (i32 j = i + 1; j < m_count; ++j) {
+            Vec2 to_j = hierpos_diff(&m_ships[j].ship.origin, &m_ships[i].ship.origin);
+            f32  dist = vec2_length(to_j);
+            f32  min_sep = (ship_bounding_radius(&m_ships[i].ship) +
+                            ship_bounding_radius(&m_ships[j].ship)) * FLEET_MIN_SEPARATION_MUL;
+            if (dist >= min_sep) continue;
+            separation_adjust(&m_ships[i], to_j,                    dist, min_sep, i == piloted_idx, dt);
+            separation_adjust(&m_ships[j], vec2_scale(to_j, -1.0f), dist, min_sep, j == piloted_idx, dt);
+        }
     }
 }
 void Fleet::simulate_all(f32 dt, b8 piloted_turn_commanded, i32 piloted_idx) {

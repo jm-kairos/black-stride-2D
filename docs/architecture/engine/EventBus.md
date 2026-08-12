@@ -60,7 +60,9 @@ schema, tag, or helper. Handlers opt into consuming an event by returning `TRUE`
 - `event.cpp:3` includes `core/memory/bs_memory.h` but makes no call into it — the containers
   resolve to `std::vector`/`std::array` and use the global allocator, so **the bus is not routed
   through the engine's memory accounting**.
-- The whole subsystem has no game-side consumer, so its export surface is currently unexercised.
+- ~~The whole subsystem has no game-side consumer~~ — `event_fire` gained its first sandbox
+  caller 2026-08-12 (`game.cpp` fires `EVENT_CODE_APPLICATION_QUIT` from its modal-aware ESC
+  handler); `event_register`/`event_unregister` remain unexercised across the boundary.
 
 **Source paths:** `engine/source/core/event.{cpp,h}`
 

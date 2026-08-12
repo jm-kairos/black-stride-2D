@@ -2335,6 +2335,15 @@ struct game_state {
 
     Ship&       player_ship()        { return fleet_state.fleet.flagship().ship; }
 
+    // The ship the full-screen inspector is looking at (clamped to the live fleet; defaults to
+    // the flagship). The loadout POOL stays the flagship's stash arrays regardless -- one
+    // fleet-wide inventory serving whichever hull is being refitted.
+    Ship&       inspected_ship() {
+        i32 i = inspected_ship_idx;
+        if (i < 0 || i >= fleet_state.fleet.count()) i = 0;
+        return fleet_state.fleet.at(i).ship;
+    }
+
 
 
     const Ship& player_ship()  const { return fleet_state.fleet.at(0).ship; }
@@ -3536,7 +3545,11 @@ struct game_state {
 
 
 
-    bool             show_flagship_inspector;  // Flagship inspector window toggle (bottom-center Inspector button)
+    bool             show_flagship_inspector;  // Ship inspector window toggle (bottom-center Inspector button / roster "i")
+
+    i32              inspected_ship_idx;       // Fleet member the full-screen inspector is looking at (clamped; 0 = flagship)
+
+    i32              insp_tab;                 // Inspector middle-section tab: 0 = Loadout, 1 = Doctrine
 
 
 

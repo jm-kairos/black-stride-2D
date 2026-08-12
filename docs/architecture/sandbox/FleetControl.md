@@ -13,7 +13,7 @@ does not own NPC movement — although LocalAgentAi is the sole external consume
 `sandbox/source/sim/ship_control.h` — `control_ship_global`, `resolve_ship_collision`,
 `piloted_ship_origin`.
 `sandbox/source/sim/steering.h` — `namespace steering`: `arrive`, `seek`, `flee`, `standoff`,
-`apply`, `apply_face`.
+`separation`, `apply`, `apply_face`, `control_face`.
 Used from outside: `fleet.h` by 4 subsystems, `ship_control.h` by 2 (CameraControl,
 FrameOrchestrator), `steering.h` by 1 (LocalAgentAi only).
 
@@ -68,6 +68,21 @@ InWorldOverlays, FrameOrchestrator, GameStateModel.
   the others, so at most one of `update_move` / `update_escort` / `update_avoid` drives a ship
   in a frame — they all write velocity, and two of them running would fight every tick. Avoid is
   the only self-terminating order: it clears itself once the ship is outside the threat's reach.
+- **`FleetShip::simulate` is the ONLY pose integrator for fleet ships.** Escort and avoid go
+  through `steering::control_face` — the same control law as `apply_face` minus the pose add —
+  because `simulate_all` integrates every member every frame and the integrating form moved
+  those ships twice per frame (escorts flew at double speed). `apply`/`apply_face` remain the
+  all-in-one form for agents with no other integrator (LocalAgentAi).
+- **Fleet ships hold a minimum separation, sized from BOTH hulls.** A post-pass in
+  `update_autopilot` walks member pairs; centers closer than the sum of the two bounding radii
+  (`FLEET_MIN_SEPARATION_MUL` = 1.0 — bounding circles never overlap) get pushed apart,
+  velocity-only, deliberately below the formation spacing (2.5x) and escort station ring (2.6x)
+  so holding a slot never fights the ring. A ship with a live order gets an accel-scaled
+  additive nudge its controller absorbs; an orderless ship is DRIVEN toward
+  `steering::separation`'s ramp, which fades to zero at the ring edge so it glides to rest just
+  outside instead of coasting away forever. The piloted ship is never adjusted — its partner
+  does all the yielding, the same immovability convention `resolve_ship_collision` applies to
+  the enemy hull.
 - **Escort and avoid size themselves from the OTHER hull, never a constant.** Station-keeping is
   a multiple of the escortee's bounding radius (a corvette shadowing a cruiser must sit further
   out just to clear the hull), and the avoid clear range is the threat's own longest
@@ -132,6 +147,6 @@ characteristics without touching this code.
 **Source paths:** `sandbox/source/sim/fleet.{cpp,h}`, `sandbox/source/sim/ship_control.{cpp,h}`,
 `sandbox/source/sim/steering.{cpp,h}`
 
-**Last verified:** 2026-08-10, working tree on `game` (adds `FleetStance`, the escort/avoid
-standing orders and `order_rally`; attack orders still fire guided ordnance only, now also gated
-on stance)
+**Last verified:** 2026-08-11, working tree on `game` (adds the minimum-separation post-pass,
+`steering::separation`/`control_face`, and the single-integrator fix for escort/avoid; attack
+orders still fire guided ordnance only, gated on stance)

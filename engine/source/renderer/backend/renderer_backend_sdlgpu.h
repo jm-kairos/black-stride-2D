@@ -26,6 +26,9 @@ void       sdlgpu_backend_destroy_texture(struct renderer_backend* backend, bs_t
 void       sdlgpu_backend_set_camera(struct renderer_backend* backend, Camera2D camera);
 void       sdlgpu_backend_draw_sprite(struct renderer_backend* backend, const bs_sprite* sprite);
 void       sdlgpu_backend_draw_mapped_sprite(struct renderer_backend* backend, const bs_mapped_sprite* sprite);
+void       sdlgpu_backend_portrait_begin(struct renderer_backend* backend, Camera2D camera);
+void       sdlgpu_backend_portrait_end(struct renderer_backend* backend);
+void       sdlgpu_backend_thumb_begin(struct renderer_backend* backend, i32 slot, Camera2D camera);
 void       sdlgpu_backend_draw_starfield(struct renderer_backend* backend, const bs_starfield_params* params);
 void       sdlgpu_backend_draw_sunburst(struct renderer_backend* backend, const bs_sunburst_params* params);
 void       sdlgpu_backend_draw_starsurface(struct renderer_backend* backend, const bs_starsurface_params* params);

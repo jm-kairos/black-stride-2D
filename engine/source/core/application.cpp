@@ -223,13 +223,11 @@ b8 application_on_key(u16 code, VOID_PTR sender, VOID_PTR listener_inst, event_c
     if (code == EVENT_CODE_KEY_PRESSED)
     {
         u16 key_code = context.data.u16[0];
-        if (key_code == KEY_ESCAPE)
-        {
-            event_context data = {};
-            event_fire(EVENT_CODE_APPLICATION_QUIT, 0, data);
-
-            return TRUE;
-        } else if (key_code == KEY_A){
+        // NOTE: ESC no longer quits here. Quit-on-ESC is GAME policy now (game.cpp fires
+        // EVENT_CODE_APPLICATION_QUIT itself), because the game needs the key to be
+        // modal-aware: an ESC that collapses an open management window must be consumed by
+        // it, not also tear the application down.
+        if (key_code == KEY_A){
             BS_LOG_DEBUG("Explicit - A key pressed !");
 
         }else{

@@ -328,6 +328,27 @@ void renderer_draw_mapped_sprite(const bs_mapped_sprite* sprite)
         state.backend.draw_mapped_sprite(&state.backend, sprite);
 }
 
+void renderer_portrait_begin(Camera2D camera)
+{
+    if (!state.initialized || !state.frame_active) return;
+    if (state.backend.portrait_begin)
+        state.backend.portrait_begin(&state.backend, camera);
+}
+
+void renderer_portrait_end(void)
+{
+    if (!state.initialized || !state.frame_active) return;
+    if (state.backend.portrait_end)
+        state.backend.portrait_end(&state.backend);
+}
+
+void renderer_thumb_begin(i32 slot, Camera2D camera)
+{
+    if (!state.initialized || !state.frame_active) return;
+    if (state.backend.thumb_begin)
+        state.backend.thumb_begin(&state.backend, slot, camera);
+}
+
 void renderer_draw_starfield(const bs_starfield_params* params)
 {
     if (!state.initialized || !state.frame_active || !params || !state.backend.draw_starfield)
