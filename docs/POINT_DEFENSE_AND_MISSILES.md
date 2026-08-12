@@ -26,16 +26,26 @@
 >   attributed logs (`PD: missile intercepted`, `MISSILE HIT -- PD holding / capacitor
 >   dry / PD saturated`, `Flak burst: N ordnance destroyed`), gated engagement ring in
 >   `defense_laser_overlay.cpp`.
+> - **F — Pool equipment (2026-08-12)**: the PD DEVICE became fleet-pool inventory like
+>   the weapons — `game_state::fleet_pd_stock` (one device), mounted onto a defense
+>   hardpoint from any ship's inspector. `DefenseLaser::enabled` now means "device
+>   mounted on this hull" (default FALSE; set only by the mount/unmount paths), and
+>   `point_defense_update` gates on `enabled && point_defense_mount >= 0`. Doctrine
+>   UI, the status lines and the engagement ring all follow the mount. The per-hull
+>   `DefenseLaser` struct remains the device's tuning/doctrine storage. "More PD
+>   mounts = more beams" (Phase C) still holds — scaling now means acquiring devices.
 
 Design principle (agreed): **automated hands, player brain.** PD tracking is never manual;
 player agency lives in doctrine (stances/priorities), a shared resource (capacitor),
 geometry (positioning/screens), and a manual skill channel (flak cannons).
 
-## Current state (verified in code)
+## Baseline at planning time (historical — superseded by the log above)
 
 - `sim/point_defense.cpp`: fully automated single-beam PD per ship — acquires *nearest*
   hostile projectile in Layer-1 sensor range, dwell 0.15s, retarget cooldown 0.08s,
   DPS vs projectile HP. Free to run (no resource), always-on (`enabled`).
+  *(No longer true: phase B priced it, phase C rescored it, phase F made the device
+  pool equipment that must be mounted.)*
 - `sim/projectile.h`: dumbfire ballistic only; has `hp/max_hp` (PD-ready), no guidance.
 - No capacitor/energy system on `Ship`. No weapon fire modes. Missiles don't exist.
 - Fire groups 1–5 + gm-matrix already wired through HUD; fleet panel has room for a

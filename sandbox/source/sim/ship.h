@@ -213,7 +213,8 @@ enum PdPriority : u8 { PD_PRI_TTI = 0, PD_PRI_GUIDED_FIRST = 1, PD_PRI_NEAREST =
 
 struct DefenseLaser {
 
-    b8  enabled            = TRUE;    // master mount/editor switch (unmounted = disabled);
+    b8  enabled            = FALSE;   // powered: TRUE only while the fleet's PD device is
+                                      // mounted on this hull (set by the mount/unmount paths);
                                       // PD_HOLD is the TACTICAL off, this is the physical one
 
     u8  stance             = PD_STANDARD;    // HOLD (no fire, no drain) / STANDARD / OVERDRIVE
@@ -445,9 +446,10 @@ struct Ship {
 
     DefenseLaser  point_defense;
 
-    // Which hardpoint the point-defense currently occupies, or -1 when it is unmounted
-    // (sitting in the defensive inventory). Only the flagship's inspector manages this;
-    // other ships leave the point-defense always-on (mount -1).
+    // Which hardpoint the point-defense currently occupies, or -1 when no PD device is
+    // installed on this hull. The DEVICE is fleet-pool equipment (game_state::fleet_pd_stock,
+    // one per fleet); this struct is only its per-hull tuning/doctrine storage, inert unless
+    // mounted. The simulation gates on enabled AND mount >= 0 (sim/point_defense.cpp).
 
     i32           point_defense_mount = -1;
 

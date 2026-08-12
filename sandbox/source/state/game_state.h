@@ -3583,6 +3583,10 @@ struct game_state {
 
 
 
+    i32              fleet_pd_stock;           // Point-defense devices in the FLEET-WIDE pool (the bay tile shows while > 0; mounting decrements, unmounting/evicting increments). The per-hull DefenseLaser is only tuning storage.
+
+
+
     i32              pending_weapon_drag;      // Arsenal drag-drop: source index (hardpoint slot or stash index); -1 = none
 
 

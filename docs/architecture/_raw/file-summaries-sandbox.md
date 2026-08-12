@@ -1342,7 +1342,7 @@ Companion to `dependency-graph.json` and `file-summaries-engine.md` in this dire
 ## sandbox/source/sim/point_defense.cpp
 
 - **Path:** `sandbox/source/sim/point_defense.cpp`
-- **Purpose:** Runs the point-defense laser for every fleet ship — doctrine gating, target acquisition and validation, capacitor drain, damage application, and beam recording.
+- **Purpose:** Runs the point-defense laser for every fleet ship that carries the fleet's pooled PD device (gate: `enabled && point_defense_mount >= 0`) — doctrine gating, target acquisition and validation, capacitor drain, damage application, and beam recording.
 - **Key types/functions:** `point_defense_update(game_state*, f32 dt)`; local `GATE_FRAC[3]` table.
 - **Notable non-obvious dependencies:**
   - **Has strict ordering requirements stated only in the header** — after `combat_arena_sync_entities()` so positions are current, and *before* `combat_arena_update_projectiles()` so destroyed threats never advance or collide that frame. Getting this wrong would let intercepted missiles still hit.

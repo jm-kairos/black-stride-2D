@@ -399,7 +399,7 @@ void combat_arena_update_projectiles(game_state* s, f32 sim_dt) {
                     if (p->kind == PROJ_MISSILE && ce->is_drone && ce->ship) {
                         const DefenseLaser& pdl = ce->ship->point_defense;
                         const char* cause;
-                        if (!pdl.enabled || pdl.stance == PD_HOLD)
+                        if (!pdl.enabled || ce->ship->point_defense_mount < 0 || pdl.stance == PD_HOLD)
                             cause = "PD holding";
                         else if (ce->ship->cap_current < pdl.reserve_floor * ce->ship->cap_max)
                             cause = "capacitor dry";

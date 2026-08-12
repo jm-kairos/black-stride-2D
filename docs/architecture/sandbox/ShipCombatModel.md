@@ -59,6 +59,17 @@ the subsystem while sitting outside `ship.h`'s seven.)*
 - **A hardpoint holds at most one occupant across three parallel arrays** — `mounts[]`,
   `point_defense_mount`, `module_mounts[]`. Maintained by convention across the loadout code
   with no central check.
+- **The point-defense DEVICE is fleet-pool equipment, not a per-hull fixture.** The fleet owns
+  `game_state::fleet_pd_stock` devices (init 1); the bay shows the PD tile while stock > 0,
+  mounting decrements it and unmounting/evicting increments it, exactly like the weapon stash.
+  The per-hull `DefenseLaser` struct is only the device's tuning/doctrine storage, inert unless
+  mounted: `enabled` defaults FALSE and is set only by the mount/unmount paths, and the
+  simulation gates on `enabled && point_defense_mount >= 0` (`sim/point_defense.cpp`) so an
+  editor override can never arm a hull without the device. The PD range ring
+  (`render/defense_laser_overlay.cpp`) and the missile-hit attribution (`sim/combat_arena.cpp`)
+  carry the same mount test. The HUD reads the mount too: `pd_visible`, the inspector's PD
+  status line and the piloted panel's `fleet_pd_label` all show doctrine only for a hull that
+  carries the device, and read `"PD --"` otherwise.
 - **A module mounts on slots of its own size or larger.** Encoded in `hardpoint_fits_module`
   (`sim/ship.cpp`) and documented in `sim/module.h` — but re-implemented independently in two
   drag-validation paths (see tech debt).
@@ -98,10 +109,13 @@ the subsystem while sitting outside `ship.h`'s seven.)*
   autopilot is flying, so the player's whole attention is on the shot. What still separates the
   two schemes is that `control_ship_global` self-guards on `free_camera_active`
   (`sim/ship_control.cpp:21`), so detached still means the autopilot flies.
-- **Unguided offence is the player's; guided ordnance and defences are automated.** That one rule
-  decides every fire site: ballistics require the trigger, missiles fire from an attack order
-  (`sim/fleet.cpp`), point defense engages on its own doctrine. `WeaponKind` already expresses
-  the distinction, so a new weapon inherits the answer without reopening it.
+- **Unguided offence is the player's ON THE PILOTED HULL; everywhere else it is automated.**
+  On the hull the player is flying (attached or detached), ballistics require the trigger and
+  missiles fire from an attack order — the piloted hull's turrets and trigger follow the cursor
+  in both control modes, so the autopilot never fires its guns for it. Every OTHER fleet ship
+  fires both kinds under an attack order (`sim/fleet.cpp`, gated on `player_gunnery`), and
+  point defense engages on its own doctrine wherever the fleet's PD device is mounted.
+  `WeaponKind` still expresses the guided/unguided distinction at every fire site.
 - **`proj_life` IS the flight time to maximum reach**, because `weapon_effective_reach` is
   `proj_speed * proj_life`. Tuning engagement distance and tuning shot travel time are therefore
   the same edit, and the whole ballistic catalog was scaled by a uniform 0.15 (reach 19k–58k,
@@ -315,11 +329,10 @@ it reports affordability, and the caller commits via `ship_try_spend_cap`.
 `sandbox/source/sim/weapon.{cpp,h}`, `sandbox/source/sim/weapon_def.{cpp,h}`,
 `sandbox/source/sim/projectile.{cpp,h}`, `sandbox/source/render/ship_visual.{cpp,h}`
 
-**Last verified:** 2026-08-10, working tree on `game` (adds `ProjectileSystem::retire` / `::fx`
-and the spawn-side muzzle flash; `ship_muzzle_origin` factored out as the one barrel-geometry
-site; `vfx_family` and the guided-round trail history added to the data model; `render` gains an
-incandescent head, takes a per-family glow table as a parameter, loses the `glow_override`
-member, and loses the travelling fake muzzle flash; `WEAPON_FIRE_SLEWING` added so a mount holds
-fire until its barrel has trained onto the target; `HardpointDef::art_scale` plus
-`ship_hardpoint_unit` let a slot rescale everything it draws, and the `.ship` hardpoint line
-gains an optional trailing scale)
+**Last verified:** 2026-08-12, working tree on `game` (the point-defense becomes fleet-pool
+equipment — `DefenseLaser::enabled` defaults FALSE, the simulation and its two mirroring
+consumers gate on the mount, and `game_state::fleet_pd_stock` backs the bay tile and the
+mount/unmount/evict paths; the fire-ownership rule narrows to the piloted hull now that AI
+wingmen fire ballistics under attack orders — see FleetControl. Live-verified: fresh game shows
+no phantom PD anywhere, one bay tile, no intercepts under enemy fire; mounting on one escort
+arms that hull alone; unmounting returns the tile and stops the beams)

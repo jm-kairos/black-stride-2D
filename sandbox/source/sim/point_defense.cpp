@@ -15,7 +15,10 @@ void point_defense_update(game_state* s, f32 dt) {
     for (i32 i = 0; i < fleet.count(); ++i) {
         Ship&         sh = fleet.at(i).ship;
         DefenseLaser& L  = sh.point_defense;
-        if (!L.enabled) continue;
+        // A hull screens only while the fleet's PD device is actually installed on it. The
+        // mount test backs up `enabled` so an editor override can never arm a hull without
+        // the device (the two are kept in sync by the mount/unmount paths in game.cpp).
+        if (!L.enabled || sh.point_defense_mount < 0) continue;
 
         // ---- Doctrine (Phase C) --------------------------------------------------------------
         // HOLD is an order, not a suggestion: drop any in-progress lock, no drain, no acquisition.

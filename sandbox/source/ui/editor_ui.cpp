@@ -495,10 +495,13 @@ void build_editor_panel(game_state* s) {
             bs_ui_text(rng);
             if (changed) {
                 // Propagate tuning (not runtime state) to the whole fleet; range stays 0/live-coupled.
+                // `enabled` is deliberately NOT propagated: it now means "the fleet's PD device is
+                // mounted on this hull" and belongs to the mount/unmount paths. The checkbox still
+                // overrides the flagship's own flag as a dev switch; the simulation additionally
+                // gates on the mount, so an unmounted hull stays inert regardless.
                 Fleet& fleet = s->fleet_state.fleet;
                 for (i32 i = 0; i < fleet.count(); ++i) {
                     DefenseLaser& d = fleet.at(i).ship.point_defense;
-                    d.enabled           = pd.enabled;
                     d.damage_per_second = pd.damage_per_second;
                     d.dwell_time        = pd.dwell_time;
                     d.retarget_cooldown = pd.retarget_cooldown;

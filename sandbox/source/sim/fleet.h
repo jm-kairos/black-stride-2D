@@ -84,7 +84,10 @@ struct FleetShip {
     void update_move(f32 dt);
     // Autopilot an Attack order: rotate nose toward attack_target and fire when aligned.
     // If no move target is set, this also approaches the target to maintain engagement range.
-    void update_attack(game_state* s, f32 dt);
+    // player_gunnery = this is the hull the player is flying (attached OR detached): its
+    // ballistic triggers and turret aim stay with the player's cursor, so it fires guided
+    // ordnance only. Every other fleet ship fires its ballistics too.
+    void update_attack(game_state* s, f32 dt, b8 player_gunnery);
     // Autopilot an Escort order: hold station near escort_target, using steering::standoff so the
     // ship settles into a band rather than oscillating on the exact radius.
     void update_escort(f32 dt);
@@ -160,8 +163,11 @@ public:
     // Broadcast a jump radius to every ship (editor slider).
     void set_all_jump_radius(f32 radius);
     // ---- Simulation ------------------------------------------------------------------
-    // Run autopilot for every ordered ship except piloted_idx (-1 = none piloted).
-    void update_autopilot(game_state* s, f32 dt, i32 piloted_idx);
+    // Run autopilot for every ordered ship except auto_skip (-1 = drive them all, i.e. the
+    // camera is detached). piloted_idx is the REAL piloted index regardless of camera
+    // attachment: even while the autopilot flies that hull, its trigger and turret aim
+    // still belong to the player's cursor (update_attack's player_gunnery).
+    void update_autopilot(game_state* s, f32 dt, i32 auto_skip, i32 piloted_idx);
     // Integrate every ship's pose. The piloted ship uses flagship_turn_commanded; the rest
     // auto-stabilize their spin (turn_commanded = FALSE).
     void simulate_all(f32 dt, b8 piloted_turn_commanded, i32 piloted_idx);

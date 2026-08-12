@@ -19,7 +19,9 @@ void defense_laser_overlay_draw(game_state* s) {
     {
         const Ship&         flag = s->player_ship();
         const DefenseLaser& L    = flag.point_defense;
-        if (L.enabled && L.stance != PD_HOLD) {
+        // Mount test mirrors the simulation gate in sim/point_defense.cpp: no device, no ring,
+        // even if an editor override left `enabled` set.
+        if (L.enabled && flag.point_defense_mount >= 0 && L.stance != PD_HOLD) {
             static const f32 GATE_FRAC[3] = { 0.6f, 0.8f, 1.0f };
             f32 range = ((L.range > 0.0f) ? L.range : flag.sensors.layer0_radius)
                         * GATE_FRAC[(L.gate_tier < 3) ? L.gate_tier : 2];

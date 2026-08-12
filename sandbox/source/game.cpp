@@ -471,8 +471,12 @@ b8 game_init(Game* game_inst) {
 
         fs.ship.weapon_stash_count  = 4;
 
-        // Point-defense also starts UNMOUNTED in the defensive inventory (disabled until the player
-        // drags it onto a defense hardpoint from the Arsenal inspector).
+        // The fleet owns ONE point-defense device, stocked in the fleet-wide pool like the
+        // cannons above (mount it onto any hull's defense hardpoint from the inspector).
+        // The explicit disable below is redundant with DefenseLaser's default (belt and
+        // braces at the one spawn site).
+        s->fleet_pd_stock = 1;
+
         fs.ship.point_defense.enabled = FALSE;
 
         fs.ship.point_defense_mount   = -1;
@@ -1036,8 +1040,9 @@ static void arsenal_drop_on_slot(game_state* s, i32 dst) {
                 if (fs.mounts[dst]) {
                     ship_stash_append(pool, fs.mounts[dst]);      // occupant weapon -> pool stash
                 } else if (fs.point_defense_mount == dst) {
-                    fs.point_defense_mount   = -1;                // occupant PD -> this hull's inventory
+                    fs.point_defense_mount   = -1;                // occupant PD -> the fleet pool
                     fs.point_defense.enabled = FALSE;
+                    ++s->fleet_pd_stock;
                 }
                 fs.mounts[dst] = mounting;
                 fs.mount_groups[dst] = 1;                         // fresh mount -> group 1
@@ -1098,8 +1103,9 @@ static void arsenal_drop_on_slot(game_state* s, i32 dst) {
                 ship_rehome_weapons(fs);
                 action_log_push(s, "Weapon moved to '%s'.", dhp.id);
             }
-        } else if (kind == 2 && fs.point_defense_mount != dst) {
-            // Mount the point-defense (from the defensive inventory) onto hardpoint dst.
+        } else if (kind == 2 && s->fleet_pd_stock > 0 && fs.point_defense_mount < 0) {
+            // Mount a point-defense device from the FLEET POOL onto hardpoint dst. Stock-gated:
+            // the bay tile only shows while stock > 0, and a hull carries at most one device.
             if (!dst_takes_defense) {
                 action_log_push(s, "'%s' is a %s slot - the point-defense doesn't fit.",
                                 dhp.id, hardpoint_kind_label(dhp.accepts));
@@ -1111,6 +1117,7 @@ static void arsenal_drop_on_slot(game_state* s, i32 dst) {
                     ship_stash_append(pool, fs.mounts[dst]);      // occupant weapon -> pool stash
                     fs.mounts[dst] = nullptr;
                 }
+                --s->fleet_pd_stock;
                 fs.point_defense_mount   = dst;
                 fs.point_defense.enabled = TRUE;
                 ship_rehome_weapons(fs);
@@ -1160,8 +1167,9 @@ static void arsenal_drop_on_slot(game_state* s, i32 dst) {
                     fs.mounts[dst] = nullptr;
                     ship_rehome_weapons(fs);
                 } else if (fs.point_defense_mount == dst) {
-                    fs.point_defense_mount   = -1;                // occupant PD -> this hull's inventory
+                    fs.point_defense_mount   = -1;                // occupant PD -> the fleet pool
                     fs.point_defense.enabled = FALSE;
+                    ++s->fleet_pd_stock;
                 }
                 fs.module_mounts[dst] = m;
                 ship_module_stash_remove_at(pool, src);
@@ -1398,13 +1406,19 @@ static void game_push_hud(game_state* s, f32 dt) {
                      ship->cap_current, ship->cap_max);
             static const char* PD_ST[3] = { "HOLD", "STANDARD", "OVERDRIVE" };
             // Short priority names for the one-line panel label (the doctrine chips carry the
-            // full names); gate as a bare percentage.
+            // full names); gate as a bare percentage. "PD: --" when this hull carries no
+            // device -- doctrine on a PD that is not there would be a lie.
             static const char* PD_PR[3] = { "IMPACT", "MISSILES", "NEAREST" };
             static const char* PD_GT[3] = { "60%", "80%", "100%" };
             const DefenseLaser& pdl = ship->point_defense;
-            snprintf(hud.fleet_pd_label, sizeof(hud.fleet_pd_label), "PD: %s - %s - %s",
-                     PD_ST[pdl.stance % 3], PD_PR[pdl.priority % 3], PD_GT[pdl.gate_tier % 3]);
-            hud.fleet_pd_warn = (pdl.stance != PD_STANDARD) ? TRUE : FALSE;
+            if (ship->point_defense_mount >= 0) {
+                snprintf(hud.fleet_pd_label, sizeof(hud.fleet_pd_label), "PD: %s - %s - %s",
+                         PD_ST[pdl.stance % 3], PD_PR[pdl.priority % 3], PD_GT[pdl.gate_tier % 3]);
+                hud.fleet_pd_warn = (pdl.stance != PD_STANDARD) ? TRUE : FALSE;
+            } else {
+                snprintf(hud.fleet_pd_label, sizeof(hud.fleet_pd_label), "PD: --");
+                hud.fleet_pd_warn = FALSE;
+            }
         }
     }
 
@@ -1590,18 +1604,26 @@ static void game_push_hud(game_state* s, f32 dt) {
                 static const char* PD_ST[3] = { "HOLD", "STANDARD", "OVERDRIVE" };
                 static const char* PD_PR[3] = { "IMPACT", "MISSILES", "NEAREST" };
                 static const char* PD_GT[3] = { "60%", "80%", "100%" };
-                const DefenseLaser& ipd = fs.point_defense;
+                // Doctrine reads out only while this hull carries the fleet's PD device.
+                char pd_line[48];
+                if (fs.point_defense_mount >= 0) {
+                    const DefenseLaser& ipd = fs.point_defense;
+                    snprintf(pd_line, sizeof(pd_line), "%s - %s - %s",
+                             PD_ST[ipd.stance % 3], PD_PR[ipd.priority % 3], PD_GT[ipd.gate_tier % 3]);
+                } else {
+                    snprintf(pd_line, sizeof(pd_line), "--");
+                }
                 snprintf(hud.insp_status, sizeof(hud.insp_status),
                          "MEMBER     %d of %d\n"
                          "STANCE     %s\n"
                          "ORDER      %s\n"
                          "CAPACITOR  %.0f / %.0f\n"
-                         "PD         %s - %s - %s\n"
+                         "PD         %s\n"
                          "MOUNTS     %d of %d fitted",
                          ii + 1, s->fleet_state.fleet.count(),
                          ST_NAME[ifs.stance & 3], what,
                          fs.cap_current, fs.cap_max,
-                         PD_ST[ipd.stance % 3], PD_PR[ipd.priority % 3], PD_GT[ipd.gate_tier % 3],
+                         pd_line,
                          fitted, fs.hardpoint_count);
             }
             hud.insp_show_loadout  = (s->insp_tab == 0) ? TRUE : FALSE;
@@ -1646,8 +1668,10 @@ static void game_push_hud(game_state* s, f32 dt) {
                 row.selected = FALSE;
                 fill_card_weapon(row, fs, w);
             }
-            // 2) Point-defense, ONLY while unmounted (mounted PD lives on its hardpoint).
-            if (fs.point_defense_mount < 0 && nb < BS_RML_BAY_MAX) {
+            // 2) Point-defense, while the fleet POOL holds a device (a mounted PD lives on its
+            // hardpoint, on whichever hull carries it). The card's numbers read the INSPECTED
+            // hull's tuning storage, which is what the device would run with if mounted here.
+            if (s->fleet_pd_stock > 0 && nb < BS_RML_BAY_MAX) {
                 bs_rml_bay_line& row = hud.bay[nb++];
                 snprintf(row.glyph,  sizeof(row.glyph),  "P");
                 snprintf(row.icon,   sizeof(row.icon),   "ic-pd");
@@ -1767,7 +1791,9 @@ static void game_push_hud(game_state* s, f32 dt) {
                 }
             }
             // Point-defense doctrine chips (Phase C): stance / priority / engagement gate.
-            hud.pd_visible  = TRUE;
+            // Shown only while the INSPECTED hull carries the device -- doctrine for a PD
+            // that is not there is noise.
+            hud.pd_visible  = (fs.point_defense_mount >= 0) ? TRUE : FALSE;
             hud.pd_stance   = (i32)fs.point_defense.stance;
             hud.pd_priority = (i32)fs.point_defense.priority;
             hud.pd_gate     = (i32)fs.point_defense.gate_tier;
@@ -2340,6 +2366,7 @@ static void game_push_hud(game_state* s, f32 dt) {
                 i32 slot = fs.point_defense_mount;
                 fs.point_defense_mount   = -1;
                 fs.point_defense.enabled = FALSE;
+                ++s->fleet_pd_stock;                 // device back into the fleet pool
                 ship_rehome_weapons(fs);
                 action_log_push(s, "Point Defense Laser returned to the module bay (was '%s').",
                                 fs.hardpoints[slot].id);
@@ -3024,8 +3051,8 @@ b8 game_update(Game* game_inst, f32 dt) {
                 if (hit >= 0 && hit != src) {
                     arsenal_drop_on_slot(s, hit);                 // move/swap; disarms the drag
                 } else if (hit < 0 && src >= 0 && src < fsh.hardpoint_count) {
-                    // Released off the ship: unmount back into the fleet-wide pool (the PD is
-                    // per-hull and simply goes dormant on its own ship).
+                    // Released off the ship: unmount back into the fleet-wide pool (weapons,
+                    // the PD device and modules alike -- the PD returns to fleet_pd_stock).
                     if (kind == 0 && fsh.mounts[src]) {
                         Weapon* w = fsh.mounts[src];
                         fsh.mounts[src] = nullptr;
@@ -3035,6 +3062,7 @@ b8 game_update(Game* game_inst, f32 dt) {
                     } else if (kind == 3 && fsh.point_defense_mount == src) {
                         fsh.point_defense_mount   = -1;
                         fsh.point_defense.enabled = FALSE;
+                        ++s->fleet_pd_stock;         // device back into the fleet pool
                         ship_rehome_weapons(fsh);
                         action_log_push(s, "Point Defense Laser returned to inventory.");
                     } else if (kind == 5 && fsh.module_mounts[src]) {
@@ -3313,7 +3341,11 @@ b8 game_update(Game* game_inst, f32 dt) {
 
         s->profiler.begin(PROF_FLEET_AUTOPILOT);
 
-        s->fleet_state.fleet.update_autopilot(s, sim_dt, auto_skip);
+        // piloted_idx rides along separately from auto_skip: while detached the piloted hull IS
+        // autopilot-driven, but its ballistic trigger and turret aim still belong to the
+        // player's cursor (the traverse+fire block above runs in both control modes), so
+        // update_attack must know which hull that is to keep it missile-only.
+        s->fleet_state.fleet.update_autopilot(s, sim_dt, auto_skip, piloted_idx);
 
         s->profiler.end(PROF_FLEET_AUTOPILOT);
 

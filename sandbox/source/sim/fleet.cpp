@@ -98,7 +98,7 @@ void FleetShip::update_move(f32 dt) {
     if (cur_speed > m.max_speed) fl->velocity = vec2_scale(fl->velocity, m.max_speed / cur_speed);
 }
 // =====================================================================================
-void FleetShip::update_attack(game_state* s, f32 dt) {
+void FleetShip::update_attack(game_state* s, f32 dt, b8 player_gunnery) {
     if (!has_attack_target) return;
     // PASSIVE refuses the engagement outright rather than holding fire while tracking: a ship
     // told not to fight should not be turning its nose at things either, or it drifts off station
@@ -191,27 +191,29 @@ void FleetShip::update_attack(game_state* s, f32 dt) {
             fl->velocity = vec2_add(fl->velocity, vec2_scale(fl->velocity, -m.decel * 0.5f * dt / speed));
         }
     }
-    // Fire when facing the target, outside minimum range, and within the bearing weapon's OWN
-    // reach -- so a long-legged launcher engages at its full authored range instead of being
-    // capped by a hardcoded constant.
+    // Fire when facing the target, outside minimum range, and within each weapon's OWN reach --
+    // so a long-legged launcher engages at its full authored range instead of being capped by a
+    // hardcoded constant.
     //
-    // GUIDED ORDNANCE ONLY. An attack order is the MISSILE interface; unguided offence belongs to
-    // the player's left button (game.cpp's fire loop), in both control modes. Auto-firing the guns
-    // here would put the passive "designate and it shoots for you" model back into the exact mode
-    // where the player has the most attention free to aim -- and it would beat them at it, because
-    // the lead solution below is something the manual path deliberately does not do. A missile has
-    // no such asymmetry to create: it steers itself after launch, so there is no aiming skill to
-    // take away, and firing it is the whole point of issuing the order.
+    // WHO fires WHAT: guided ordnance fires for EVERY fleet ship under an attack order -- a
+    // missile steers itself after launch, so there is no aiming skill to take away. Ballistics
+    // fire for every ship EXCEPT the player's hull (player_gunnery): the left button is the
+    // unguided trigger in both control modes, and even while detached -- when the autopilot is
+    // flying this hull -- its turrets and trigger still follow the player's cursor (game.cpp's
+    // traverse+fire block), so auto-firing its guns here would fight the player for them. Every
+    // other hull is an AI wingman; with escorts armed from the fleet pool, "designate and it
+    // shoots" is what an RTS attack order has to mean.
     //
     // Note this reaches ONLY the player's own fleet: update_autopilot walks Fleet::m_ships, while
-    // NPC agents fire through sim/ai_ship.cpp and the static enemy through combat_arena.cpp. Their
-    // shots still lead. So the enemy is a better marksman than an unskilled player and a worse one
-    // than a skilled player, which is the intended shape.
-    // HOLD_FIRE keeps everything above -- the nose tracks, the turret slews, the ship holds its
+    // NPC agents fire through sim/ai_ship.cpp and the static enemy through combat_arena.cpp.
+    // All three lead their shots the same way now, so fleet gunners shoot like the NPCs do.
+    // HOLD_FIRE keeps everything above -- the nose tracks, the turrets slew, the ship holds its
     // station -- and stops only at the trigger. That is deliberately a different thing from
     // PASSIVE: this ship is shadowing a target and ready, it is just not authorised to shoot.
-    b8 guided = (w && w->wkind == WEAPON_KIND_MISSILE && stance != FLEET_STANCE_HOLD_FIRE);
-    if (w && guided && fabsf(angle_diff) < RTS_ATTACK_FACE_ANGLE && dist >= RTS_ATTACK_MIN_RANGE && dist <= fire_reach) {
+    b8 fire_authorized = (stance != FLEET_STANCE_HOLD_FIRE);
+    b8 aligned = (fabsf(angle_diff) < RTS_ATTACK_FACE_ANGLE) && (dist >= RTS_ATTACK_MIN_RANGE);
+    b8 guided = (w && w->wkind == WEAPON_KIND_MISSILE && fire_authorized);
+    if (w && guided && aligned && dist <= fire_reach) {
         {
             // Each shot leaves from its own hardpoint, honoring the slot's traverse arc.
             {
@@ -234,6 +236,50 @@ void FleetShip::update_attack(game_state* s, f32 dt) {
                     ship_try_spend_cap(sh, w->cap_cost()))
                     ship_hardpoint_fire(sh, whp, aim_dir, fl->velocity, &s->projectiles);
             }
+        }
+    }
+    // Ballistic gunnery (AI wingmen only): a BROADSIDE, not just the bearing weapon -- every
+    // ballistic mount whose traverse bears trains onto its own lead solution and fires through
+    // the shared validator, so per-mount arc, slew convergence, cooldown, reach and capacitor
+    // all gate exactly as they do for the player's trigger. Approach distance is unchanged
+    // (approach_reach above); this only decides what shoots once the geometry is set.
+    if (!player_gunnery) {
+        // The shell inherits this hull's velocity (ship_hardpoint_fire passes fl->velocity), so
+        // the intercept is driven by the RELATIVE velocity -- the same two-pass solve as the NPC
+        // gunner in sim/ai_ship.cpp (AI_ATTACK), which is the marksmanship fleet AI should match.
+        Vec2 rvel = vec2_sub(ce->velocity, fl->velocity);
+        for (i32 hpi = 0; hpi < sh->hardpoint_count; ++hpi) {
+            Weapon* bw = sh->mounts[hpi];
+            if (!bw || bw->wkind != WEAPON_KIND_BALLISTIC) continue;
+            // The player's micro-selection narrows engagement to that one mount, same as whp.
+            if (sh->weapon_override >= 0 && hpi != sh->weapon_override) continue;
+            // Per-mount geometry: each shot leaves from its own hardpoint, lead solved from there.
+            HierPos2 fire_origin = ship_hardpoint_fire_origin(sh, hpi);
+            Vec2 to_t = hierpos_diff(&target->origin, &fire_origin);
+            f32  d    = vec2_length(to_t);
+            Vec2 aim  = to_t;
+            f32  pspd = bw->projectile_speed();
+            if (pspd > 1.0f) {
+                for (i32 it = 0; it < 2; ++it) {
+                    f32 tof = vec2_length(aim) / pspd;
+                    aim = vec2_add(to_t, vec2_scale(rvel, tof));
+                }
+            }
+            if (!ship_hardpoint_can_aim(sh, hpi, aim)) continue;
+            // Aim at the LEAD point, not the hull: the validator's slew gate compares the barrel
+            // against the direction FIRED, so a mount trained on the hull with a wide lead angle
+            // would report WEAPON_FIRE_SLEWING forever. This is also the aim that runs after the
+            // engaging-mount track above, so for a ballistic whp the lead goal wins the frame.
+            // Deliberately OUTSIDE the fire gates: turrets keep tracking under HOLD_FIRE and
+            // while the nose is still swinging onto the target.
+            ship_turret_aim_at(sh, hpi, aim);
+            if (!fire_authorized || !aligned) continue;
+            bw->owner_faction_id = sh->faction_id;   // stamp attacker faction for hit attribution
+            // One shared validator + committed spend + one shared spawner: the exact per-weapon
+            // path the player's trigger loop walks (game.cpp), never a parallel spawn path.
+            if (ship_weapon_fire_state(sh, hpi, aim, d) == WEAPON_FIRE_READY &&
+                ship_try_spend_cap(sh, bw->cap_cost()))
+                ship_hardpoint_fire(sh, hpi, aim, fl->velocity, &s->projectiles);
         }
     }
     f32 cur_speed = vec2_length(fl->velocity);
@@ -558,10 +604,10 @@ static void separation_adjust(FleetShip* fs, Vec2 to_other, f32 dist, f32 min_se
         fs->flight.velocity = vec2_add(fs->flight.velocity, delta);
     }
 }
-void Fleet::update_autopilot(game_state* s, f32 dt, i32 piloted_idx) {
+void Fleet::update_autopilot(game_state* s, f32 dt, i32 auto_skip, i32 piloted_idx) {
     for (i32 i = 0; i < m_count; ++i) {
-        if (i == piloted_idx) continue;
-        if (m_ships[i].has_attack_target) m_ships[i].update_attack(s, dt);
+        if (i == auto_skip) continue;
+        if (m_ships[i].has_attack_target) m_ships[i].update_attack(s, dt, i == piloted_idx);
         if (m_ships[i].has_move_target)     m_ships[i].update_move(dt);
         // Position orders are mutually exclusive by construction (each order_* clears the
         // others), so at most one of these three ever drives a ship in a frame. Avoid is
@@ -581,8 +627,8 @@ void Fleet::update_autopilot(game_state* s, f32 dt, i32 piloted_idx) {
             f32  min_sep = (ship_bounding_radius(&m_ships[i].ship) +
                             ship_bounding_radius(&m_ships[j].ship)) * FLEET_MIN_SEPARATION_MUL;
             if (dist >= min_sep) continue;
-            separation_adjust(&m_ships[i], to_j,                    dist, min_sep, i == piloted_idx, dt);
-            separation_adjust(&m_ships[j], vec2_scale(to_j, -1.0f), dist, min_sep, j == piloted_idx, dt);
+            separation_adjust(&m_ships[i], to_j,                    dist, min_sep, i == auto_skip, dt);
+            separation_adjust(&m_ships[j], vec2_scale(to_j, -1.0f), dist, min_sep, j == auto_skip, dt);
         }
     }
 }

@@ -51,6 +51,12 @@ GameStateModel; engine `math/math_utils.h`, `math/bs_hierpos.h`, `defines.h`.
 - **Detection is a fleet-wide union computed by max** — a contact's confidence is the strongest
   single reading over all friendly ships, so overlapping coverage widens the picture without
   double-counting (`sensor_system.h`).
+- **`point_defense_update` runs a hull's laser only while the fleet's PD device is mounted on
+  it** — the gate is `enabled && point_defense_mount >= 0`, so an editor override on `enabled`
+  can never arm a hull without the device. The ownership model (one pooled device,
+  `game_state::fleet_pd_stock`, mount/unmount paths) lives on ShipCombatModel's page; this
+  subsystem only consumes the result. The enemy raider never goes through this function — it
+  loops the player fleet only.
 - **Point-defense engagement range is live-coupled to `sensors.layer0_radius`** when
   `DefenseLaser::range` is 0, so installing a sensor module changes PD reach. `sim/ship.h`
   argues the Layer 0 choice deliberately ("last-ditch screen… must not reach identification
@@ -110,5 +116,8 @@ configurations from one code path. A new detection rule belongs in `sensor_readi
 **Source paths:** `sandbox/source/sim/combat_arena.{cpp,h}`,
 `sandbox/source/sim/point_defense.{cpp,h}`, `sandbox/source/sim/sensor_system.{cpp,h}`
 
-**Last verified:** 2026-08-09, working tree on `game` (the four projectile-destruction sites
-across this subsystem and `point_defense.cpp` now retire through the pool's own API)
+**Last verified:** 2026-08-12, working tree on `game` (`point_defense_update` gains the
+mount gate — PD became fleet-pool equipment, see ShipCombatModel — and the missile-hit
+attribution in `combat_arena.cpp` reads an unmounted PD as "PD holding". Previously 2026-08-09:
+the four projectile-destruction sites across this subsystem and `point_defense.cpp` retire
+through the pool's own API)
