@@ -35,16 +35,18 @@ static constexpr f32 RTS_CLICK_THRESHOLD = 4.0f;
 static constexpr f32 RTS_MOVE_MARKER_SIZE      = 12.0f;  // world units
 static constexpr f32 RTS_MOVE_MARKER_THICKNESS = 1.5f;
 static constexpr bs_color RTS_MOVE_MARKER_COLOR = { 0.35f, 0.85f, 0.95f, 0.90f };
-// Escort link (hover-gated dashed line, escorter -> escortee). Dash cadence, march speed and
-// thickness are SCREEN-CONSTANT (px; world size = px / zoom) so the link reads identically at
-// combat and map zoom -- the same convention as the 22 px hull pick floor. Green: a friendly
-// standing order, distinct from the cyan selection/move language and the red attack marker.
-static constexpr f32 ESCORT_DASH_PX         = 14.0f;  // lit dash length, screen px
-static constexpr f32 ESCORT_GAP_PX          = 10.0f;  // gap between dashes, screen px
-static constexpr f32 ESCORT_MARCH_PX_PER_S  = 30.0f;  // dash march speed toward the escortee
-static constexpr f32 ESCORT_PULSE_RATE      = 3.0f;   // alpha breathing; matches the hover ring
-static constexpr f32 ESCORT_LINK_THICKNESS  = 1.5f;   // screen px (renderer line convention)
+// Order links (hover-gated dashed lines: ordered ship -> its target). One shared cadence,
+// one color per order kind. Dash cadence, march speed and thickness are SCREEN-CONSTANT
+// (px; world size = px / zoom) so a link reads identically at combat and map zoom -- the
+// same convention as the 22 px hull pick floor. Escort is green (a friendly standing order,
+// distinct from the cyan selection/move language); attack is the attack marker's red.
+static constexpr f32 ORDER_LINK_DASH_PX        = 14.0f;  // lit dash length, screen px
+static constexpr f32 ORDER_LINK_GAP_PX         = 10.0f;  // gap between dashes, screen px
+static constexpr f32 ORDER_LINK_MARCH_PX_PER_S = 30.0f;  // dash march speed toward the target
+static constexpr f32 ORDER_LINK_PULSE_RATE     = 3.0f;   // alpha breathing; matches hover ring
+static constexpr f32 ORDER_LINK_THICKNESS      = 1.5f;   // screen px (renderer line convention)
 static constexpr bs_color ESCORT_LINK_COLOR = { 0.45f, 0.90f, 0.55f, 0.90f };
+static constexpr bs_color ATTACK_LINK_COLOR = { 1.00f, 0.30f, 0.30f, 0.90f };
 // FTL jump-mode visuals.
 static constexpr f32 JUMP_CIRCLE_THICKNESS = 2.0f;
 static constexpr bs_color JUMP_CIRCLE_COLOR = { 0.55f, 0.95f, 0.65f, 0.90f };
@@ -531,32 +533,46 @@ void RtsControls::draw() {
             }
         }
     }
-    // ---- Escort links (BOTH camera modes -- hover works everywhere, so this does too) -------
-    // Hovering either end of an escort relationship draws the pulsing dash line marching from
-    // the escorter toward its escortee. Hovering the escortee shows EVERY inbound link (a
-    // glance answers "who is guarding this hull"); hovering one escorter shows just its own.
-    // Endpoints are inset by each hull's bounding radius so the dashes run edge to edge and
-    // the march direction stays readable right up to the hulls.
-    if (m_hovered_ship_idx >= 0 && m_hovered_ship_idx < m_state->fleet_state.fleet.count()) {
+    // ---- Order links (BOTH camera modes -- hover works everywhere, so this does too) --------
+    // Hovering either end of an escort or attack relationship draws the pulsing dash line
+    // marching from the ordered ship toward its target (escort green, attack red). Hovering
+    // the target shows EVERY inbound link (a glance answers "who is guarding / engaging this
+    // hull"); hovering one ordered ship shows just its own. A ship holding both orders (a
+    // screening escort with a designated target) shows both lines. The friendly end comes
+    // from m_hovered_ship_idx; the hostile end from m_hovered_enemy_idx's combat entity.
+    {
         Fleet& fleet = m_state->fleet_state.fleet;
-        const Ship* hovered = &fleet.at(m_hovered_ship_idx).ship;
-        f32 zoom = m_state->camera_state.camera.zoom;
-        for (i32 i = 0; i < fleet.count(); ++i) {
-            FleetShip& fs = fleet.at(i);
-            if (!fs.has_escort_target || !fs.escort_target) continue;
-            if (i != m_hovered_ship_idx && fs.escort_target != hovered) continue;
-            const Ship* escorter = &fs.ship;
-            const Ship* escortee = fs.escort_target;
-            Vec2 from = render_from_hierpos(m_state, &escorter->origin);
-            Vec2 to   = render_from_hierpos(m_state, &escortee->origin);
-            Vec2 d    = vec2_sub(to, from);
-            f32  len  = vec2_length(d);
-            f32  inset_from = ship_bounding_radius(escorter);
-            f32  inset_to   = ship_bounding_radius(escortee);
-            if (len <= inset_from + inset_to) continue;   // hulls touching: nothing to draw
-            Vec2 dir = vec2_scale(d, 1.0f / len);
-            draw_escort_link(vec2_add(from, vec2_scale(dir, inset_from)),
-                             vec2_sub(to,   vec2_scale(dir, inset_to)), zoom);
+        const Ship* hovered_friendly =
+            (m_hovered_ship_idx >= 0 && m_hovered_ship_idx < fleet.count())
+                ? &fleet.at(m_hovered_ship_idx).ship : nullptr;
+        const Ship* hovered_hostile = nullptr;
+        if (m_hovered_enemy_idx >= 0 && m_hovered_enemy_idx < m_state->combat_entity_count) {
+            const CombatEntity* ce = &m_state->combat_entities[m_hovered_enemy_idx];
+            if (ce->active) hovered_hostile = ce->ship;
+        }
+        if (hovered_friendly || hovered_hostile) {
+            f32 zoom = m_state->camera_state.camera.zoom;
+            for (i32 i = 0; i < fleet.count(); ++i) {
+                FleetShip& fs = fleet.at(i);
+                const Ship* self = &fs.ship;
+                b8 self_hovered = (i == m_hovered_ship_idx);
+                if (fs.has_escort_target && fs.escort_target &&
+                    (self_hovered || fs.escort_target == hovered_friendly)) {
+                    draw_order_link(render_from_hierpos(m_state, &self->origin),
+                                    render_from_hierpos(m_state, &fs.escort_target->origin),
+                                    ship_bounding_radius(self),
+                                    ship_bounding_radius(fs.escort_target),
+                                    zoom, ESCORT_LINK_COLOR);
+                }
+                if (fs.has_attack_target && fs.attack_target &&
+                    (self_hovered || fs.attack_target == hovered_hostile)) {
+                    draw_order_link(render_from_hierpos(m_state, &self->origin),
+                                    render_from_hierpos(m_state, &fs.attack_target->origin),
+                                    ship_bounding_radius(self),
+                                    ship_bounding_radius(fs.attack_target),
+                                    zoom, ATTACK_LINK_COLOR);
+                }
+            }
         }
     }
     // The FLEET SHIP readout is now an RmlUi HUD document (see hud.rml + game_push_hud), and the
@@ -608,28 +624,32 @@ void RtsControls::release_to_autopilot() {
 }
 // =====================================================================================
 // Pulsing dashed line whose dashes MARCH from `from` toward `to` -- read as "this ship flows
-// toward that one", the escort relationship drawn as motion. Geometry is in render space
+// toward that one", an order relationship drawn as motion. Geometry is in render space
 // (world-scale units; the renderer applies zoom), so the px-authored cadence is divided by
 // zoom. Both the dash period and the march offset scale with 1/zoom together, which also
 // bounds the segment count by SCREEN length, not world length -- a link spanning half a
-// system at map zoom still draws ~50 segments, never thousands.
-void RtsControls::draw_escort_link(Vec2 from, Vec2 to, f32 zoom) {
+// system at map zoom still draws ~50 segments, never thousands. Endpoints are hull CENTERS;
+// the insets pull each end back to the hull edge so the march stays readable up to the art.
+void RtsControls::draw_order_link(Vec2 from, Vec2 to, f32 inset_from, f32 inset_to,
+                                  f32 zoom, bs_color color) {
     Vec2 d   = vec2_sub(to, from);
     f32  len = vec2_length(d);
-    if (len < 1.0e-3f) return;
+    if (len <= inset_from + inset_to + 1.0e-3f) return;   // hulls touching: nothing to draw
     Vec2 dir = vec2_scale(d, 1.0f / len);
+    from = vec2_add(from, vec2_scale(dir, inset_from));
+    len -= inset_from + inset_to;
     f32 z      = (zoom > 1.0e-6f) ? zoom : 1.0e-6f;
-    f32 dash   = ESCORT_DASH_PX / z;
-    f32 period = (ESCORT_DASH_PX + ESCORT_GAP_PX) / z;
+    f32 dash   = ORDER_LINK_DASH_PX / z;
+    f32 period = (ORDER_LINK_DASH_PX + ORDER_LINK_GAP_PX) / z;
     // One shared clock drives both motions: the march offset (dashes advance along +dir, i.e.
-    // toward the escortee) and the alpha pulse. elapsed_time is REAL seconds, so the link
+    // toward the target) and the alpha pulse. elapsed_time is REAL seconds, so the link
     // keeps breathing while the game is paused -- it is a UI affordance, not a sim object.
     f32 t      = m_state->elapsed_time;
-    f32 offset = fmodf(t * (ESCORT_MARCH_PX_PER_S / z), period);
-    bs_color col = ESCORT_LINK_COLOR;
-    col.a *= 0.55f + 0.45f * (0.5f + 0.5f * sinf(t * ESCORT_PULSE_RATE));
+    f32 offset = fmodf(t * (ORDER_LINK_MARCH_PX_PER_S / z), period);
+    bs_color col = color;
+    col.a *= 0.55f + 0.45f * (0.5f + 0.5f * sinf(t * ORDER_LINK_PULSE_RATE));
     // Walk dash starts from one period BEFORE the line so the marching pattern enters at the
-    // escorter's end instead of popping in; clamp each dash to the [0, len] span.
+    // ordered ship's end instead of popping in; clamp each dash to the [0, len] span.
     for (f32 s = offset - period; s < len; s += period) {
         f32 s0 = (s < 0.0f) ? 0.0f : s;
         f32 s1 = s + dash;
@@ -637,7 +657,7 @@ void RtsControls::draw_escort_link(Vec2 from, Vec2 to, f32 zoom) {
         if (s1 <= s0) continue;
         renderer_draw_line(vec2_add(from, vec2_scale(dir, s0)),
                            vec2_add(from, vec2_scale(dir, s1)),
-                           ESCORT_LINK_THICKNESS, col, HOVER_CIRCLE_LAYER);
+                           ORDER_LINK_THICKNESS, col, HOVER_CIRCLE_LAYER);
     }
 }
 void RtsControls::draw_move_marker(Vec2 target, f32 thickness, bs_color color, u32 layer) {

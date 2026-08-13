@@ -96,17 +96,21 @@ FrameOrchestrator.
   "unidentified" markers and are attack-orderable anyway, because long-range engagement means
   committing to a return the sensors have not identified yet. The hover loop previously skipped
   `!npc_ships[i].discovered`, which made everything outside Layer 1 unclickable.
-- **The escort link is hover-gated and draws in BOTH camera modes.** Hovering either end of an
-  escort relationship draws a pulsing dashed line whose dashes MARCH from the escorter toward
-  its escortee — the relationship read as motion. Hovering the escortee shows every inbound
-  link ("who is guarding this hull" at a glance); hovering one escorter shows just its own.
-  Dash cadence, march speed and thickness are SCREEN-CONSTANT (px / zoom, the same convention
-  as the hull pick floor), which also bounds the segment count by screen length rather than
+- **Order links (escort AND attack) are hover-gated and draw in BOTH camera modes.** Hovering
+  either end of an escort or attack relationship draws a pulsing dashed line whose dashes
+  MARCH from the ordered ship toward its target — the relationship read as motion. Escort is
+  green, attack is the attack marker's red; one shared cadence (`ORDER_LINK_*`), one helper
+  (`draw_order_link`). Hovering the target shows every inbound link ("who is guarding /
+  engaging this hull" at a glance); hovering one ordered ship shows just its own, and a ship
+  holding both orders shows both lines. The friendly hover end comes from
+  `m_hovered_ship_idx`, the hostile end from `m_hovered_enemy_idx`'s combat entity. Dash
+  cadence, march speed and thickness are SCREEN-CONSTANT (px / zoom, the same convention as
+  the hull pick floor), which also bounds the segment count by screen length rather than
   world length. Endpoints are inset by each hull's bounding radius, the clock is
   `elapsed_time` (REAL seconds, so the link keeps breathing while paused — it is a UI
-  affordance, not a sim object), and it sits OUTSIDE `draw()`'s detached-only gate, unlike the
-  selection/move/attack markers. It is the newest worked example of the
-  order-visualisation-as-private-draw-helper pattern (`draw_escort_link`).
+  affordance, not a sim object), and the block sits OUTSIDE `draw()`'s detached-only gate,
+  unlike the selection/move/attack markers. It is the newest worked example of the
+  order-visualisation-as-private-draw-helper pattern.
 - **It requires a `game_state*` at construction.** `RtsControls` holds `m_state` as a member,
   which is why `game_init` placement-news it separately (`new (&s->rts_controls)
   RtsControls(s)`) — the only `game_state` member needing a constructor argument. The default
@@ -158,10 +162,11 @@ drain.
 
 **Source paths:** `sandbox/source/sim/rts_controls.{cpp,h}`
 
-**Last verified:** 2026-08-13, working tree on `game` (adds the hover-gated escort link —
-pulsing screen-constant dashes marching escorter→escortee, drawn in both camera modes;
-live-verified from both ends, hidden unhovered, attached and detached. Earlier the same day:
-the command overlay — Space, 0.25x
+**Last verified:** 2026-08-13, working tree on `game` (adds the hover-gated order links —
+pulsing screen-constant dashes marching from the ordered ship to its target, escort green /
+attack red, one `draw_order_link` helper, drawn in both camera modes; escort live-verified
+from both ends, hidden unhovered, attached and detached; attack verified in play. Earlier the
+same day: the command overlay — Space, 0.25x
 dilation — is RETIRED: selection is always live while detached, the RMB grammar / X / F run in
 both control modes, the roster is always visible, Escort moved into the ship context menu, the
 manual trigger became attached-only, selection may be deliberately empty, and the LSHIFT
