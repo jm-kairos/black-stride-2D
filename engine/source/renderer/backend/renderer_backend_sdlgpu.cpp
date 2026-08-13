@@ -4767,6 +4767,7 @@ struct BsRmlHudModel
     Rml::Vector<BsRmlHudWeapon> fleet_group;
     Rml::String                 fleet_mode_label;
     bool                        fleet_mode_enabled = false;
+    bool                        fleet_mode_visible = false;  // release-only: shown while piloting
     Rml::String                 fleet_cap_w = "0%";   // capacitor gauge fill width
     Rml::String                 fleet_cap_label;      // "Capacitor 62 / 100"
     Rml::String                 fleet_pd_label;       // "PD: STANDARD - impact time - 100%"
@@ -4809,6 +4810,11 @@ struct BsRmlHudModel
 
     bool                        station_menu_visible = false;
     Rml::String                 station_menu_left = "0px", station_menu_top = "0px";
+    bool                        ship_menu_visible = false;   // fleet-ship right-click menu
+    Rml::String                 ship_menu_left = "0px", ship_menu_top = "0px";
+    Rml::String                 ship_menu_name;
+    bool                        ship_menu_can_pilot = false, ship_menu_can_release = false;
+    bool                        ship_menu_can_escort = false;
     bool                        station_inspector_visible = false;
     Rml::String                 station_insp_title;
     Rml::String                 station_insp_subtitle;
@@ -4996,6 +5002,7 @@ b8 bs_rml_hud_init(const char* rml_path)
     c.Bind("fleet_group",        &g_hud_model.fleet_group);
     c.Bind("fleet_mode_label",   &g_hud_model.fleet_mode_label);
     c.Bind("fleet_mode_enabled", &g_hud_model.fleet_mode_enabled);
+    c.Bind("fleet_mode_visible", &g_hud_model.fleet_mode_visible);
     c.Bind("fleet_cap_w",        &g_hud_model.fleet_cap_w);
     c.Bind("fleet_cap_label",    &g_hud_model.fleet_cap_label);
     c.Bind("fleet_pd_label",     &g_hud_model.fleet_pd_label);
@@ -5039,6 +5046,13 @@ b8 bs_rml_hud_init(const char* rml_path)
     c.Bind("station_menu_visible",      &g_hud_model.station_menu_visible);
     c.Bind("station_menu_left",         &g_hud_model.station_menu_left);
     c.Bind("station_menu_top",          &g_hud_model.station_menu_top);
+    c.Bind("ship_menu_visible",         &g_hud_model.ship_menu_visible);
+    c.Bind("ship_menu_left",            &g_hud_model.ship_menu_left);
+    c.Bind("ship_menu_top",             &g_hud_model.ship_menu_top);
+    c.Bind("ship_menu_name",            &g_hud_model.ship_menu_name);
+    c.Bind("ship_menu_can_pilot",       &g_hud_model.ship_menu_can_pilot);
+    c.Bind("ship_menu_can_release",     &g_hud_model.ship_menu_can_release);
+    c.Bind("ship_menu_can_escort",      &g_hud_model.ship_menu_can_escort);
     c.Bind("station_inspector_visible", &g_hud_model.station_inspector_visible);
     c.Bind("station_insp_title",        &g_hud_model.station_insp_title);
     c.Bind("station_insp_subtitle",     &g_hud_model.station_insp_subtitle);
@@ -5166,6 +5180,7 @@ void bs_rml_hud_update(const bs_rml_hud_state* s)
     bs_rml_assign(g_hud_model.fleet_health,  s->fleet_health,  sizeof(s->fleet_health));
     bs_rml_assign(g_hud_model.fleet_mode_label, s->fleet_mode_label, sizeof(s->fleet_mode_label));
     g_hud_model.fleet_mode_enabled = s->fleet_mode_enabled ? true : false;
+    g_hud_model.fleet_mode_visible = s->fleet_mode_visible ? true : false;
     bs_rml_assign(g_hud_model.fleet_cap_w,     s->fleet_cap_w,     sizeof(s->fleet_cap_w));
     bs_rml_assign(g_hud_model.fleet_cap_label, s->fleet_cap_label, sizeof(s->fleet_cap_label));
     bs_rml_assign(g_hud_model.fleet_pd_label,  s->fleet_pd_label,  sizeof(s->fleet_pd_label));
@@ -5316,6 +5331,13 @@ void bs_rml_hud_update(const bs_rml_hud_state* s)
     g_hud_model.station_menu_visible = s->station_menu_visible ? true : false;
     bs_rml_assign(g_hud_model.station_menu_left, s->station_menu_left, sizeof(s->station_menu_left));
     bs_rml_assign(g_hud_model.station_menu_top,  s->station_menu_top,  sizeof(s->station_menu_top));
+    g_hud_model.ship_menu_visible = s->ship_menu_visible ? true : false;
+    bs_rml_assign(g_hud_model.ship_menu_left, s->ship_menu_left, sizeof(s->ship_menu_left));
+    bs_rml_assign(g_hud_model.ship_menu_top,  s->ship_menu_top,  sizeof(s->ship_menu_top));
+    bs_rml_assign(g_hud_model.ship_menu_name, s->ship_menu_name, sizeof(s->ship_menu_name));
+    g_hud_model.ship_menu_can_pilot   = s->ship_menu_can_pilot   ? true : false;
+    g_hud_model.ship_menu_can_release = s->ship_menu_can_release ? true : false;
+    g_hud_model.ship_menu_can_escort  = s->ship_menu_can_escort  ? true : false;
     g_hud_model.station_inspector_visible = s->station_inspector_visible ? true : false;
     bs_rml_assign(g_hud_model.station_insp_title, s->station_insp_title, sizeof(s->station_insp_title));
     bs_rml_assign(g_hud_model.station_insp_subtitle, s->station_insp_subtitle, sizeof(s->station_insp_subtitle));

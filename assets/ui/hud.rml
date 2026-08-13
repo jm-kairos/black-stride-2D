@@ -83,7 +83,8 @@
              data-class-selected="g.selected" data-class-dim="g.empty"
              data-event-click="hud_action(g.action)">{{ g.text }}</div>
         <div class="rule"></div>
-        <div class="fleet-mode" data-class-disabled="!fleet_mode_enabled"
+        <div class="fleet-mode" data-if="fleet_mode_visible"
+             data-class-disabled="!fleet_mode_enabled"
              data-event-click="hud_action('fleet_mode')">{{ fleet_mode_label }}</div>
     </div>
 
@@ -278,6 +279,22 @@
     <div id="station-menu" class="panel" data-if="station_menu_visible"
          data-style-left="station_menu_left" data-style-top="station_menu_top">
         <div class="station-menu-item" data-event-click="hud_action('station_inspect')">Inspect</div>
+    </div>
+
+    <!-- Fleet-ship right-click context menu (cursor-anchored via ship_menu_left/top).
+         One of Pilot (take the stick / transfer hulls) / Auto-pilot (release the piloted
+         hull) shows, plus Escort (order the selected ships onto this hull) whenever a
+         selection exists. Rows are STATIC with data-if visibility; only the name header
+         is a text binding. -->
+    <div id="ship-menu" class="panel" data-if="ship_menu_visible"
+         data-style-left="ship_menu_left" data-style-top="ship_menu_top">
+        <div class="ship-menu-name">{{ ship_menu_name }}</div>
+        <div class="station-menu-item" data-if="ship_menu_can_pilot"
+             data-event-click="hud_action('ship_pilot')">Pilot</div>
+        <div class="station-menu-item" data-if="ship_menu_can_release"
+             data-event-click="hud_action('ship_autopilot')">Auto-pilot</div>
+        <div class="station-menu-item" data-if="ship_menu_can_escort"
+             data-event-click="hud_action('ship_escort')">Escort</div>
     </div>
 
     <!-- Space-station inspector window (floating, right side; planet-inspector styling) -->

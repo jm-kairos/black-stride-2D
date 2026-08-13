@@ -82,12 +82,12 @@ struct FleetShip {
     void simulate(f32 dt, b8 turn_commanded);
     // Autopilot a Move order: strafe/thrust toward move_target.
     void update_move(f32 dt);
-    // Autopilot an Attack order: rotate nose toward attack_target and fire when aligned.
-    // If no move target is set, this also approaches the target to maintain engagement range.
-    // player_gunnery = this is the hull the player is flying (attached OR detached): its
-    // ballistic triggers and turret aim stay with the player's cursor, so it fires guided
-    // ordnance only. Every other fleet ship fires its ballistics too.
-    void update_attack(game_state* s, f32 dt, b8 player_gunnery);
+    // Autopilot an Attack order: rotate nose toward attack_target and fire when aligned --
+    // missiles AND ballistics, through the shared validated fire path. If no move target is
+    // set, this also approaches the target to maintain engagement range. The hull the player
+    // is hand-flying never runs this at all (update_autopilot skips it), which is the whole
+    // player-vs-autopilot fire arbitration now: manual gunnery is attached-only.
+    void update_attack(game_state* s, f32 dt);
     // Autopilot an Escort order: hold station near escort_target, using steering::standoff so the
     // ship settles into a band rather than oscillating on the exact radius.
     void update_escort(f32 dt);
@@ -164,10 +164,10 @@ public:
     void set_all_jump_radius(f32 radius);
     // ---- Simulation ------------------------------------------------------------------
     // Run autopilot for every ordered ship except auto_skip (-1 = drive them all, i.e. the
-    // camera is detached). piloted_idx is the REAL piloted index regardless of camera
-    // attachment: even while the autopilot flies that hull, its trigger and turret aim
-    // still belong to the player's cursor (update_attack's player_gunnery).
-    void update_autopilot(game_state* s, f32 dt, i32 auto_skip, i32 piloted_idx);
+    // camera is detached and nobody is hand-flown). The skipped hull is the ONLY one whose
+    // guns belong to the player: detached, manual gunnery does not exist (LMB is selection),
+    // so a released hull fights like any other wingman.
+    void update_autopilot(game_state* s, f32 dt, i32 auto_skip);
     // Integrate every ship's pose. The piloted ship uses flagship_turn_commanded; the rest
     // auto-stabilize their spin (turn_commanded = FALSE).
     void simulate_all(f32 dt, b8 piloted_turn_commanded, i32 piloted_idx);

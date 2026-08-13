@@ -3315,18 +3315,10 @@ struct game_state {
 
     f32 time_scale;         // 0.0 = paused; 1/2/3/5 = speed tiers (Pause + 1x/2x/3x/5x)
 
-    // ---- Command overlay (RTS command layer) ------------------------------------------------
-    // While up, the world dilates and the LEFT BUTTON stops being the ballistic trigger and
-    // becomes selection + order issuing. That trade is the whole reason the overlay exists: the
-    // trigger owns the left button in both control modes, so selection could only come back by
-    // taking the button for a bounded moment rather than by sharing it with a modifier.
-    //
-    // DILATION, not pause: the galaxy runs a live clock (sim_hours, orbits, history), and
-    // stopping it to think is a different game. 0.25x keeps everything moving while giving the
-    // player time to read a fight. It multiplies the SAME global time_scale the HUD speed tiers
-    // set, so the two must not both own it -- hence the saved value below.
-    b8  command_overlay_active;
-    f32 command_overlay_saved_time_scale; // restored on close; the tier the player had chosen
+    // (The command overlay -- Space, 0.25x dilation, the bounded LMB-selection moment -- is
+    // RETIRED. Selection, the roster and the RMB order grammar are always live; the LMB
+    // arbitration it existed for is now the mode split itself: detached = selection,
+    // attached = trigger.)
 
 
 
@@ -3564,6 +3556,21 @@ struct game_state {
     i32              station_menu_x;           // context-menu anchor, screen px
 
     i32              station_menu_y;
+
+
+
+    // Fleet-ship right-click context menu (RtsControls opens it over a hovered friendly hull;
+    // game_push_hud mirrors it into the snapshot; the "ship_pilot"/"ship_autopilot" actions
+    // resolve their target from ship_menu_member). This is THE way piloting is entered --
+    // the TAB / mode-toggle transition is retired; auto-pilot/RTS is the default mode.
+
+    bool             ship_menu_visible;        // context menu open (positioned at menu x/y)
+
+    i32              ship_menu_member;         // fleet member the open menu refers to (-1 = none)
+
+    i32              ship_menu_x;              // context-menu anchor, screen px
+
+    i32              ship_menu_y;
 
     bool             show_station_inspector;   // fullscreen station Inspect window toggle (RML)
 

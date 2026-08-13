@@ -45,9 +45,16 @@ public:
     // Fleet member under the cursor in the WORLD (or -1) -- feeds the RML roster's row
     // hover cue, the fourth accessor existing solely for the HUD snapshot.
     i32 hovered_index() const { return m_hovered_ship_idx; }
-    // "Pilot unit" / "Auto-pilot / RTS" toggle, invoked when the HUD button is clicked. No-op
-    // while a recenter glide is already in flight (the button renders dimmed in that state).
-    void hud_toggle_pilot_mode();
+    // Take manual control of fleet member `idx`: recenter glide onto the hull, ending in
+    // ship-follow. Works from the detached RTS view AND as a direct hull-to-hull transfer
+    // while already piloting (it detaches in place first, so both paths share one glide).
+    // Invoked by the ship context menu's "Pilot" row. No-op mid-glide or on a bad index.
+    void pilot_ship(i32 idx);
+    // Release the piloted hull back to its autopilot: detach the free camera at the current
+    // view. Invoked by the menu's "Auto-pilot" row and the fleet panel's release button.
+    // No-op mid-glide or when already detached. (The old pilot<->RTS TOGGLE -- TAB and the
+    // two-way HUD button -- is retired: piloting is entered per-ship, never by mode flip.)
+    void release_to_autopilot();
 private:
     game_state* m_state;
     i32 m_hovered_ship_idx;    // fleet member under the cursor (or -1)

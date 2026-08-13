@@ -98,7 +98,7 @@ void FleetShip::update_move(f32 dt) {
     if (cur_speed > m.max_speed) fl->velocity = vec2_scale(fl->velocity, m.max_speed / cur_speed);
 }
 // =====================================================================================
-void FleetShip::update_attack(game_state* s, f32 dt, b8 player_gunnery) {
+void FleetShip::update_attack(game_state* s, f32 dt) {
     if (!has_attack_target) return;
     // PASSIVE refuses the engagement outright rather than holding fire while tracking: a ship
     // told not to fight should not be turning its nose at things either, or it drifts off station
@@ -195,18 +195,16 @@ void FleetShip::update_attack(game_state* s, f32 dt, b8 player_gunnery) {
     // so a long-legged launcher engages at its full authored range instead of being capped by a
     // hardcoded constant.
     //
-    // WHO fires WHAT: guided ordnance fires for EVERY fleet ship under an attack order -- a
-    // missile steers itself after launch, so there is no aiming skill to take away. Ballistics
-    // fire for every ship EXCEPT the player's hull (player_gunnery): the left button is the
-    // unguided trigger in both control modes, and even while detached -- when the autopilot is
-    // flying this hull -- its turrets and trigger still follow the player's cursor (game.cpp's
-    // traverse+fire block), so auto-firing its guns here would fight the player for them. Every
-    // other hull is an AI wingman; with escorts armed from the fleet pool, "designate and it
-    // shoots" is what an RTS attack order has to mean.
+    // EVERY autopilot-driven ship fires EVERYTHING under an attack order -- missiles and
+    // ballistics alike. The player-vs-autopilot arbitration happens one level up: the hull the
+    // player is hand-flying is skipped by update_autopilot entirely (auto_skip), and manual
+    // gunnery is attached-only (detached, LMB is selection -- see game.cpp's fire gate), so
+    // there is no cursor for these guns to fight. "Designate and it shoots" is what an RTS
+    // attack order means.
     //
     // Note this reaches ONLY the player's own fleet: update_autopilot walks Fleet::m_ships, while
     // NPC agents fire through sim/ai_ship.cpp and the static enemy through combat_arena.cpp.
-    // All three lead their shots the same way now, so fleet gunners shoot like the NPCs do.
+    // All three lead their shots the same way, so fleet gunners shoot like the NPCs do.
     // HOLD_FIRE keeps everything above -- the nose tracks, the turrets slew, the ship holds its
     // station -- and stops only at the trigger. That is deliberately a different thing from
     // PASSIVE: this ship is shadowing a target and ready, it is just not authorised to shoot.
@@ -238,12 +236,12 @@ void FleetShip::update_attack(game_state* s, f32 dt, b8 player_gunnery) {
             }
         }
     }
-    // Ballistic gunnery (AI wingmen only): a BROADSIDE, not just the bearing weapon -- every
-    // ballistic mount whose traverse bears trains onto its own lead solution and fires through
-    // the shared validator, so per-mount arc, slew convergence, cooldown, reach and capacitor
-    // all gate exactly as they do for the player's trigger. Approach distance is unchanged
+    // Ballistic gunnery: a BROADSIDE, not just the bearing weapon -- every ballistic mount
+    // whose traverse bears trains onto its own lead solution and fires through the shared
+    // validator, so per-mount arc, slew convergence, cooldown, reach and capacitor all gate
+    // exactly as they do for the manual trigger. Approach distance is unchanged
     // (approach_reach above); this only decides what shoots once the geometry is set.
-    if (!player_gunnery) {
+    {
         // The shell inherits this hull's velocity (ship_hardpoint_fire passes fl->velocity), so
         // the intercept is driven by the RELATIVE velocity -- the same two-pass solve as the NPC
         // gunner in sim/ai_ship.cpp (AI_ATTACK), which is the marksmanship fleet AI should match.
@@ -471,6 +469,11 @@ void Fleet::order_move(HierPos2 target) {
     if (n == 0) return;
     centroid_rel = vec2_scale(centroid_rel, 1.0f / (f32)n);
     if (n == 1) {
+        // A move supersedes escort/avoid exactly as they supersede it (the position orders are
+        // mutually exclusive; leaving one set would mask it behind update_move until arrival,
+        // then silently resume it -- and the roster would label the ship with the stale order).
+        m_ships[sel[0]].clear_escort_target();
+        m_ships[sel[0]].clear_avoid_target();
         m_ships[sel[0]].has_move_target = TRUE;
         m_ships[sel[0]].move_target = target;
         return;
@@ -492,6 +495,8 @@ void Fleet::order_move(HierPos2 target) {
         f32 ox = ((f32)col - (cols - 1) * 0.5f) * spacing;
         f32 oy = ((f32)row - (rows - 1) * 0.5f) * spacing;
         Vec2 off = vec2_add(vec2_scale(right, ox), vec2_scale(forward, oy));
+        m_ships[sel[k]].clear_escort_target();  // position orders are mutually exclusive
+        m_ships[sel[k]].clear_avoid_target();
         m_ships[sel[k]].has_move_target = TRUE;
         m_ships[sel[k]].move_target = hierpos_add_vec2(&target, off);
         // Note: attack_target is intentionally preserved so move+attack can coexist.
@@ -604,10 +609,10 @@ static void separation_adjust(FleetShip* fs, Vec2 to_other, f32 dist, f32 min_se
         fs->flight.velocity = vec2_add(fs->flight.velocity, delta);
     }
 }
-void Fleet::update_autopilot(game_state* s, f32 dt, i32 auto_skip, i32 piloted_idx) {
+void Fleet::update_autopilot(game_state* s, f32 dt, i32 auto_skip) {
     for (i32 i = 0; i < m_count; ++i) {
         if (i == auto_skip) continue;
-        if (m_ships[i].has_attack_target) m_ships[i].update_attack(s, dt, i == piloted_idx);
+        if (m_ships[i].has_attack_target) m_ships[i].update_attack(s, dt);
         if (m_ships[i].has_move_target)     m_ships[i].update_move(dt);
         // Position orders are mutually exclusive by construction (each order_* clears the
         // others), so at most one of these three ever drives a ship in a frame. Avoid is

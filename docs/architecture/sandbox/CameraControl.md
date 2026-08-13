@@ -29,8 +29,11 @@ and the `g_zoom_out_speed_gain` global), Backdrop
   `s->view.mode` and, on the inbound crossing only, notifies Backdrop which system it is drawing.
   Nothing else happens: both looks share one coordinate space, so there is no re-anchor and no
   jump.
-- **Zoom NEVER changes the control mode.** TAB and the HUD pilot button are the only things that
-  attach or detach the camera. The outbound crossing used to force `free_camera_active` on and the
+- **Zoom NEVER changes the control mode.** `RtsControls::pilot_ship` (the ship context menu's
+  "Pilot" row) and `release_to_autopilot` (the menu's "Auto-pilot" row, the fleet panel's
+  release button) are the only things that attach or detach the camera — auto-pilot/RTS is the
+  default mode and the old TAB/button mode TOGGLE is retired.
+  The outbound crossing used to force `free_camera_active` on and the
   inbound crossing used to restore a remembered intent — which needed `global_free_camera_saved`,
   a ship-on-screen test, and two deliberately asymmetric crossing paths, roughly thirty lines
   whose whole job was undoing the surprise the coupling created. All of it is gone, and
@@ -53,9 +56,9 @@ derives a weight, following `view_arena_weight` in CoordinateFrames rather than 
 `s->view.mode` — the comment in `core/view_transform.cpp` records that as the intended
 direction. The mode-flip block is now the place for *render* consequences of crossing the
 threshold only — a new one goes beside the backdrop notify. **Do not put control-mode changes
-here:** attach/detach belongs to the deliberate toggle sites (TAB in `game.cpp`,
-`RtsControls::hud_toggle_pilot_mode`), and re-coupling it to zoom is the thing this module was
-explicitly untangled from.
+here:** attach/detach belongs to the deliberate directed sites
+(`RtsControls::pilot_ship` / `release_to_autopilot`), and re-coupling it to zoom is the thing
+this module was explicitly untangled from.
 
 **Known limitations / tech debt:**
 - **A "zoom" function still pokes a render subsystem.** It calls
@@ -83,5 +86,8 @@ explicitly untangled from.
 
 **Source paths:** `sandbox/source/sim/camera_controller.{cpp,h}`
 
-**Last verified:** 2026-08-09, commit `b1baf31` (widened arena band; zoom decoupled
-from the pilot/auto-pilot decision)
+**Last verified:** 2026-08-12, working tree on `game` (the pilot/auto-pilot TOGGLE — TAB and
+the two-way HUD button — is retired in favour of the directed `pilot_ship` /
+`release_to_autopilot` pair; auto-pilot/RTS is the default mode at game start. Previously
+2026-08-09, commit `b1baf31`: widened arena band; zoom decoupled from the pilot/auto-pilot
+decision)

@@ -127,12 +127,6 @@ const f32 SHIP_MAX_TURN     = 3.0f;    // rad/s
 // ---- Render layers (lower draws first) ---- now shared via core/render_layers.h
 #include "core/render_layers.h"
 
-// World speed while the command overlay is up. Dilation rather than a pause: the galaxy runs a
-// live clock (sim_hours, orbital motion, the history tick), and stopping it to give orders is a
-// different game from slowing down inside one. 0.25x is slow enough to read a fight and fast
-// enough that the fight is still happening while you decide.
-static constexpr f32 COMMAND_OVERLAY_TIME_SCALE = 0.25f;
-
 // Debug collider outline colour (COLLIDER_COLOR) now lives in render/ship_scene.cpp.
 
 // DEBUG: draw the HierPos2 cell-grid overlay (boundaries + parity checker + labels + HUD).
@@ -383,6 +377,10 @@ b8 game_init(Game* game_inst) {
     s->station_menu_station_id = -1;
     s->station_menu_x = 0;
     s->station_menu_y = 0;
+    s->ship_menu_visible = false;
+    s->ship_menu_member = -1;
+    s->ship_menu_x = 0;
+    s->ship_menu_y = 0;
     s->show_station_inspector = false;
     s->inspect_station_id = -1;
     s->station_insp_tab = 0;
@@ -637,6 +635,12 @@ b8 game_init(Game* game_inst) {
     ai_ships_init(s);
     s->npc_combat_base = s->combat_entity_count;
 
+    // The flagship starts SELECTED so the first RMB in the (default) RTS view orders something.
+    // Selection is otherwise free: clicking empty space deselects everything, and nothing
+    // re-asserts a selection behind the player's back (the old overlay-down flagship fallback
+    // is gone with the overlay itself).
+    s->fleet_state.fleet.set_selected(0, TRUE);
+
     // Camera starts zoomed out (global mode), centered on the flagship.
 
     s->camera_state.camera          = camera2d_default();
@@ -653,8 +657,15 @@ b8 game_init(Game* game_inst) {
 
     s->view.mode            = MODE_GLOBAL;
 
+    // AUTO-PILOT / RTS IS THE DEFAULT CONTROL MODE: the game opens with the camera DETACHED,
+    // parked over the fleet, and every hull obeying its orders from frame one. Piloting is
+    // entered PER-SHIP from the right-click context menu ("Pilot") -- the old TAB / button
+    // mode toggle is retired. piloted_idx stays 0 (flagship) so the fleet panel, the cursor
+    // turrets and player_gunnery keep a well-defined subject before the first takeover.
+    s->camera_state.free_camera_active = TRUE;
+    s->camera_state.free_camera_pos    = s->player_ship().origin;
 
-    // Camera->ship recenter glide (TAB re-pilot / HUD pilot button / galaxy on-screen re-entry).
+    // Camera->ship recenter glide (context-menu Pilot / galaxy on-screen re-entry).
     s->camera_state.recentering       = FALSE;
     s->camera_state.recenter_t        = 0.0f;
     s->camera_state.recenter_from_pos = {};
@@ -696,8 +707,6 @@ b8 game_init(Game* game_inst) {
     // (Sensor range, heat-signature params and encounter state are set by combat_arena_init above.)
     s->time_scale             = 1.0f;
 
-    s->command_overlay_active            = FALSE;
-    s->command_overlay_saved_time_scale  = 1.0f;
 
     s->elapsed_time           = 0.0f;
 
@@ -1294,10 +1303,10 @@ static void game_push_hud(game_state* s, f32 dt) {
         i32 day = (i32)((total_hours % HOURS_PER_YEAR) / HOURS_PER_DAY) + 1;
         snprintf(hud.time_date, sizeof(hud.time_date), "Year %d, Day %d",
                  s->galaxy.clock.present_year, day);
-        // Active tier index for button highlight (0=Pause,1=1x,2=3x,3=5x,4=10x). A dilated
-        // scale between 0 and 1 (the command overlay's 0.25x) matches NO tier (-1, which no
-        // button binds to) -- it used to fall through to 0 and claim the game was paused
-        // while it was merely slowed.
+        // Active tier index for button highlight (0=Pause,1=1x,2=3x,3=5x,4=10x). A scale
+        // between 0 and 1 matches NO tier (-1, which no button binds to) -- unreachable since
+        // the command overlay's 0.25x dilation was retired, kept so a future fractional scale
+        // cannot claim the game is paused while it is merely slowed.
         f32 ts = s->time_scale;
         hud.time_tier = (ts >= 10.0f) ? 4 : (ts >= 5.0f) ? 3 : (ts >= 3.0f) ? 2 : (ts >= 1.0f) ? 1
                       : (ts <= 0.0f) ? 0 : -1;
@@ -1394,9 +1403,13 @@ static void game_push_hud(game_state* s, f32 dt) {
                 row.selected = (g == ship->active_group);
                 row.empty    = (members == 0);   // drives the dim style (still clickable)
             }
-            b8 in_free_camera = s->camera_state.free_camera_active;
-            snprintf(hud.fleet_mode_label, sizeof(hud.fleet_mode_label), "%s",
-                     in_free_camera ? "Pilot unit" : "Auto-pilot / RTS");
+            // RELEASE-ONLY button: shown while piloting, reads "Auto-pilot / RTS", hands the
+            // hull back to its autopilot. The attach direction ("Pilot unit") is retired --
+            // piloting is entered per-ship from the right-click context menu, so while
+            // detached the panel simply has no mode control. Hidden (not dimmed) during the
+            // recenter glide too: free_camera_active stays TRUE until the glide lands.
+            snprintf(hud.fleet_mode_label, sizeof(hud.fleet_mode_label), "Auto-pilot / RTS");
+            hud.fleet_mode_visible = s->camera_state.free_camera_active ? FALSE : TRUE;
             hud.fleet_mode_enabled = s->camera_state.recentering ? FALSE : TRUE;
             // Capacitor + PD doctrine readout (Phase E): the piloted ship's live bank and
             // the stance/priority/gate line; amber cue whenever the stance is not STANDARD.
@@ -1422,13 +1435,15 @@ static void game_push_hud(game_state* s, f32 dt) {
         }
     }
 
-    // ---- Fleet roster (top-left; command overlay only) ----------------------------------
-    // One row per fleet member: label, live order readout, stance chips. The roster follows
-    // the command overlay: it is a commanding surface, so it appears exactly when commanding
-    // is what the player is doing. All interaction is action strings ("fsel:N" /
-    // "fstance:N:S") drained below; shift-additive selection is resolved at drain time so the
-    // engine carries no modifier state.
-    if (s->command_overlay_active && s->fleet_state.fleet.count() > 0 &&
+    // ---- Fleet roster (top-left; always up) ---------------------------------------------
+    // One row per fleet member: label, live order readout, stance chips. ALWAYS visible now
+    // (the command overlay is retired): commanding is not a mode any more, and the roster's
+    // clicks are UI-owned (bs_rml_wants_mouse), so it never fights the world in either
+    // control mode -- it is also the mid-flight selection surface, since box selection needs
+    // the detached LMB. All interaction is action strings ("fsel:N" / "fstance:N:S") drained
+    // below; shift-additive selection is resolved at drain time so the engine carries no
+    // modifier state.
+    if (s->fleet_state.fleet.count() > 0 &&
         !s->editor.edit_mode_active) {
         Fleet& roster_fleet = s->fleet_state.fleet;
         hud.roster_visible = TRUE;
@@ -1835,6 +1850,34 @@ static void game_push_hud(game_state* s, f32 dt) {
     hud.station_menu_visible = s->station_menu_visible ? TRUE : FALSE;
     snprintf(hud.station_menu_left, sizeof(hud.station_menu_left), "%dpx", s->station_menu_x);
     snprintf(hud.station_menu_top,  sizeof(hud.station_menu_top),  "%dpx", s->station_menu_y);
+    // Fleet-ship context menu: validate the member each frame (the editor's "multiple ship
+    // command" toggle can shrink the roster under an open menu), then mirror. Exactly one
+    // action row shows: "Auto-pilot" for the hull the player is flying right now, "Pilot"
+    // for everything else (including re-attach to the last-piloted hull while detached).
+    if (s->ship_menu_visible &&
+        (s->ship_menu_member < 0 || s->ship_menu_member >= s->fleet_state.fleet.count()))
+        s->ship_menu_visible = false;
+    hud.ship_menu_visible = s->ship_menu_visible ? TRUE : FALSE;
+    snprintf(hud.ship_menu_left, sizeof(hud.ship_menu_left), "%dpx", s->ship_menu_x);
+    snprintf(hud.ship_menu_top,  sizeof(hud.ship_menu_top),  "%dpx", s->ship_menu_y);
+    if (s->ship_menu_visible) {
+        const Ship& menu_ship = s->fleet_state.fleet.at(s->ship_menu_member).ship;
+        snprintf(hud.ship_menu_name, sizeof(hud.ship_menu_name), "%s",
+                 menu_ship.vessel_name ? menu_ship.vessel_name : "Ship");
+        b8 flying_it = (s->ship_menu_member == s->fleet_state.fleet.piloted_index()) &&
+                       !s->camera_state.free_camera_active;
+        hud.ship_menu_can_release = flying_it;
+        hud.ship_menu_can_pilot   = flying_it ? FALSE : TRUE;
+        // Escort absorbed the old overlay's RMB-escort gesture: order the SELECTED ships onto
+        // this hull. Shown whenever a selection exists (order_escort skips self-escort, so a
+        // selection containing the target stays coherent).
+        hud.ship_menu_can_escort  = s->fleet_state.fleet.any_selected() ? TRUE : FALSE;
+    } else {
+        hud.ship_menu_name[0]     = '\0';
+        hud.ship_menu_can_pilot   = FALSE;
+        hud.ship_menu_can_release = FALSE;
+        hud.ship_menu_can_escort  = FALSE;
+    }
     hud.station_inspector_visible = s->show_station_inspector ? TRUE : FALSE;
     {
         const char* sysname = "Unknown System";
@@ -2167,9 +2210,10 @@ static void game_push_hud(game_state* s, f32 dt) {
             else           action_log_push(s, "Speed set to %dx.", mult);
             continue;
         }
-        // Fleet ship panel: pilot/auto-pilot toggle.
+        // Fleet ship panel: release the piloted hull back to auto-pilot. RELEASE-ONLY now --
+        // the button is hidden while detached; piloting is entered via the ship context menu.
         if (strcmp(action, "fleet_mode") == 0) {
-            s->rts_controls.hud_toggle_pilot_mode();
+            s->rts_controls.release_to_autopilot();
             continue;
         }
         // Fleet ship panel: fire-group chip click selects that weapon group (same feedback as
@@ -2288,6 +2332,29 @@ static void game_push_hud(game_state* s, f32 dt) {
         }
         if (strcmp(action, "close_station_inspector") == 0) {
             s->show_station_inspector = false;
+            continue;
+        }
+        // Ship context menu: the two directed piloting moves. The target is resolved from the
+        // menu's own state (ship_menu_member), the same pattern the station menu uses -- the
+        // action string stays FIXED so the RML rows are static markup.
+        if (strcmp(action, "ship_pilot") == 0) {
+            s->rts_controls.pilot_ship(s->ship_menu_member);
+            s->ship_menu_visible = false;
+            continue;
+        }
+        if (strcmp(action, "ship_autopilot") == 0) {
+            s->rts_controls.release_to_autopilot();
+            s->ship_menu_visible = false;
+            continue;
+        }
+        if (strcmp(action, "ship_escort") == 0) {
+            Fleet& esc_fleet = s->fleet_state.fleet;
+            if (s->ship_menu_member >= 0 && s->ship_menu_member < esc_fleet.count()) {
+                Ship* buddy = &esc_fleet.at(s->ship_menu_member).ship;
+                esc_fleet.order_escort(buddy);
+                action_log_push(s, "Escorting: %s", buddy->vessel_name ? buddy->vessel_name : "ship");
+            }
+            s->ship_menu_visible = false;
             continue;
         }
         if (strcmp(action, "close_planet_inspector") == 0) {
@@ -2499,19 +2566,31 @@ b8 game_update(Game* game_inst, f32 dt) {
     // render look. The `view.mode == MODE_GLOBAL` term it used to carry was implied by
     // !free_camera_active back when the zoom crossing force-detached; now that piloting persists at
     // any zoom, keeping it would have made the toggle silently dead below ZOOM_MIN.
-    if (input_is_key_down(KEY_LSHIFT) && !input_was_key_down(KEY_LSHIFT) && !s->camera_state.free_camera_active &&
-        !s->show_flagship_inspector) {
-
-        s->view.alt_movement_active = !s->view.alt_movement_active;
-
-        if (s->view.alt_movement_active)
-
-            action_log_push(s, "Alternative movement system activated.");
-
-        else
-
-            action_log_push(s, "Alternative movement system deactivated.");
-
+    //
+    // DEFERRED TO RELEASE: shift is also the avoid-order MODIFIER (shift-RMB on a hostile), and
+    // with the order grammar live in both control modes a press-edge toggle flipped the flight
+    // scheme on every avoid issued mid-pilot -- the long-standing shift-RMB/LSHIFT collision.
+    // So the press only ARMS the toggle, any RMB during the hold cancels it (that shift was a
+    // modifier, not a command), and the release commits. A plain tap behaves as before, just on
+    // the release edge.
+    {
+        static b8 lshift_toggle_pending = FALSE;
+        if (input_is_key_down(KEY_LSHIFT) && !input_was_key_down(KEY_LSHIFT) &&
+            !s->camera_state.free_camera_active && !s->show_flagship_inspector)
+            lshift_toggle_pending = TRUE;
+        if (input_is_button_down(BUTTON_RIGHT) && !input_was_button_down(BUTTON_RIGHT))
+            lshift_toggle_pending = FALSE;
+        if (!input_is_key_down(KEY_LSHIFT) && input_was_key_down(KEY_LSHIFT)) {
+            if (lshift_toggle_pending && !s->camera_state.free_camera_active &&
+                !s->show_flagship_inspector) {
+                s->view.alt_movement_active = !s->view.alt_movement_active;
+                if (s->view.alt_movement_active)
+                    action_log_push(s, "Alternative movement system activated.");
+                else
+                    action_log_push(s, "Alternative movement system deactivated.");
+            }
+            lshift_toggle_pending = FALSE;
+        }
     }
 
     // ---- R key: toggle radiation detector overlay in global mode -------------------------
@@ -2536,14 +2615,6 @@ b8 game_update(Game* game_inst, f32 dt) {
 
     }
 
-    // ---- SPACE: raise / lower the command overlay --------------------------------------------
-    // Distinct from TAB, which changes WHO FLIES (pilot vs autopilot). This changes what the
-    // player is DOING: commanding rather than shooting. Both can be true at once -- you can
-    // command mid-flight without handing the ship to the autopilot first, which is the point.
-    //
-    // Time drops to 0.25x for as long as it is up. The saved tier is restored on close so the
-    // overlay and the HUD speed buttons cannot fight over the same global; if the player was
-    // paused, 0.0 is restored and the overlay simply gave them a readable screen.
     // ---- ESC: collapse the ship inspector; otherwise quit the application. --------------
     // The engine's hardcoded ESC-quit moved HERE (core/application.cpp no longer fires it)
     // so the key can be modal-aware: the press that collapses the inspector is CONSUMED by
@@ -2559,61 +2630,19 @@ b8 game_update(Game* game_inst, f32 dt) {
         }
     }
 
-    if (input_is_key_down(KEY_SPACE) && !input_was_key_down(KEY_SPACE) &&
-        !s->show_flagship_inspector) {
-        s->command_overlay_active = !s->command_overlay_active;
-        if (s->command_overlay_active) {
-            s->command_overlay_saved_time_scale = s->time_scale;
-            s->time_scale = COMMAND_OVERLAY_TIME_SCALE;
-            action_log_push(s, "Command overlay -- time 0.25x.");
-        } else {
-            s->time_scale = s->command_overlay_saved_time_scale;
-            action_log_push(s, "Command overlay closed.");
-        }
-    }
+    // ---- SPACE key: RETIRED (was the command overlay toggle). Selection, the roster and the
+    // full RMB order grammar are always live now, and the 0.25x tactical slow is gone with the
+    // overlay -- deliberate pacing is the time-tier buttons (Pause / 1x / 3x / 5x / 10x). The
+    // key is free for a future binding. ------------------------------------------------------
 
     // The fleet roster is an RmlUi HUD panel now: its clicks arrive as "fsel:"/"fstance:"
     // action strings in the drain above, and bs_rml_wants_mouse() reports the cursor as
     // UI-owned over it, which is what keeps a roster click from also reaching the world.
 
-    // ---- TAB key: toggle pilot <-> auto-pilot/RTS. Piloting -> instant detach to the free camera
-    // at the current view. Auto-pilot -> smooth glide back onto the ship, ending in ship-follow. --
-
-    if (input_is_key_down(KEY_TAB) && !input_was_key_down(KEY_TAB) && !s->show_flagship_inspector) {
-
-        s->planet_approach.engaged = FALSE; s->planet_approach.weight = 0.0f; // TAB toggle releases any planet capture
-
-        if (!s->camera_state.free_camera_active) {
-
-            // Piloting -> auto-pilot / RTS: detach the free camera where the view currently sits.
-
-            s->camera_state.free_camera_active       = TRUE;
-
-            s->camera_state.free_camera_pos          = game_camera_center_hierpos(s);
-
-            action_log_push(s, "Auto-pilot / RTS - free camera.");
-
-        } else {
-
-            // Auto-pilot -> piloting: glide the detached center onto the ship, then follow.
-
-            s->camera_state.recentering       = TRUE;
-
-            s->camera_state.recenter_t        = 0.0f;
-
-            s->camera_state.recenter_from_pos = game_camera_center_hierpos(s);
-
-            // Taking manual control stops the ship following RTS orders (matches Fleet::set_piloted),
-
-            // so a stale move/attack target can't fly it back to the last assigned position later.
-
-            if (FleetShip* p = s->fleet_state.fleet.piloted()) { p->clear_move_target(); p->clear_attack_target(); }
-
-            action_log_push(s, "Piloting - recentering on ship.");
-
-        }
-
-    }
+    // ---- TAB key: RETIRED. The pilot <-> auto-pilot/RTS mode TOGGLE is gone: auto-pilot/RTS
+    // is the default mode, piloting is entered per-ship via the right-click context menu's
+    // "Pilot" row, and release goes through the same menu's "Auto-pilot" row or the fleet
+    // panel's release button (RtsControls::pilot_ship / release_to_autopilot). --------------
 
     // ---- M key: retired. The arena <-> galaxy-map "look" is now driven continuously by zoom, so
     // there is no discrete mode to toggle here anymore. ----------------------------------------
@@ -3127,19 +3156,14 @@ b8 game_update(Game* game_inst, f32 dt) {
         // Also suppressed while the flagship inspector is open: it is a management window, so a
         // left-click anywhere (inside or outside its bounds) must never fire the weapons.
         //
-        // NO LONGER gated on free_camera_active. The left button is now the ballistic trigger in
-        // BOTH control modes -- it was suppressed while detached only because RTS box/click
-        // selection owned the button there, and that selection is retired (sim/rts_controls.cpp).
-        // Detached is in fact where aiming is EASIEST: the autopilot is flying, so the player's
-        // whole attention is on the shot. Unguided offence is the player's in both modes; what
-        // stays automated is guided ordnance and point defense.
-        //
-        // control_ship_global still self-guards on free_camera_active, so freeing the trigger
-        // does not also hand back flight control -- detached still means the autopilot flies.
-        // The command overlay joins the existing suppressors. While it is up the left button is
-        // selection and order issuing, not the trigger -- that hand-off IS the overlay, and it is
-        // what lets multi-unit selection exist at all without a modifier chord fighting the gun.
-        if (!s->editor.edit_mode_active && !s->show_flagship_inspector && !s->command_overlay_active
+        // ATTACHED-ONLY again -- for the opposite reason it once was. With the command overlay
+        // retired, box/click selection owns the left button whenever the camera is DETACHED
+        // (sim/rts_controls.cpp): detached is the command mode, attached is the gun. Manual
+        // gunnery therefore lives in the pilot seat only, and cursor turret-traverse goes with
+        // the trigger -- a barrel tracking a cursor that cannot fire would be a lie. While
+        // detached the piloted hull fights like any other AI wingman under its orders.
+        if (!s->editor.edit_mode_active && !s->show_flagship_inspector &&
+            !s->camera_state.free_camera_active
             && !bs_imgui_wants_mouse() && !bs_rml_wants_mouse()) {
 
             // Turret traverse: every weapon in the CURRENT SELECTION tracks the cursor. Under a
@@ -3341,11 +3365,11 @@ b8 game_update(Game* game_inst, f32 dt) {
 
         s->profiler.begin(PROF_FLEET_AUTOPILOT);
 
-        // piloted_idx rides along separately from auto_skip: while detached the piloted hull IS
-        // autopilot-driven, but its ballistic trigger and turret aim still belong to the
-        // player's cursor (the traverse+fire block above runs in both control modes), so
-        // update_attack must know which hull that is to keep it missile-only.
-        s->fleet_state.fleet.update_autopilot(s, sim_dt, auto_skip, piloted_idx);
+        // auto_skip alone carries the whole player-vs-autopilot fire arbitration now: manual
+        // gunnery is attached-only (detached, LMB is selection), so while detached the piloted
+        // hull is just another wingman and fires its ballistics under attack orders like the
+        // rest of the fleet.
+        s->fleet_state.fleet.update_autopilot(s, sim_dt, auto_skip);
 
         s->profiler.end(PROF_FLEET_AUTOPILOT);
 

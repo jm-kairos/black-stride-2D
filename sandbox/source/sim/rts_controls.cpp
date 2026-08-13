@@ -28,9 +28,9 @@ static constexpr u32   HOVER_CIRCLE_LAYER        = 50; // same as LAYER_UI in ga
 static constexpr f32 BOX_SELECT_THICKNESS        = 1.0f;
 static constexpr bs_color BOX_SELECT_COLOR       = { 0.35f, 0.85f, 0.95f, 0.90f };
 static constexpr bs_color SELECTION_RECT_COLOR = { 0.35f, 0.85f, 0.95f, 0.85f };
-// Pixels; below this a left release counts as a click rather than a box drag. Live again now
-// that selection is driven from the command overlay -- the [[maybe_unused]] it carried while
-// selection was retired is gone with it.
+// Pixels; below this a left release counts as a click rather than a box drag. Selection owns
+// the left button whenever the camera is DETACHED (the command overlay that used to bound it
+// is retired) -- the [[maybe_unused]] this carried while selection was retired stays gone.
 static constexpr f32 RTS_CLICK_THRESHOLD = 4.0f;
 static constexpr f32 RTS_MOVE_MARKER_SIZE      = 12.0f;  // world units
 static constexpr f32 RTS_MOVE_MARKER_THICKNESS = 1.5f;
@@ -229,6 +229,31 @@ void RtsControls::update(f32 dt) {
             }
         }
     }
+    // ---- Fleet-ship hover + right-click context menu (Pilot / Auto-pilot / Escort) ----------
+    // THE friendly-hull interaction surface (the TAB / mode-toggle transition is retired): RMB
+    // over a friendly hull drops a cursor-anchored menu -- "Pilot" (any hull, including a
+    // direct transfer while piloting), "Auto-pilot" (the piloted hull, attached), and "Escort"
+    // (order the selected ships onto this hull; it absorbed the old overlay's RMB-escort
+    // gesture). Runs in BOTH camera modes. Suppressed while jump mode is armed (RMB executes
+    // the jump), and hostile hover keeps ATTACK PRIMACY when a hostile and a friendly marker
+    // overlap -- the order path must see that click, not this menu. The station menu ran
+    // first; losing the rare hull-over-station overlap to it is fine.
+    b8 ship_right_consumed = FALSE;
+    {
+        b8 ui_free = !bs_imgui_wants_mouse() && !bs_rml_wants_mouse();
+        b8 rclick  = input_is_button_down(BUTTON_RIGHT) && !input_was_button_down(BUTTON_RIGHT);
+        b8 lclick  = input_is_button_down(BUTTON_LEFT)  && !input_was_button_down(BUTTON_LEFT);
+        if (rclick && ui_free && !station_right_consumed && m_hovered_enemy_idx < 0 &&
+            !m_jump_mode && m_hovered_ship_idx >= 0 && !m_state->camera_state.recentering) {
+            m_state->ship_menu_visible = true;
+            m_state->ship_menu_member  = m_hovered_ship_idx;
+            m_state->ship_menu_x       = mx;
+            m_state->ship_menu_y       = my;
+            ship_right_consumed        = TRUE;   // don't also issue an RTS move order
+        } else if ((lclick || rclick) && ui_free && m_state->ship_menu_visible) {
+            m_state->ship_menu_visible = false;   // click outside the menu dismisses it
+        }
+    }
     m_dash_angle += HOVER_DASH_ROTATION_SPEED * dt;
     if (m_dash_angle > 2.0f * BS_PI) m_dash_angle -= 2.0f * BS_PI;
     // Detached = the free camera is active (browse / pan / RTS), independent of zoom or render look.
@@ -276,28 +301,20 @@ void RtsControls::update(f32 dt) {
     }
     // ---- System-mode camera pan REMOVED: the galaxy-map look now uses the same detached free-
     // camera path above (free_camera_pos), so there is no separate camera.position pan branch. ----
-    // ---- Selection and order input (whenever the camera is detached) -----------------------
-    if (detached || m_state->command_overlay_active) {
-        // ---- Box / click selection ------------------------------------------------------
-        // RESTORED, by re-driving the machinery that was kept when it was retired rather than
-        // by rewriting it: RtsSelectionBox, m_box, ship_inside_world_box and
-        // draw_rect_from_screen_box were all left compiling and correct for exactly this.
-        //
-        // What changed is not the mechanism but WHEN the left button is ours. It is the
-        // ballistic trigger in both control modes, and that is deliberate -- so selection only
-        // takes it while the command overlay is up, which is a bounded moment the player opened
-        // on purpose. game.cpp's fire gate tests the same flag, so the button is never claimed
-        // by both.
-        //
-        // With the overlay down and the camera merely detached, the flagship stays permanently
-        // selected exactly as before, so the RMB order path, jump mode's any_selected gate and
-        // draw()'s selection rect all behave as they did after a click, with no click.
+    // ---- Selection and order input (ALWAYS live -- the command overlay is retired) ----------
+    // Commanding is not a mode any more: the RMB order grammar, J/X/F and the roster run in
+    // both control modes, and box/click selection owns the left button whenever the camera is
+    // DETACHED. The old LMB arbitration ("selection only inside the bounded overlay moment")
+    // is replaced by the mode split itself: detached = command (LMB selects), attached = gun
+    // (game.cpp's fire gate tests free_camera_active, so the button is never claimed by both).
+    {
+        // ---- Box / click selection (detached only -- attached, LMB is the trigger) -------
         Fleet& sel_fleet = m_state->fleet_state.fleet;
         // The roster is an RmlUi panel now, so bs_rml_wants_mouse covers it: a click on a
         // stance chip reports the cursor as UI-owned and never also drags a selection box
         // through the world behind the panel. No per-panel query needed anymore.
         const b8 ui_free_sel = !bs_imgui_wants_mouse() && !bs_rml_wants_mouse();
-        if (m_state->command_overlay_active && ui_free_sel) {
+        if (detached && ui_free_sel) {
             const b8 lmb_down = input_is_button_down(BUTTON_LEFT);
             const b8 lmb_prev = input_was_button_down(BUTTON_LEFT);
             const f32 mxf = (f32)mx, myf = (f32)my;
@@ -324,12 +341,15 @@ void RtsControls::update(f32 dt) {
                 }
             }
         } else {
-            m_box.active = FALSE;   // overlay closed mid-drag: abandon it rather than commit
-            if (sel_fleet.count() > 0 && !sel_fleet.any_selected()) sel_fleet.set_selected(0, TRUE);
+            // Attached mid-drag (or a UI layer grabbed the cursor): abandon the box rather
+            // than commit it. No flagship fallback any more -- selection may be deliberately
+            // EMPTY (clicking empty space deselects), and only game_init pre-selects member 0
+            // so the first RMB of a fresh game still orders something.
+            m_box.active = FALSE;
         }
-        // ---- FTL jump mode toggle (J) --------------------------------------------------
+        // ---- FTL jump mode toggle (J; RTS-only, so it needs the detached camera) ---------
         Fleet& fleet = m_state->fleet_state.fleet;
-        if (input_is_key_down(KEY_J) && !input_was_key_down(KEY_J)) {
+        if (detached && input_is_key_down(KEY_J) && !input_was_key_down(KEY_J)) {
             if (fleet.any_selected()) m_jump_mode = !m_jump_mode;
             else                      m_jump_mode = FALSE;
         }
@@ -337,7 +357,8 @@ void RtsControls::update(f32 dt) {
         if (m_jump_mode && !fleet.any_selected()) m_jump_mode = FALSE;
         // ---- Move / attack / jump order input ------------------------------------------
         b8 right_click = input_is_button_down(BUTTON_RIGHT) && !input_was_button_down(BUTTON_RIGHT);
-        if (right_click && !station_right_consumed && !bs_imgui_wants_mouse() && !bs_rml_wants_mouse()) {
+        if (right_click && !station_right_consumed && !ship_right_consumed &&
+            !bs_imgui_wants_mouse() && !bs_rml_wants_mouse()) {
             if (m_jump_mode) {
                 // Right-click executes the jump when the destination is within range; an
                 // out-of-range click is rejected and jump mode stays armed for a valid point.
@@ -355,20 +376,22 @@ void RtsControls::update(f32 dt) {
                     }
                 }
             } else if (fleet.any_selected()) {
-                // Standing orders (escort / avoid) are OVERLAY gestures: with the overlay down,
-                // RMB keeps its established meanings (attack a hostile, move to a point) so the
-                // new orders never change what an existing click does outside the bounded moment
-                // the player opened on purpose. Enemy hover is tested first, so attack keeps
-                // priority when a hostile and a friendly marker overlap.
+                // RMB order grammar, live in both control modes: attack a hostile (shift
+                // inverts it to avoid), move to a point. Enemy hover is tested first, so
+                // attack keeps priority when a hostile and a friendly marker overlap -- and
+                // the ship context menu above yields on hostile hover for the same reason.
+                // RMB on a plain friendly hull never reaches here: the context menu consumed
+                // it, and Escort is one of that menu's rows now.
                 const b8 shift_held = input_is_key_down(KEY_LSHIFT) || input_is_key_down(KEY_RSHIFT);
-                const b8 overlay_up = m_state->command_overlay_active;
                 if (m_hovered_enemy_idx >= 0) {
                     CombatEntity* ce = &m_state->combat_entities[m_hovered_enemy_idx];
                     if (ce->active && ce->ship) {
-                        if (shift_held && overlay_up) {
+                        if (shift_held) {
                             // Shift inverts the hostile order: keep away instead of engage.
                             // order_avoid clears any attack order on the same ship itself --
-                            // running from something you are shooting is incoherent.
+                            // running from something you are shooting is incoherent. (The
+                            // LSHIFT alt-movement toggle defers to key RELEASE and cancels on
+                            // RMB, so this gesture no longer flips the flight scheme.)
                             fleet.order_avoid(ce->ship);
                             action_log_push(m_state, "Avoiding: %s",
                                             ce->ship->vessel_name ? ce->ship->vessel_name : "contact");
@@ -376,13 +399,6 @@ void RtsControls::update(f32 dt) {
                             fleet.order_attack(ce->ship);
                         }
                     }
-                } else if (overlay_up && m_hovered_ship_idx >= 0) {
-                    // Escort the hovered friendly. Fleet::order_escort skips a ship escorting
-                    // itself, so a selection containing the target stays coherent.
-                    Ship* buddy = &fleet.at(m_hovered_ship_idx).ship;
-                    fleet.order_escort(buddy);
-                    action_log_push(m_state, "Escorting: %s",
-                                    buddy->vessel_name ? buddy->vessel_name : "ship");
                 } else {
                     fleet.order_move(mouse_hp);
                 }
@@ -407,8 +423,8 @@ void RtsControls::update(f32 dt) {
             }
         }
         // ---- Rally on flagship (F) -------------------------------------------------------
-        // No target needed: order_rally is order_escort aimed at member 0. Same gate as J/X --
-        // it works whenever the RMB order path does, not only under the overlay.
+        // No target needed: order_rally is order_escort aimed at member 0. Like X and the RMB
+        // order path, it is always live in both control modes.
         if (input_is_key_down(KEY_F) && !input_was_key_down(KEY_F)) {
             if (m_state->fleet_state.fleet.any_selected()) {
                 m_state->fleet_state.fleet.order_rally();
@@ -510,30 +526,47 @@ void RtsControls::draw() {
     // MODE_GLOBAL branch (with action-log feedback), so no input handling remains here.
 }
 // =====================================================================================
-// HUD "Pilot unit" / "Auto-pilot / RTS" button handler. Invoked by game_push_hud when the
-// RmlUi fleet panel button is clicked. A no-op while a recenter glide is already in flight
-// (the button renders dimmed in that state).
-void RtsControls::hud_toggle_pilot_mode() {
+// Piloting entry/exit. The old pilot<->RTS TOGGLE (TAB, the two-way HUD button) is retired:
+// auto-pilot/RTS is the DEFAULT mode, piloting is entered PER-SHIP from the right-click
+// context menu, and these two directed functions are the only mode movers.
+void RtsControls::pilot_ship(i32 idx) {
     if (!m_state || m_state->camera_state.recentering) return;
-    if (m_state->camera_state.free_camera_active) {
-        // Free camera -> pilot the selected unit (or the flagship): smooth recenter glide.
-        m_state->fleet_state.fleet.set_piloted(m_state->fleet_state.fleet.any_selected()
-                                   ? m_state->fleet_state.fleet.first_selected()
-                                   : 0);
-        m_piloted_idx = m_state->fleet_state.fleet.piloted_index();
-        m_state->camera_state.recentering       = TRUE;
-        m_state->camera_state.recenter_t        = 0.0f;
-        m_state->camera_state.recenter_from_pos = game_camera_center_hierpos(m_state);
-        m_free_camera_vel = Vec2{ 0.0f, 0.0f };
-        // Note: only the piloted ship's order is cleared inside set_piloted().
-        // The rest of the fleet continues its current Move/Attack orders.
-    } else {
-        // Piloting -> detach to the free-camera RTS view.
+    Fleet& fleet = m_state->fleet_state.fleet;
+    if (idx < 0 || idx >= fleet.count()) return;
+    // Taking the stick releases any planet capture, exactly as the retired TAB flip did.
+    m_state->planet_approach.engaged = FALSE;
+    m_state->planet_approach.weight  = 0.0f;
+    // Direct hull-to-hull TRANSFER while already piloting: detach IN PLACE first, so the
+    // glide below always starts from the exact state the detached->attach path uses --
+    // one code path, and never two writers (glide + ship-follow) on the camera at once.
+    if (!m_state->camera_state.free_camera_active) {
         m_state->camera_state.free_camera_active = TRUE;
-        m_state->camera_state.free_camera_pos = game_camera_center_hierpos(m_state);
-        // Existing fleet orders are preserved; the previously piloted ship
-        // coasts until a new order is issued.
+        m_state->camera_state.free_camera_pos    = game_camera_center_hierpos(m_state);
     }
+    fleet.set_piloted(idx);   // clears the taken hull's move/attack orders itself
+    m_piloted_idx = fleet.piloted_index();
+    // Smooth recenter glide onto the hull; ends in ship-follow (free_camera_active = FALSE).
+    m_state->camera_state.recentering       = TRUE;
+    m_state->camera_state.recenter_t        = 0.0f;
+    m_state->camera_state.recenter_from_pos = game_camera_center_hierpos(m_state);
+    m_free_camera_vel = Vec2{ 0.0f, 0.0f };
+    // Note: only the piloted ship's order is cleared inside set_piloted().
+    // The rest of the fleet continues its current Move/Attack orders.
+    Ship* sh = &fleet.at(idx).ship;
+    action_log_push(m_state, "Piloting %s - recentering.",
+                    sh->vessel_name ? sh->vessel_name : "ship");
+}
+void RtsControls::release_to_autopilot() {
+    if (!m_state || m_state->camera_state.recentering) return;
+    if (m_state->camera_state.free_camera_active) return;   // already in auto-pilot / RTS
+    m_state->planet_approach.engaged = FALSE;
+    m_state->planet_approach.weight  = 0.0f;
+    // Detach the free camera at the current view. Existing fleet orders are preserved; the
+    // previously piloted ship coasts until a new order is issued (its own orders were
+    // cleared when it was taken, so nothing stale flies it away).
+    m_state->camera_state.free_camera_active = TRUE;
+    m_state->camera_state.free_camera_pos    = game_camera_center_hierpos(m_state);
+    action_log_push(m_state, "Auto-pilot / RTS - free camera.");
 }
 // =====================================================================================
 void RtsControls::draw_move_marker(Vec2 target, f32 thickness, bs_color color, u32 layer) {

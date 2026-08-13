@@ -47,17 +47,17 @@ InWorldOverlays, FrameOrchestrator, GameStateModel.
 - Attack range is `weapon_effective_reach * RTS_ATTACK_REACH_FRAC` (0.85) with a 10000-unit
   fallback for an unarmed hull — the RTS half of ShipCombatModel's single-source-of-truth
   guarantee.
-- **An attack order fires EVERYTHING for AI wingmen; only the piloted hull is missile-only.**
-  `update_attack` takes a `b8 player_gunnery` (i == the real piloted index, which
-  `update_autopilot` now receives separately from `auto_skip`): for that one hull the attack
-  order remains the missile interface, because its ballistic trigger and turret aim belong to
-  the player's cursor in both control modes — even while detached, when the autopilot flies it.
-  Every other fleet ship fires its ballistics too, as a BROADSIDE: each ballistic mount that
-  bears trains onto its own lead solution and fires through `ship_weapon_fire_state` /
-  `ship_hardpoint_fire`, the same validated per-weapon path as the player's trigger loop. The
-  lead is the NPC gunner's two-pass relative-velocity solve (`sim/ai_ship.cpp`), so fleet
-  gunners shoot like the NPCs do. Missiles keep their original absolute-velocity lead. Both
-  branches gate on `stance != FLEET_STANCE_HOLD_FIRE`.
+- **An attack order fires EVERYTHING; `auto_skip` is the whole player-vs-autopilot fire
+  arbitration.** Every ship `update_autopilot` drives fires both missiles and ballistics under
+  an attack order — the hull the player is hand-flying is simply skipped (`auto_skip`), and
+  manual gunnery is attached-only (detached, LMB is RTS selection — see ShipCombatModel), so
+  there is no per-hull gunnery flag and a released hull fights like any other wingman.
+  Ballistics fire as a BROADSIDE: each ballistic mount that bears trains onto its own lead
+  solution and fires through `ship_weapon_fire_state` / `ship_hardpoint_fire`, the same
+  validated per-weapon path as the manual trigger loop. The lead is the NPC gunner's two-pass
+  relative-velocity solve (`sim/ai_ship.cpp`), so fleet gunners shoot like the NPCs do.
+  Missiles keep their original absolute-velocity lead. Both branches gate on
+  `stance != FLEET_STANCE_HOLD_FIRE`.
 - **Stance is orthogonal to orders: it survives one and constrains the next.** The distinction
   that carries the design is AUTONOMY, not aggression — Aggressive and Defensive both fight and
   differ only in whether the ship will leave its station to do it, which is what lets "hold here
@@ -71,6 +71,9 @@ InWorldOverlays, FrameOrchestrator, GameStateModel.
   the others, so at most one of `update_move` / `update_escort` / `update_avoid` drives a ship
   in a frame — they all write velocity, and two of them running would fight every tick. Avoid is
   the only self-terminating order: it clears itself once the ship is outside the threat's reach.
+  *(`order_move` predated escort/avoid and did not clear them until 2026-08-13 — the stale
+  escort was masked behind `update_move`'s priority until arrival, then silently resumed, and
+  the roster labelled the ship with the order it was not executing.)*
 - **`FleetShip::simulate` is the ONLY pose integrator for fleet ships.** Escort and avoid go
   through `steering::control_face` — the same control law as `apply_face` minus the pose add —
   because `simulate_all` integrates every member every frame and the integrating form moved
@@ -95,16 +98,15 @@ InWorldOverlays, FrameOrchestrator, GameStateModel.
   agents fire through `sim/ai_ship.cpp` and the static enemy through `sim/combat_arena.cpp`.
   Their shots still lead. So the enemy out-shoots an unskilled player and loses to a skilled one,
   which is the intended shape — and no player-vs-NPC branch was needed to get it.
-- **On the PILOTED hull, only the ENGAGING mount tracks the designated target.** `update_attack`
-  used to slew every mounted turret onto the target, which fights the player: `game_update` aims
-  the fire selection at the cursor earlier in the same frame and `update_autopilot` runs after
-  it, so the loop overwrote that aim every frame. Narrowing it to `whp` leaves the launcher
-  holding its target while the guns go where they are pointed. For AI wingmen that constraint is
-  void — every ballistic mount they intend to fire aims at its own LEAD point (not the hull:
-  the validator's slew gate compares the barrel against the direction fired, so a mount trained
-  on the hull with a wide lead angle would hold `WEAPON_FIRE_SLEWING` forever). The aim runs
+- **The engaging mount tracks the TARGET; firing ballistic mounts track their own LEAD point.**
+  `update_attack` aims `whp` (the bearing weapon) at the hull, and the ballistic broadside aims
+  each mount it intends to fire at its own lead solution instead — not the hull, because the
+  validator's slew gate compares the barrel against the direction FIRED, so a mount trained on
+  the hull with a wide lead angle would hold `WEAPON_FIRE_SLEWING` forever. The aim runs
   outside the fire gates, so turrets keep tracking under HOLD FIRE and while the nose is still
-  swinging on.
+  swinging on. *(The old "only whp, never the player's cursor mounts" restriction existed to
+  avoid stomping the piloted hull's cursor aim; that conflict is structurally gone — the
+  attached hull never runs `update_attack` at all, and detached there is no cursor aim.)*
 - **The autopilot honours `Ship::weapon_override`.** When the player has micro-selected a single
   weapon, `update_attack` engages with that mount alone *and* takes its reach as the approach
   distance — so the hub choice decides both what fires and where the ship parks. The field is
@@ -155,9 +157,11 @@ characteristics without touching this code.
 **Source paths:** `sandbox/source/sim/fleet.{cpp,h}`, `sandbox/source/sim/ship_control.{cpp,h}`,
 `sandbox/source/sim/steering.{cpp,h}`
 
-**Last verified:** 2026-08-12, working tree on `game` (attack orders now fire ballistics for
-every fleet ship except the piloted hull — `update_autopilot` takes `auto_skip` and the real
-`piloted_idx` separately, and `update_attack` takes `b8 player_gunnery`; ballistic broadside
-with NPC-style relative-velocity lead, all through the shared validator/spawner pair;
-live-verified: escort gauss fire under attack orders, HOLD FIRE round-trip, piloted hull holds
-fire under its own attack order while its LMB trigger works in both camera modes)
+**Last verified:** 2026-08-13, working tree on `game` (the `player_gunnery` plumb is REMOVED —
+manual gunnery became attached-only with the command overlay's retirement, so `auto_skip`
+alone arbitrates player-vs-autopilot fire and `update_autopilot` is back to three parameters;
+`order_move` now clears escort/avoid, making the position-order mutual exclusion actually hold.
+Previously 2026-08-12: attack orders fire the ballistic broadside with NPC-style
+relative-velocity lead through the shared validator/spawner pair — live-verified: escort gauss
+fire under attack orders, HOLD FIRE round-trip; this session live-verified the escort→move
+label handoff and detached no-fire)

@@ -99,7 +99,12 @@ a `bs__api__` declaration here plus an implementation at the bottom of the backe
 **Source paths:** `engine/source/renderer/bs_imgui.h`, `engine/source/renderer/bs_rml.h`
 (implementation: `engine/source/renderer/backend/renderer_backend_sdlgpu.cpp`)
 
-**Last verified:** 2026-08-12, working tree on `game` (the inspector became a single-window UI:
+**Last verified:** 2026-08-13, working tree on `game` (the ship context menu gains
+`ship_menu_can_escort` — the Escort row that absorbed the retired command overlay's RMB-escort
+gesture. Previously 2026-08-12: `bs_rml_hud_state` gains the fleet-ship
+context menu block — `ship_menu_visible/left/top/name` + `ship_menu_can_pilot/_can_release`,
+mirroring the station menu's shape — and `fleet_mode_visible` for the now release-only fleet
+panel button. Earlier the same day, the inspector became a single-window UI:
 `bs_rml_insp_ship` fleet-list rows + `insp_show_loadout`/`_doctrine` tab flags join the
 snapshot, action grammar gains `"insp_tab:N"`; the reserved texture names "bs:portrait" and
 "bs:thumbs" resolve to the engine's live offscreen targets. Earlier the same day: `insp_status`,

@@ -1121,6 +1121,23 @@ body {
     color: #e8b45a;
 }
 
+/* --- Fleet-ship right-click context menu (cursor-anchored; station-menu styling) --- */
+#ship-menu {
+    position: absolute;          /* left/top set per-frame via data-style-left/top */
+    display: block;
+    decorator: ninepatch(plate-sm, plate-sm-inner);   /* small plate, baked shadow */
+    padding: 14px;
+    min-width: 120px;
+    pointer-events: auto;        /* solid, clickable menu */
+}
+
+.ship-menu-name {
+    display: block;
+    padding: 2px 12px 6px 12px;
+    color: #8f8672;              /* dim header: names the hull the rows act on */
+    font-size: 11px;
+}
+
 /* --- Space-station inspector window (floating, right side; planet-inspector rules) -- */
 #station-inspector {
     position: absolute;

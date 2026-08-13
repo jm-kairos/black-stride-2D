@@ -100,22 +100,23 @@ the subsystem while sitting outside `ship.h`'s seven.)*
   validator buys. It does NOT reach `combat_arena`'s enemy gunner or `ai_ship.cpp`'s agent
   gunner, both of which bypass the validator; neither matters today because the enemy hull has
   no hardpoints and agents fire from their hull origin with no turret to disagree with.*
-- **The trigger is mode-independent; only FLIGHT is gated on camera attachment.** `game_update`'s
-  piloting branch has no mode test and no longer has a detach test either: turret traverse, the
-  fire-group number row and trigger firing all run at any zoom, in either look, attached or
-  detached. The left button is the ballistic trigger in **both** control modes — it was
-  previously suppressed while detached only because RtsControl's box/click selection owned the
-  button there, and that selection is retired. Detached is in fact where aiming is *easiest*: the
-  autopilot is flying, so the player's whole attention is on the shot. What still separates the
-  two schemes is that `control_ship_global` self-guards on `free_camera_active`
-  (`sim/ship_control.cpp:21`), so detached still means the autopilot flies.
-- **Unguided offence is the player's ON THE PILOTED HULL; everywhere else it is automated.**
-  On the hull the player is flying (attached or detached), ballistics require the trigger and
-  missiles fire from an attack order — the piloted hull's turrets and trigger follow the cursor
-  in both control modes, so the autopilot never fires its guns for it. Every OTHER fleet ship
-  fires both kinds under an attack order (`sim/fleet.cpp`, gated on `player_gunnery`), and
-  point defense engages on its own doctrine wherever the fleet's PD device is mounted.
-  `WeaponKind` still expresses the guided/unguided distinction at every fire site.
+- **The trigger and cursor turret-traverse are ATTACHED-ONLY; zoom and render look never gate
+  them.** With the command overlay retired, box/click selection owns the left button whenever
+  the camera is detached (RtsControl), so `game_update`'s traverse+fire block tests
+  `free_camera_active` — the button has exactly one meaning per control mode, at any zoom, in
+  either look. (It was briefly mode-independent while selection lived behind the bounded
+  overlay moment; the mode split replaced that arbitration.) The traverse goes with the
+  trigger deliberately: a barrel tracking a cursor that cannot fire would be a lie. The
+  fire-group number row still runs in both modes, and `control_ship_global` still self-guards
+  on `free_camera_active` (`sim/ship_control.cpp:21`), so detached always means the autopilot
+  flies.
+- **Manual gunnery exists only in the pilot seat; everything else is automated.** The hull the
+  player is hand-flying is skipped by the autopilot entirely (`update_autopilot`'s
+  `auto_skip`), and that skip is the whole player-vs-autopilot fire arbitration — there is no
+  per-hull gunnery flag any more. Every autopilot-driven ship fires missiles AND ballistics
+  under an attack order (`sim/fleet.cpp`), including the last-piloted hull the moment it is
+  released, and point defense engages on its own doctrine wherever the fleet's PD device is
+  mounted. `WeaponKind` still expresses the guided/unguided distinction at every fire site.
 - **`proj_life` IS the flight time to maximum reach**, because `weapon_effective_reach` is
   `proj_speed * proj_life`. Tuning engagement distance and tuning shot travel time are therefore
   the same edit, and the whole ballistic catalog was scaled by a uniform 0.15 (reach 19k–58k,
@@ -329,10 +330,11 @@ it reports affordability, and the caller commits via `ship_try_spend_cap`.
 `sandbox/source/sim/weapon.{cpp,h}`, `sandbox/source/sim/weapon_def.{cpp,h}`,
 `sandbox/source/sim/projectile.{cpp,h}`, `sandbox/source/render/ship_visual.{cpp,h}`
 
-**Last verified:** 2026-08-12, working tree on `game` (the point-defense becomes fleet-pool
-equipment — `DefenseLaser::enabled` defaults FALSE, the simulation and its two mirroring
-consumers gate on the mount, and `game_state::fleet_pd_stock` backs the bay tile and the
-mount/unmount/evict paths; the fire-ownership rule narrows to the piloted hull now that AI
-wingmen fire ballistics under attack orders — see FleetControl. Live-verified: fresh game shows
-no phantom PD anywhere, one bay tile, no intercepts under enemy fire; mounting on one escort
-arms that hull alone; unmounting returns the tile and stops the beams)
+**Last verified:** 2026-08-13, working tree on `game` (manual gunnery becomes ATTACHED-ONLY —
+the trigger and cursor traverse gate on `free_camera_active` now that detached LMB is RTS
+selection, and the autopilot's `auto_skip` is the entire fire arbitration; live-verified:
+attached LMB fires and drains the capacitor, detached LMB only box-selects. Previously
+2026-08-12: the point-defense becomes fleet-pool equipment — `DefenseLaser::enabled` defaults
+FALSE, the simulation and its two mirroring consumers gate on the mount, and
+`game_state::fleet_pd_stock` backs the bay tile and the mount/unmount/evict paths; AI wingmen
+fire ballistics under attack orders — see FleetControl)

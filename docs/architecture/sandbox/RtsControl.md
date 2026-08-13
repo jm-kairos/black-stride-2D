@@ -1,18 +1,20 @@
 # RtsControl
 
 **Responsibility:** Owns the RTS interaction layer — hover detection, issuing move and attack
-orders, FTL jump mode, free-camera movement, the pilot/auto-pilot toggle, and the overlays that
-visualise all of it. **Box and click selection are live again, driven from the command overlay**
-(see invariants). It explicitly does not *execute* orders:
+orders, FTL jump mode, free-camera movement, per-ship piloting entry/exit (the fleet-ship
+context menu plus the directed `pilot_ship` / `release_to_autopilot` pair), and the overlays
+that visualise all of it. **Box and click selection are always live while the camera is
+detached — the command overlay (Space, 0.25x dilation) is RETIRED** (see invariants). It
+explicitly does not *execute* orders:
 `sim/rts_controls.h` records that orders are now executed by `Fleet`, leaving this module owning
 "the input state + transition logic". It also does not own the camera transform (CoordinateFrames)
 or zoom (CameraControl), though it moves the free camera.
 
 **Public interface:** `sandbox/source/sim/rts_controls.h` — `inline ship_inside_world_box`;
 `struct RtsSelectionBox`; `class RtsControls` with `update`, `draw`, `piloted_index`,
-`jump_mode_active`, `hud_toggle_pilot_mode`.
-`ship_inside_world_box` and `RtsSelectionBox` are driven again by `update`, gated on
-`game_state::command_overlay_active`.
+`jump_mode_active`, `pilot_ship`, `release_to_autopilot`.
+`ship_inside_world_box` and `RtsSelectionBox` are driven by `update` whenever the camera is
+detached.
 The object is a `game_state` member, so it is reached through the hub rather than by include —
 no other subsystem includes this header.
 
@@ -25,23 +27,48 @@ engine `core/input.h`, `renderer/renderer.h`,
 FrameOrchestrator.
 
 **Key invariants:**
-- **Selection is RESTORED, and the command overlay is what made that possible.** LEFT BUTTON is
-  the ballistic trigger in both control modes; selection takes it only while
-  `command_overlay_active`, a bounded moment the player opened deliberately. `game.cpp`'s fire
-  gate tests the same flag, so the button is never claimed by both. It was retired — not
-  deleted — for exactly this: `RtsSelectionBox`, `m_box`, `ship_inside_world_box`,
-  `draw_rect_from_screen_box` and `RTS_CLICK_THRESHOLD` were all kept compiling, and restoring
-  multi-unit selection was re-driving them, not rewriting them. (`ship_inside_world_box` is
-  still `inline` and min-relative via `hierpos_diff`, so it stays precise far from the origin.)
-- **With the overlay DOWN, the flagship is still held permanently selected**, so the RMB order
-  path, jump mode's `any_selected` gate and `draw()`'s selection rect behave as they did after a
-  click, with no click — unchanged from the retired arrangement.
+- **LMB ownership is the MODE SPLIT itself; the command overlay that used to arbitrate it is
+  RETIRED.** Detached, the left button is box/click selection; attached, it is the ballistic
+  trigger (`game.cpp`'s fire gate tests `free_camera_active`, this module's selection gate
+  tests `detached` — the button is never claimed by both). The overlay existed solely to lend
+  selection the button for a bounded moment while the trigger was mode-independent; with
+  auto-pilot/RTS the default mode and manual gunnery attached-only, commanding stopped being a
+  mode and the overlay (plus its 0.25x time dilation and the Space binding) went with it.
+  Deliberate pacing is the time-tier buttons. (`ship_inside_world_box` is still `inline` and
+  min-relative via `hierpos_diff`, so it stays precise far from the origin.)
+- **Selection may be deliberately EMPTY, and nothing re-asserts one.** Clicking empty space
+  deselects everything (`select_at_point` with no hit) and RMB with no selection does nothing.
+  Only `game_init` pre-selects member 0, so the first RMB of a fresh game still orders
+  something. The old overlay-down "flagship permanently selected" fallback is gone with the
+  overlay.
 - **A drag below `RTS_CLICK_THRESHOLD` routes to `select_at_point`, not `select_in_box`.** The
   point path carries the screen-constant 22 px pick floor; a 3-pixel box would select nothing at
   combat zoom, where a hull is a couple of pixels wide.
-- **The selection block runs when `detached || command_overlay_active`**, widened from
-  detached-only so the player can command mid-flight without first handing the ship to the
-  autopilot. That is the whole point of the overlay being separate from TAB.
+- **Orders are ALWAYS live, in both control modes.** The RMB grammar (attack / shift-avoid /
+  move), X cancel and F rally run attached or detached — commanding mid-flight needs no mode
+  change. Only two pieces stay detached-only: box/click selection (the LMB split above) and
+  jump mode (an RTS map interaction; J is gated and the armed mode drops on attach). The
+  always-visible roster is the mid-flight selection surface, its clicks being UI-owned.
+- **The fleet-ship context menu is THE piloting entry, and the mode toggle is retired.**
+  Auto-pilot/RTS is the DEFAULT mode (`game_init` starts detached over the fleet); RMB over a
+  hovered friendly hull — in BOTH camera modes — drops a cursor-anchored menu whose one action
+  row is "Pilot" (any hull, including a direct hull-to-hull transfer while piloting) or
+  "Auto-pilot" (the hull the player is flying right now), plus **"Escort"** whenever a
+  selection exists (order the selected ships onto this hull — it absorbed the old overlay's
+  RMB-escort gesture, making the menu the whole friendly-hull surface). It mirrors the station
+  menu's shape: `ship_menu_*` state in `game_state`, fixed action strings
+  ("ship_pilot"/"ship_autopilot"/"ship_escort") resolved against `ship_menu_member` game-side,
+  static RML rows gated by `data-if`, a consumed flag so the opening RMB never also issues a
+  move order, click-elsewhere dismissal. Suppressed while jump mode is armed (RMB executes the
+  jump) and on HOSTILE hover (attack primacy: when a hostile and a friendly marker overlap,
+  the order path must see that click); the station menu tests first and wins the rare
+  hull-over-station overlap. TAB is gone; the fleet panel's button is release-only and hidden
+  while detached.
+- **`pilot_ship` transfers by detaching IN PLACE first.** Taking a hull while already piloting
+  another sets `free_camera_active` at the current view and then runs the same recenter glide
+  the detached path uses — one glide code path, and never two writers (glide + ship-follow) on
+  the camera in the same frame. `Fleet::set_piloted` clears the taken hull's move/attack
+  orders itself, so nothing stale flies it away after a later release.
 - **Hull hit-testing has a SCREEN-CONSTANT pick floor (`SHIP_PICK_FLOOR_PX` 22).** A hull's
   bounding radius is a world quantity, so it shrinks with zoom: the cruiser's ~816 units is a
   2 px target once the view frames an engagement, while `draw_enemy_marker` paints its reticle at
@@ -54,16 +81,17 @@ FrameOrchestrator.
   re-piloted the ship that was already piloted), so retiring it removed a live collision at no
   cost.
 - **The planet-inspector left-click requires the map look to be DOMINANT (`view_arena_w < 0.5`),
-  not merely present (`< 1.0`).** The left button is now the ballistic trigger and the cross-fade
-  band was widened to cover the compressed engagement envelope, so "map look partly visible" now
-  overlaps the zooms where a fight is framed — firing past a planet would have popped its
-  inspector.
+  not merely present (`< 1.0`).** The cross-fade band covers the compressed engagement
+  envelope, so "map look partly visible" overlaps the zooms where a fight is framed — a
+  world-directed left click there (the trigger when attached, a selection click when detached)
+  would have popped the inspector. Planet browsing stays on the map-look side of the band.
 - **World input must be suppressed while a UI panel owns the cursor.** Gated on both
   `bs_imgui_wants_mouse` and `bs_rml_wants_mouse` — the arbitration contract those engine
   headers describe. Enforced by explicit checks; nothing prevents a new call path from skipping
   them.
-- **`hud_toggle_pilot_mode` is a no-op during a recenter glide**, with the HUD button rendered
-  dimmed in that state — stated in the header.
+- **`pilot_ship` and `release_to_autopilot` are no-ops during a recenter glide** (and on a bad
+  index / when already detached, respectively) — stated in the header. The context-menu
+  trigger also refuses to open mid-glide.
 - **Hostile hover does NOT require discovery.** Undiscovered contacts render as generic
   "unidentified" markers and are attack-orderable anyway, because long-range engagement means
   committing to a return the sensors have not identified yet. The hover loop previously skipped
@@ -72,18 +100,18 @@ FrameOrchestrator.
   which is why `game_init` placement-news it separately (`new (&s->rts_controls)
   RtsControls(s)`) — the only `game_state` member needing a constructor argument. The default
   constructor leaves `m_state` null and runs first during the struct's placement-new.
-- **Standing orders are overlay gestures; RMB keeps its established meanings outside it.** With
-  the command overlay up: RMB on a hovered friendly issues `order_escort`, shift-RMB on a
-  hovered hostile issues `order_avoid`; F issues `order_rally` under the same gate as J/X
-  (whenever the camera is detached or the overlay is up). Enemy hover keeps priority over
-  friendly hover, so attack primacy is preserved when markers overlap. Each dispatch pushes an
-  action-log line. *Known conflict:* LSHIFT also toggles the alternative movement scheme while
-  the camera is attached (`game.cpp`), so a shift-RMB avoid issued mid-pilot flips the flight
-  controls too — unresolved, awaiting a binding decision.
-- Four accessors exist solely to feed the RmlUi HUD snapshot (`piloted_index`,
-  `jump_mode_active`, `hovered_index`, `hud_toggle_pilot_mode`), documented as such — the HUD
-  reads private state through a narrow window (`hovered_index` drives the RML roster's row
-  hover cue).
+- **The standing-order gestures live in the always-on grammar now.** Shift-RMB on a hovered
+  hostile issues `order_avoid` in both control modes; escort moved into the ship context menu
+  (RMB on a plain friendly never reaches the order path — the menu consumed it). Enemy hover
+  keeps priority over friendly hover, so attack primacy is preserved when markers overlap.
+  Each dispatch pushes an action-log line. *The old LSHIFT collision is RESOLVED:* the
+  alt-movement toggle in `game.cpp` now DEFERS to the shift RELEASE and any RMB during the
+  hold cancels it, so a shift-RMB avoid issued mid-pilot no longer flips the flight scheme —
+  a plain shift tap toggles exactly as before, just on the release edge.
+- A narrow accessor/handler window feeds the RmlUi HUD (`piloted_index`, `jump_mode_active`,
+  `hovered_index` for the roster's row hover cue; `pilot_ship` / `release_to_autopilot` invoked
+  from the action drain for the context-menu rows and the release button) — the HUD reads
+  private state through it, documented as such.
 
 **Extension points:** A new order or selection gesture is handled in `RtsControls::update`
 (input interpretation and transition) and issued through a `Fleet` method — the split the header
@@ -119,7 +147,15 @@ drain.
 
 **Source paths:** `sandbox/source/sim/rts_controls.{cpp,h}`
 
-**Last verified:** 2026-08-11, working tree on `game` (standing-order gestures wired: RMB
-escort / shift-RMB avoid under the overlay, F rally; the roster is an RML HUD panel now, so the
-per-panel cursor query is gone). The RTS number row stays retired — keys 1–5 are the weapon
+**Last verified:** 2026-08-13, working tree on `game` (the command overlay — Space, 0.25x
+dilation — is RETIRED: selection is always live while detached, the RMB grammar / X / F run in
+both control modes, the roster is always visible, Escort moved into the ship context menu, the
+manual trigger became attached-only, selection may be deliberately empty, and the LSHIFT
+alt-movement toggle defers to release so shift-RMB avoid no longer flips the flight scheme.
+`order_move` now clears escort/avoid, closing a latent hole in FleetControl's mutual-exclusion
+invariant. Live-verified: fresh game starts with the roster up and flagship pre-selected at
+1x; Space inert; box/click select + empty-click deselect + no-selection RMB inert; menu
+Pilot/Auto-pilot/Escort rows; escort→move label handoff; attached LMB fires while detached
+LMB only selects; shift release-toggle. Previously 2026-08-12: mode toggle retired, per-ship
+piloting via the context menu). The RTS number row stays retired — keys 1–5 are the weapon
 fire-group selector.

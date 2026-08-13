@@ -251,8 +251,11 @@ typedef struct bs_rml_hud_state
     // active fire group, empty = no member weapons (dim style), action = "group:N" (select on
     // click).
     bs_rml_weapon_line fleet_group[BS_RML_GROUP_MAX];
-    char               fleet_mode_label[32];  // "Pilot unit" / "Auto-pilot / RTS"
+    char               fleet_mode_label[32];  // "Auto-pilot / RTS" (release-only button)
     b8                 fleet_mode_enabled;     // FALSE mid camera transition (button dimmed)
+    b8                 fleet_mode_visible;     // shown ONLY while piloting: releases back to
+                                               // auto-pilot. Piloting is ENTERED per-ship from
+                                               // the ship context menu, never from here.
     // Capacitor + point-defense readout (Phase E feedback; docs/POINT_DEFENSE_AND_MISSILES.md).
     char               fleet_cap_w[16];       // capacitor gauge fill width ("62%")
     char               fleet_cap_label[32];   // "Capacitor 62 / 100"
@@ -338,6 +341,18 @@ typedef struct bs_rml_hud_state
     b8                 station_menu_visible;
     char               station_menu_left[16];
     char               station_menu_top[16];
+    // Fleet-ship interaction: a cursor-anchored right-click context menu over any friendly
+    // hull, mirroring the station menu's shape. Exactly one action row shows: "Pilot" (take
+    // manual control of that hull; also the direct hull-to-hull transfer while piloting) or
+    // "Auto-pilot" (release the currently piloted hull back to its autopilot). Actions
+    // "ship_pilot" / "ship_autopilot"; the game resolves the target from its own menu state.
+    b8                 ship_menu_visible;
+    char               ship_menu_left[16];
+    char               ship_menu_top[16];
+    char               ship_menu_name[64];     // hovered hull's vessel name (menu header)
+    b8                 ship_menu_can_pilot;    // "Pilot" row shown
+    b8                 ship_menu_can_release;  // "Auto-pilot" row shown
+    b8                 ship_menu_can_escort;   // "Escort" row shown (a selection exists to order)
     b8                 station_inspector_visible;
     char               station_insp_title[96];
     char               station_insp_subtitle[128];  // owner civ + market specialization tag line
