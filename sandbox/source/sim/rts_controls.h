@@ -76,4 +76,7 @@ private:
     void draw_selection_rect(bs_math::Vec2 center, f32 radius, f32 thickness, bs_color color, u32 layer);
     void draw_move_marker(bs_math::Vec2 target, f32 thickness, bs_color color, u32 layer);
     void draw_attack_marker(bs_math::Vec2 center, f32 radius, f32 thickness, bs_color color, u32 layer);
+    // Escort link: pulsing dashes marching FROM the escorter TOWARD the escorted hull.
+    // Endpoints are render-space; dash cadence and march speed are screen-constant (px / zoom).
+    void draw_escort_link(bs_math::Vec2 from, bs_math::Vec2 to, f32 zoom);
 };

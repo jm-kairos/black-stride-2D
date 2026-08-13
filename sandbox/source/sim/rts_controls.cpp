@@ -35,6 +35,16 @@ static constexpr f32 RTS_CLICK_THRESHOLD = 4.0f;
 static constexpr f32 RTS_MOVE_MARKER_SIZE      = 12.0f;  // world units
 static constexpr f32 RTS_MOVE_MARKER_THICKNESS = 1.5f;
 static constexpr bs_color RTS_MOVE_MARKER_COLOR = { 0.35f, 0.85f, 0.95f, 0.90f };
+// Escort link (hover-gated dashed line, escorter -> escortee). Dash cadence, march speed and
+// thickness are SCREEN-CONSTANT (px; world size = px / zoom) so the link reads identically at
+// combat and map zoom -- the same convention as the 22 px hull pick floor. Green: a friendly
+// standing order, distinct from the cyan selection/move language and the red attack marker.
+static constexpr f32 ESCORT_DASH_PX         = 14.0f;  // lit dash length, screen px
+static constexpr f32 ESCORT_GAP_PX          = 10.0f;  // gap between dashes, screen px
+static constexpr f32 ESCORT_MARCH_PX_PER_S  = 30.0f;  // dash march speed toward the escortee
+static constexpr f32 ESCORT_PULSE_RATE      = 3.0f;   // alpha breathing; matches the hover ring
+static constexpr f32 ESCORT_LINK_THICKNESS  = 1.5f;   // screen px (renderer line convention)
+static constexpr bs_color ESCORT_LINK_COLOR = { 0.45f, 0.90f, 0.55f, 0.90f };
 // FTL jump-mode visuals.
 static constexpr f32 JUMP_CIRCLE_THICKNESS = 2.0f;
 static constexpr bs_color JUMP_CIRCLE_COLOR = { 0.55f, 0.95f, 0.65f, 0.90f };
@@ -521,6 +531,34 @@ void RtsControls::draw() {
             }
         }
     }
+    // ---- Escort links (BOTH camera modes -- hover works everywhere, so this does too) -------
+    // Hovering either end of an escort relationship draws the pulsing dash line marching from
+    // the escorter toward its escortee. Hovering the escortee shows EVERY inbound link (a
+    // glance answers "who is guarding this hull"); hovering one escorter shows just its own.
+    // Endpoints are inset by each hull's bounding radius so the dashes run edge to edge and
+    // the march direction stays readable right up to the hulls.
+    if (m_hovered_ship_idx >= 0 && m_hovered_ship_idx < m_state->fleet_state.fleet.count()) {
+        Fleet& fleet = m_state->fleet_state.fleet;
+        const Ship* hovered = &fleet.at(m_hovered_ship_idx).ship;
+        f32 zoom = m_state->camera_state.camera.zoom;
+        for (i32 i = 0; i < fleet.count(); ++i) {
+            FleetShip& fs = fleet.at(i);
+            if (!fs.has_escort_target || !fs.escort_target) continue;
+            if (i != m_hovered_ship_idx && fs.escort_target != hovered) continue;
+            const Ship* escorter = &fs.ship;
+            const Ship* escortee = fs.escort_target;
+            Vec2 from = render_from_hierpos(m_state, &escorter->origin);
+            Vec2 to   = render_from_hierpos(m_state, &escortee->origin);
+            Vec2 d    = vec2_sub(to, from);
+            f32  len  = vec2_length(d);
+            f32  inset_from = ship_bounding_radius(escorter);
+            f32  inset_to   = ship_bounding_radius(escortee);
+            if (len <= inset_from + inset_to) continue;   // hulls touching: nothing to draw
+            Vec2 dir = vec2_scale(d, 1.0f / len);
+            draw_escort_link(vec2_add(from, vec2_scale(dir, inset_from)),
+                             vec2_sub(to,   vec2_scale(dir, inset_to)), zoom);
+        }
+    }
     // The FLEET SHIP readout is now an RmlUi HUD document (see hud.rml + game_push_hud), and the
     // number-row weapon-group selection for the piloted ship now lives in game_update's
     // MODE_GLOBAL branch (with action-log feedback), so no input handling remains here.
@@ -569,6 +607,39 @@ void RtsControls::release_to_autopilot() {
     action_log_push(m_state, "Auto-pilot / RTS - free camera.");
 }
 // =====================================================================================
+// Pulsing dashed line whose dashes MARCH from `from` toward `to` -- read as "this ship flows
+// toward that one", the escort relationship drawn as motion. Geometry is in render space
+// (world-scale units; the renderer applies zoom), so the px-authored cadence is divided by
+// zoom. Both the dash period and the march offset scale with 1/zoom together, which also
+// bounds the segment count by SCREEN length, not world length -- a link spanning half a
+// system at map zoom still draws ~50 segments, never thousands.
+void RtsControls::draw_escort_link(Vec2 from, Vec2 to, f32 zoom) {
+    Vec2 d   = vec2_sub(to, from);
+    f32  len = vec2_length(d);
+    if (len < 1.0e-3f) return;
+    Vec2 dir = vec2_scale(d, 1.0f / len);
+    f32 z      = (zoom > 1.0e-6f) ? zoom : 1.0e-6f;
+    f32 dash   = ESCORT_DASH_PX / z;
+    f32 period = (ESCORT_DASH_PX + ESCORT_GAP_PX) / z;
+    // One shared clock drives both motions: the march offset (dashes advance along +dir, i.e.
+    // toward the escortee) and the alpha pulse. elapsed_time is REAL seconds, so the link
+    // keeps breathing while the game is paused -- it is a UI affordance, not a sim object.
+    f32 t      = m_state->elapsed_time;
+    f32 offset = fmodf(t * (ESCORT_MARCH_PX_PER_S / z), period);
+    bs_color col = ESCORT_LINK_COLOR;
+    col.a *= 0.55f + 0.45f * (0.5f + 0.5f * sinf(t * ESCORT_PULSE_RATE));
+    // Walk dash starts from one period BEFORE the line so the marching pattern enters at the
+    // escorter's end instead of popping in; clamp each dash to the [0, len] span.
+    for (f32 s = offset - period; s < len; s += period) {
+        f32 s0 = (s < 0.0f) ? 0.0f : s;
+        f32 s1 = s + dash;
+        if (s1 > len) s1 = len;
+        if (s1 <= s0) continue;
+        renderer_draw_line(vec2_add(from, vec2_scale(dir, s0)),
+                           vec2_add(from, vec2_scale(dir, s1)),
+                           ESCORT_LINK_THICKNESS, col, HOVER_CIRCLE_LAYER);
+    }
+}
 void RtsControls::draw_move_marker(Vec2 target, f32 thickness, bs_color color, u32 layer) {
     f32 h = RTS_MOVE_MARKER_SIZE * 0.5f;
     // Draw a '+' cross centered at the target.
