@@ -275,6 +275,15 @@
     <div id="tooltip" class="panel" data-if="tip_visible"
          data-style-left="tip_left" data-style-top="tip_top">{{ tip_text }}</div>
 
+    <!-- Ship hover nameplate (floats ABOVE the hovered hull; np_left is the hull's screen-px
+         center, np_top the top of its bounding circle minus a gap -- both game-side. The RCSS
+         margins pull the fixed-size plate back to centre on that anchor). np_class "" (a hull
+         whose vessel name IS its class name) collapses to the single name line. -->
+    <div id="nameplate" data-if="np_visible" data-style-left="np_left" data-style-top="np_top">
+        <div class="np-name">{{ np_name }}</div>
+        <div class="np-class" data-if="np_class != ''">{{ np_class }}</div>
+    </div>
+
     <!-- Space-station right-click context menu (cursor-anchored via station_menu_left/top) -->
     <div id="station-menu" class="panel" data-if="station_menu_visible"
          data-style-left="station_menu_left" data-style-top="station_menu_top">

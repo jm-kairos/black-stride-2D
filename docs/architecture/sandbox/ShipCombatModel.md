@@ -14,7 +14,7 @@ damage (CombatArena), and does not own drawing — `render/ship_visual` here is 
 
 **Public interface:** `sandbox/source/sim/ship.h` — `Ship`, `HardpointDef`, `HardpointSize`,
 `MODULE_TYPE_*`, `VesselFaction` and the `FACTION_*` sentinels, `SensorSuite`, `DefenseLaser`,
-`PdStance`/`PdPriority`, `ShipSizeClass`, `ShipMotion`; `ship_load`, `ship_recompute_stats`,
+`PdStance`/`PdPriority`, `ShipSizeClass`, `ShipMotion`; `ship_recompute_stats`,
 `ship_try_spend_cap`, `ship_capacitor_update`, `ship_collider_corners`, `ship_bounding_radius`,
 `ship_local_dir`, `ships_collide`, `hardpoint_accepts`, `hardpoint_fits_module`,
 `ship_first_free_hardpoint`, `ship_hardpoint_fire_origin`, `ship_muzzle_origin`,
@@ -30,6 +30,9 @@ damage (CombatArena), and does not own drawing — `render/ship_visual` here is 
 `WEAPON_MAX_MUZZLES`, `VfxFamily`, `weapon_registry_load`, `weapon_registry_resolve_textures`,
 `weapon_registry_find`, `weapon_instantiate`.
 `sim/module.h` — `ModuleDef`, `ModuleRegistry`, `module_registry_load`, `module_registry_find`.
+`sim/ship_def.h` — `ShipDef`, `ShipRegistry`, `SHIP_REGISTRY_MAX`, `ship_registry_load`,
+`ship_registry_resolve_textures`, `ship_registry_find`, `ship_instantiate` (the old
+direct-from-file `ship_load` is retired — every hull is a registry card).
 `sim/projectile.h` — `Projectile`, `ProjectileKind`, `ProjectileSystem`, `MAX_PROJECTILES`,
 `PROJ_TRAIL_SAMPLES`, `PROJ_TRAIL_INTERVAL`, `ProjectileSystem::retire`, `ProjectileSystem::fx`.
 `render/ship_visual.h` — `ShipVisual`, `VisualLayer`, `ship_visual_load`,
@@ -208,6 +211,20 @@ the subsystem while sitting outside `ship.h`'s seven.)*
 - **Weapon instances point their `name`/`icon` into the registry's pool storage**, which
   `sim/weapon_def.h` justifies as safe because the fixed pool never reallocates. The registry
   therefore must outlive every weapon — it does, living in `game_state`.
+- **Ship instances make the same bargain:** `Ship::def` and `Ship::vessel_name` point into the
+  ship registry's fixed pool (`game_state::ship_registry`). This also FIXED a latent dangler —
+  the old `ship_load` aimed `vessel_name` at its own stack line buffer, masked only because
+  every spawn site overwrote the name with a string literal.
+- **`ship_registry_resolve_textures` must run BEFORE `ai_ships_init`** (both in `game_init`):
+  the NPC templates copy the def's texture handles at instantiate time, and every `NpcShip` is
+  struct-copied from those templates. The fleet/enemy instances are built even earlier — before
+  the resolve — so they keep their own per-instance `ship_visual_resolve_textures` pass later
+  in `game_init`, exactly as before.
+- **A card's `hull` line is an override, not the only source of HP.** `ShipDef::hull_authored`
+  records whether the line was present; CombatArena seeds player/enemy entities from
+  `Ship::hull_max_hp` unconditionally (default 100 = the old literal), while LocalAgentAi keeps
+  its per-archetype literals for any hull whose card does not author `hull` — so NPC balance is
+  untouched until a card deliberately opts in.
 - **Module defs are shared by pointer across ships** and carry no per-instance state
   (`sim/module.h`), which is what makes sharing safe.
 - Sensor layers are strictly ordered `l0 < l1 < l2`; `sim/ship.h` notes the editor enforces it.
@@ -255,7 +272,15 @@ shell, missile → ordnance). Purely cosmetic: nothing in the simulation reads i
 catalog defs author nothing; only `longlance_rail` opts out, because a rail slug is a design
 statement about a weapon rather than something to infer from `proj_speed`.
 **A new module** is the same shape via `assets/modules/modules.list`.
-**A new hull** is a `.ship` file with
+**A new hull is a `.ship` card in `assets/ships/ships.list`** — an `id` line (required; the
+registry key spawn sites pass to `ship_registry_find`) plus optional stat lines, each
+defaulting to the pre-card behaviour: `hull <max_hp>` (entity health; default 100),
+`motion <max_speed> <accel> <decel> <turn_accel> <max_turn>` (overrides the class tuning
+table), `sensors <l0> <l1> <l2>` (baseline suite, validated strictly increasing),
+`desc "..."`, and market-forward `price`/`tier`. `assets/ships/ship/ship.ship`
+(`vanguard_cruiser` — by design a high-tier LATE-game hull; the starting fleet flies it only
+until a dedicated starter hull card exists) is the worked example. The art/skeleton lines are
+unchanged, including
 `hardpoint <id> <accepts> <size> <x> <y> <facing> <arc> [art_scale]` lines. The trailing scale is
 optional and presentational — it multiplies everything the slot draws *and* the barrel origins
 with it, so a rescaled mount still fires from its muzzle; omit it and the slot behaves exactly
@@ -317,20 +342,28 @@ it reports affordability, and the caller commits via `ship_try_spend_cap`.
   it and the three `combat_arena.cpp` sites now go through `ProjectileSystem::retire`.
   `ProjectileSystem::update` still recounts from scratch each tick, quietly repairing the
   counter, so the invariant remains unenforced rather than checked.
-- Three hand-rolled `sscanf` parsers with near-identical helpers (`ship.cpp`, `module.cpp`,
+- Three hand-rolled `sscanf` parsers with near-identical helpers (`ship_def.cpp`, `module.cpp`,
   `weapon_def.cpp`); the latter two duplicate four functions almost verbatim. All three define
-  `_CRT_SECURE_NO_WARNINGS` locally.
+  `_CRT_SECURE_NO_WARNINGS` locally. (The ship parser moved whole from `ship.cpp` into
+  `ship_def.cpp` with the registry work; the duplication stands.)
 - Parse failures are graded and mostly silent: unknown `type`/`size` tokens warn and keep a
   default, registry overflow past 32 drops the tail, `.svis` layers past 8 are skipped.
 - `WeaponDef::price` and `tier` are declared and marked "market-forward: unused v1".
 - `sim/ship.h` references `docs/POINT_DEFENSE_AND_MISSILES.md` three times for rules not stated
   in code.
 
-**Source paths:** `sandbox/source/sim/ship.{cpp,h}`, `sandbox/source/sim/module.{cpp,h}`,
+**Source paths:** `sandbox/source/sim/ship.{cpp,h}`, `sandbox/source/sim/ship_def.{cpp,h}`,
+`sandbox/source/sim/module.{cpp,h}`,
 `sandbox/source/sim/weapon.{cpp,h}`, `sandbox/source/sim/weapon_def.{cpp,h}`,
 `sandbox/source/sim/projectile.{cpp,h}`, `sandbox/source/render/ship_visual.{cpp,h}`
 
-**Last verified:** 2026-08-13, working tree on `game` (manual gunnery becomes ATTACHED-ONLY —
+**Last verified:** 2026-08-13, working tree on `game` (hulls become registry stat cards —
+`sim/ship_def.{h,cpp}` adds `ShipDef`/`ShipRegistry` mirroring the weapon/module pattern, a
+manifest at `assets/ships/ships.list`, and `ship_instantiate`; `ship_load` is retired, every
+spawn site converted, and the card grows `id`/`desc`/`hull`/`motion`/`sensors`/`price`/`tier`
+lines with behaviour-preserving defaults; live-verified: 5 cards load, all instantiate sites
+log, an authored `hull 140` flows through to the instance and back to 100 on revert. Same day,
+earlier: manual gunnery becomes ATTACHED-ONLY —
 the trigger and cursor traverse gate on `free_camera_active` now that detached LMB is RTS
 selection, and the autopilot's `auto_skip` is the entire fire arbitration; live-verified:
 attached LMB fires and drains the capacitor, detached LMB only box-selects. Previously

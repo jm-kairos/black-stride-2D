@@ -1,13 +1,32 @@
-# Black Stride ship definition (.ship format).
+# Black Stride ship definition (.ship format) - the Vanguard-class Cruiser card.
+# DESIGN INTENT: a high-end, high-tier cruiser the player earns in the LATE game. The
+# starting fleet spawns it today only because it is the sole hull with authored art and
+# a hardpoint skeleton; when a proper starter hull card lands, the spawn sites in
+# game.cpp move to that id and this card keeps its late-game positioning untouched.
 # Art: assets/ships/ships_cruisers_yellow/cruisers_r0_c0.png (394x1586, nose-up).
 # At world_scale 1 the hull is 1586 world units long, which classifies it as a
 # CRUISER: slow, heavy inertial flight (see ship_size_class_from_length in sim/ship.cpp).
 # An explicit `class <drone|corvette|frigate|destroyer|cruiser|capital>` line can override.
 
-name "ship"
+id vanguard_cruiser
+name "Vanguard-class Cruiser"
+desc "Flagship-grade heavy cruiser from the top of the yard's line. A deep hardpoint rack - three medium weapon mounts, twin point-defense rings and a dorsal sensor dome - built for commanders who have outgrown everything else the shipwrights sell."
 faction 2
 world_scale 1.0
 size 394 1586
+
+# ---- Stat card ---------------------------------------------------------------------
+# hull: combat entity health at spawn. capacitor: <max> <regen>. motion overrides the
+# class tuning table (<max_speed> <accel> <decel> <turn_accel> <max_turn>); these values
+# ARE the cruiser table row, authored so the card is explicit about how this hull flies.
+# hull/capacitor/motion are still the PARITY baseline, not the hull's final late-game
+# statline - retune them here (a data edit) when the hull takes its real place in the
+# progression; price/tier already carry the high-end market positioning.
+hull 100
+capacitor 100 8
+motion 240 90 70 1.4 0.45
+price 78000
+tier 3
 
 layer sprite assets/ships/ships_cruisers_yellow/cruisers_r0_c0.png 0 0 1 0 0
 

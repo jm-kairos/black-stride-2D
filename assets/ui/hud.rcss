@@ -579,6 +579,41 @@ body {
     pointer-events: none;        /* stay click-through so world picking works underneath */
 }
 
+/* --- Ship hover nameplate (hull-anchored; a thin translucent strip over the hull) -------
+   left/top are bound to the HULL CENTER in screen px; the fixed width and the negative
+   margins pull the plate back so it centres on the hull (same trick as #inspector-btn).
+   MUST stay pointer-events:none -- it sits exactly where the cursor is hovering, and a
+   mouse-owning element here would flip bs_rml_wants_mouse and kill the very hover that
+   shows it. */
+#nameplate {
+    position: absolute;          /* left/top set per-frame via data-style-left/top */
+    display: block;
+    width: 240px;
+    margin-left: -120px;         /* pull back half the width to centre on the hull */
+    margin-top: -22px;           /* ~half the two-line height */
+    background-color: #0a141ea6; /* the thin transparent layer */
+    border: 1px #59d9f24d;
+    padding: 6px 8px;
+    text-align: center;
+    pointer-events: none;        /* click-through: world hover/picking works underneath */
+}
+
+.np-name {
+    display: block;              /* RmlUi defaults to inline; the two lines must stack */
+    color: #f2ead6;
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: 1px;
+}
+
+.np-class {
+    display: block;
+    color: #9db4c0;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+}
+
 /* --- Flagship inspector launcher button (bottom-center) --------------------------- */
 #inspector-btn {
     position: absolute;

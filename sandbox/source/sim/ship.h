@@ -251,7 +251,7 @@ struct DefenseLaser {
 // =====================================================================================
 // Ship size classes. Motion feel scales with hull size: a drone flits, a cruiser is a
 // slow-turning wall of metal. The class is derived automatically from the hull's WORLD
-// length (size_local.y * world_scale) at ship_load time, or authored explicitly in the
+// length (size_local.y * world_scale) when the card loads, or authored explicitly in the
 // .ship file with `class <drone|corvette|frigate|destroyer|cruiser|capital>`.
 // =====================================================================================
 
@@ -303,7 +303,15 @@ const ShipMotion& ship_motion_for_class(ShipSizeClass c);
 
 const char* ship_size_class_name(ShipSizeClass c);
 
+// Immutable hull stat card this instance was built from (full declaration in
+// sim/ship_def.h). Ships reference registry defs by pointer, like weapons do -- the
+// registry's fixed pool lives in game_state and outlives every ship.
+
+struct ShipDef;
+
 struct Ship {
+
+    const ShipDef* def;           // the registry stat card (nullptr only for a zeroed Ship)
 
     f32           world_scale;    // exterior scale multiplier
 
@@ -375,7 +383,7 @@ struct Ship {
     // fire site), so the invariant lives at the three write sites above, not in the readers.
     // Honoured by BOTH the manual fire path and the autopilot attack order.
 
-    // Defaulted here as well as in ship_load: a zero-initialised Ship would otherwise read as
+    // Defaulted here as well as in ship_instantiate: a zero-initialised Ship would otherwise read as
     // "override hardpoint 0" and silently fire one gun, which is the worst possible default.
     i8             weapon_override = -1;
 
@@ -415,6 +423,13 @@ struct Ship {
     // ---- Radiation heat-source emission (0..1) ---------------------------------------
 
     f32           radiation_emission;
+
+    // ---- Hull integrity (card stat) --------------------------------------------------
+    // Combat entity health at spawn, from the card's `hull` line (default 100, the value
+    // every hull used before the card existed). CombatArena seeds entity HP from it; the
+    // default member initialiser keeps a zero-initialised Ship from spawning at 0 HP.
+
+    f32           hull_max_hp = 100.0f;
 
     // ---- Sensor suite (three concentric detection layers) ----------------------------
     // `sensors` is the EFFECTIVE suite every consumer reads (discovery, reveal radii,
@@ -482,7 +497,7 @@ b8 hardpoint_fits_module(const HardpointDef* hp, const struct ModuleDef* def);
 
 // Re-derive composed ship stats from the hull baseline + mounted modules: effective
 // `sensors` = sensors_base with each mounted sensor module's layer multipliers applied.
-// Call after any module mount/unmount (ship_load calls it itself).
+// Call after any module mount/unmount (ship_instantiate calls it itself).
 void ship_recompute_stats(Ship* ship);
 
 // Spend `cost` from the ship's capacitor if affordable. FALSE = starved (hold fire).
@@ -562,13 +577,8 @@ void ship_turret_aim_at(Ship* ship, i32 hp_index, bs_math::Vec2 world_dir);
 // flags are consumed. Call once per sim tick per ship that renders mount art.
 void ship_update_turrets(Ship* ship, f32 dt);
 
-// Load a ship from a `.ship` file (path relative to the working directory). Returns FALSE
-
-// on any parse/IO error (and logs why); on success `out_ship` is fully populated with
-
-// origin = {0,0}. Call once during game init.
-
-b8 ship_load(Ship* out_ship, const char* path);
+// Ships are built from registry stat cards: see ship_registry_load / ship_instantiate in
+// sim/ship_def.h (the old direct-from-file ship_load is retired).
 
 // ---- Weapon groups (player fire control) ----------------------------------------------
 

@@ -412,6 +412,11 @@ b8 game_init(Game* game_inst) {
 
     // ---- Ship module registry (immutable defs; ships mount entries by pointer) -----------
 
+    // ---- Ship def registry (hull stat cards): every hull the game can spawn is one card --
+    // Loaded FIRST: the fleet/enemy instantiations below and ai_ships_init both draw on it.
+
+    ship_registry_load(&s->ship_registry, "assets/ships/ships.list");
+
     module_registry_load(&s->module_registry, "assets/modules/modules.list");
 
     // ---- Weapon def registry (stat system S2): immutable stat blocks from assets/weapons --
@@ -428,9 +433,12 @@ b8 game_init(Game* game_inst) {
 
         FleetShip& fs = s->fleet_state.fleet.add();
 
-        if (!ship_load(&fs.ship, "assets/ships/ship/ship.ship")) {
+        // The Vanguard is by DESIGN a late-game, high-tier hull; the starting fleet flies it
+        // only until a dedicated starter hull card exists (it is the one hull with authored
+        // art + hardpoints). Swap this id when that card lands.
+        if (!ship_instantiate(ship_registry_find(&s->ship_registry, "vanguard_cruiser"), &fs.ship)) {
 
-            BS_LOG_FATAL("game_init: failed to load player ship.");
+            BS_LOG_FATAL("game_init: failed to instantiate player ship 'vanguard_cruiser'.");
 
             return FALSE;
 
@@ -444,15 +452,17 @@ b8 game_init(Game* game_inst) {
 
         // Named at spawn like the escorts below: the roster, the stance action-log lines and
         // the fleet readout all print vessel_name, and every one of them showed an empty
-        // flagship before this was set.
-        fs.ship.vessel_name = "Flagship";
+        // flagship before this was set. vessel_name is the ship's PROPER NAME (its callsign),
+        // not its role -- "flagship"/"escort" are states the fleet model already tracks, and
+        // the class name lives on the card (ship->def->name).
+        fs.ship.vessel_name = "Iron Meridian";
 
         fs.ship.glow   = s->render.glow_params;
 
         fs.ship.radiation_emission = 0.05f;
 
         // The flagship's weapons start UNMOUNTED in the loadout stash; the player mounts them
-        // onto hardpoints from the Arsenal inspector (ship_load cleared all hardpoint mounts).
+        // onto hardpoints from the Arsenal inspector (ship_instantiate cleared all hardpoint mounts).
         // A deliberately diverse starting rack -- baseline gauss, rapid autocannon (flak
         // platform), salvo artillery, and a missile rack -- so the stat cards read differently
         // from minute one. The stash is the FLEET-WIDE pool: the escorts' cannons join it at
@@ -500,6 +510,10 @@ b8 game_init(Game* game_inst) {
 
         const VesselFaction player_faction = s->fleet_state.fleet.flagship().ship.faction;
 
+        // Proper names, not roles ("Escort" is a state): one per hull, in spawn order. The
+        // pointers land in vessel_name, so the literals' static storage is what keeps them alive.
+        const char* escort_names[4] = { "Vesper", "Halcyon", "Cinderwake", "Duskrunner" };
+
         // Cruiser hulls are ~1586 units long (~817-unit bounding radius), so keep the demo
         // formation spread wide enough that no hulls overlap at spawn.
         const Vec2 escort_offsets[4] = {
@@ -518,9 +532,9 @@ b8 game_init(Game* game_inst) {
 
             FleetShip& fs = s->fleet_state.fleet.add();
 
-            if (!ship_load(&fs.ship, "assets/ships/ship/ship.ship")) {
+            if (!ship_instantiate(ship_registry_find(&s->ship_registry, "vanguard_cruiser"), &fs.ship)) {
 
-                BS_LOG_ERROR("game_init: failed to load escort ship %d.", i);
+                BS_LOG_ERROR("game_init: failed to instantiate escort ship %d.", i);
 
                 continue;
 
@@ -534,7 +548,7 @@ b8 game_init(Game* game_inst) {
 
             fs.ship.faction_id  = FACTION_PLAYER;
 
-            fs.ship.vessel_name = "Escort";
+            fs.ship.vessel_name = escort_names[i];
 
             fs.ship.glow        = s->render.glow_params;
 
@@ -555,9 +569,9 @@ b8 game_init(Game* game_inst) {
 
     }
 
-    if (!ship_load(&s->fleet_state.enemy_ship, "assets/enemy_ship.ship")) {
+    if (!ship_instantiate(ship_registry_find(&s->ship_registry, "raider"), &s->fleet_state.enemy_ship)) {
 
-        BS_LOG_FATAL("game_init: failed to load enemy ship.");
+        BS_LOG_FATAL("game_init: failed to instantiate enemy ship 'raider'.");
 
         return FALSE;
 
@@ -582,7 +596,7 @@ b8 game_init(Game* game_inst) {
     // ---- Enemy weapon inventory ----------------------------------------------------------
 
     // Auto-mount the enemy cannon on its first weapon hardpoint (legacy hulls get a synthetic
-    // center mount from ship_load, so this always succeeds).
+    // center mount from the card load, so this always succeeds).
     i32 enemy_hp = ship_first_free_hardpoint(&s->fleet_state.enemy_ship, MODULE_TYPE_WEAPON);
 
     if (enemy_hp < 0) enemy_hp = 0;
@@ -629,6 +643,12 @@ b8 game_init(Game* game_inst) {
     // (projectiles, combat_entities registration, out_sensor_fx, heat-signature params and the
     //  encounter state now live in sim/combat_arena.cpp -> combat_arena_init.)
     combat_arena_init(s);
+
+    // Resolve the hull cards' textures BEFORE ai_ships_init: its templates (and every NpcShip
+    // struct-copied from them) carry the def's handles, so the defs must be live first. This is
+    // the same point the retired per-template resolve calls ran at, so the renderer is up here;
+    // the fleet/enemy instances above still get their own per-instance resolve pass later.
+    ship_registry_resolve_textures(&s->ship_registry);
 
     // ---- General Ship AI: load the NPC hull template and reserve the NPC combat-entity window --
     // The NPC window begins right after the persistent fleet + enemy slots registered above.
@@ -1843,6 +1863,45 @@ static void game_push_hud(game_state* s, f32 dt) {
             hud.tip_visible = TRUE;
             snprintf(hud.tip_left, sizeof(hud.tip_left), "%dpx", tx);
             snprintf(hud.tip_top,  sizeof(hud.tip_top),  "%dpx", ty);
+        }
+    }
+
+    // ---- Ship hover nameplate (above the hull: vessel name + hull class) -----------------
+    // np_left/np_top carry the plate's anchor: horizontally the hull's screen-space center,
+    // vertically the TOP of its bounding circle (rotation-invariant, so the plate clears the
+    // hull at any heading) minus a gap -- the plate floats over the ship's upper edge rather
+    // than covering the art. Clamped so a hull taller than the screen still shows the plate
+    // near the top edge instead of pushing it off-screen. Both strings must ALWAYS hold a
+    // valid CSS length (same rule as tip_left/tip_top above). The class line is the registry
+    // card's display name (ship->def->name); a hull whose vessel name IS its class name --
+    // the card-name fallback for unnamed NPC traffic -- sends "" and the plate collapses to
+    // one line. RtsControls owns WHICH hull qualifies (fleet always, hostiles only once
+    // identified) via hovered_nameplate_ship().
+    snprintf(hud.np_left, sizeof(hud.np_left), "0px");
+    snprintf(hud.np_top,  sizeof(hud.np_top),  "0px");
+    if (!s->editor.edit_mode_active) {
+        const Ship* np = s->rts_controls.hovered_nameplate_ship();
+        if (np) {
+            Vec2 npc_screen = camera2d_world_to_screen(&s->camera_state.camera,
+                                                       s->fb_width, s->fb_height,
+                                                       render_from_hierpos(s, &np->origin));
+            // Hull's on-screen half-extent: bounding radius (world units) x zoom (px/unit).
+            f32 zoom      = s->camera_state.camera.zoom;
+            f32 radius_px = ship_bounding_radius(np) * (zoom > 0.0f ? zoom : 0.0f);
+            // 12 px gap + 22 px half plate height (the RCSS margin-top centers the plate on
+            // the anchor), so the plate's bottom edge sits 12 px above the hull's top.
+            f32 anchor_y = npc_screen.y - radius_px - 34.0f;
+            if (anchor_y < 40.0f) anchor_y = 40.0f;   // keep it on-screen at close zoom
+            const char* np_name = np->vessel_name ? np->vessel_name : "Unnamed vessel";
+            const char* np_cls  = (np->def && np->def->name[0])
+                                      ? np->def->name
+                                      : ship_size_class_name(np->size_class);
+            hud.np_visible = TRUE;
+            snprintf(hud.np_left, sizeof(hud.np_left), "%dpx", (i32)npc_screen.x);
+            snprintf(hud.np_top,  sizeof(hud.np_top),  "%dpx", (i32)anchor_y);
+            snprintf(hud.np_name, sizeof(hud.np_name), "%s", np_name);
+            if (strcmp(np_name, np_cls) != 0)
+                snprintf(hud.np_class, sizeof(hud.np_class), "%s", np_cls);
         }
     }
 

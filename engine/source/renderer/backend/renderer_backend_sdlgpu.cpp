@@ -4784,6 +4784,9 @@ struct BsRmlHudModel
     bool                     tip_visible = false;
     Rml::String              tip_left = "0px", tip_top = "0px", tip_text;
 
+    bool                     np_visible = false;
+    Rml::String              np_left = "0px", np_top = "0px", np_name, np_class;
+
     bool                        inspector_btn_visible = false;
     bool                        inspector_visible = false;
     Rml::String                 insp_ship_name;
@@ -5021,6 +5024,12 @@ b8 bs_rml_hud_init(const char* rml_path)
     c.Bind("tip_top",     &g_hud_model.tip_top);
     c.Bind("tip_text",    &g_hud_model.tip_text);
 
+    c.Bind("np_visible", &g_hud_model.np_visible);
+    c.Bind("np_left",    &g_hud_model.np_left);
+    c.Bind("np_top",     &g_hud_model.np_top);
+    c.Bind("np_name",    &g_hud_model.np_name);
+    c.Bind("np_class",   &g_hud_model.np_class);
+
     c.Bind("inspector_btn_visible", &g_hud_model.inspector_btn_visible);
     c.Bind("inspector_visible",     &g_hud_model.inspector_visible);
     c.Bind("insp_ship_name",        &g_hud_model.insp_ship_name);
@@ -5234,6 +5243,12 @@ void bs_rml_hud_update(const bs_rml_hud_state* s)
     bs_rml_assign(g_hud_model.tip_left, s->tip_left, sizeof(s->tip_left));
     bs_rml_assign(g_hud_model.tip_top,  s->tip_top,  sizeof(s->tip_top));
     bs_rml_assign(g_hud_model.tip_text, s->tip_text, sizeof(s->tip_text));
+
+    g_hud_model.np_visible = s->np_visible ? true : false;
+    bs_rml_assign(g_hud_model.np_left,  s->np_left,  sizeof(s->np_left));
+    bs_rml_assign(g_hud_model.np_top,   s->np_top,   sizeof(s->np_top));
+    bs_rml_assign(g_hud_model.np_name,  s->np_name,  sizeof(s->np_name));
+    bs_rml_assign(g_hud_model.np_class, s->np_class, sizeof(s->np_class));
 
     g_hud_model.inspector_btn_visible = s->inspector_btn_visible ? true : false;
     g_hud_model.inspector_visible     = s->inspector_visible ? true : false;

@@ -2,6 +2,7 @@
 # Light, fast NPC hull: system patrols, interceptors and scouts. Small silhouette so a
 # picket reads as nimble next to a line warship at the same zoom.
 
+id npc_escort
 name "Lance-class Escort"
 faction 0
 world_scale 0.17

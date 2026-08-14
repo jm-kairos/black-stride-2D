@@ -11,6 +11,7 @@
 #include <renderer/bs_imgui.h>
 #include <renderer/bs_rml.h>   // bs_rml_wants_mouse: in-game UI (RmlUi) owns the cursor
 #include "render/galaxy_map_render.h" // galaxy_pick_planet: planet under the cursor (map look)
+#include "sim/discovery.h"   // discovery_npc_is_known: no nameplate on unidentified contacts
 #include <renderer/camera2d.h>
 using namespace bs_math;
 // =====================================================================================
@@ -467,6 +468,28 @@ void RtsControls::draw_dashed_circle(Vec2 center, f32 radius, u32 segments, f32 
     }
 }
 // =====================================================================================
+// The hull the hover NAMEPLATE should describe, or nullptr. The nameplate itself is an
+// RmlUi HUD element (hud.rml #nameplate) filled by game_push_hud from this: the hovered
+// fleet member always qualifies; a hovered hostile only once identified -- an undiscovered
+// contact renders as an "unidentified" marker, and hovering it must not leak what the
+// sensors have not earned.
+const Ship* RtsControls::hovered_nameplate_ship() const {
+    if (!m_state) return nullptr;
+    if (m_hovered_ship_idx >= 0 && m_hovered_ship_idx < m_state->fleet_state.fleet.count())
+        return &m_state->fleet_state.fleet.at(m_hovered_ship_idx).ship;
+    if (m_hovered_enemy_idx >= 0 && m_hovered_enemy_idx < m_state->combat_entity_count) {
+        const CombatEntity* ce = &m_state->combat_entities[m_hovered_enemy_idx];
+        if (ce->active && ce->ship) {
+            if (ce->is_npc && ce->npc_index >= 0 && ce->npc_index < NPC_SHIP_MAX) {
+                const NpcShip& n = m_state->npc_ships[ce->npc_index];
+                if (!discovery_npc_is_known(m_state, n.home_node, n.spawn_seed)) return nullptr;
+            }
+            return ce->ship;
+        }
+    }
+    return nullptr;
+}
+// =====================================================================================
 void RtsControls::draw() {
     if (!m_state) return;
     b8 in_free_camera = m_state->camera_state.free_camera_active;
@@ -575,6 +598,8 @@ void RtsControls::draw() {
             }
         }
     }
+    // The hover NAMEPLATE is an RmlUi HUD element (hud.rml #nameplate), filled by
+    // game_push_hud from hovered_nameplate_ship() above -- nothing to draw here.
     // The FLEET SHIP readout is now an RmlUi HUD document (see hud.rml + game_push_hud), and the
     // number-row weapon-group selection for the piloted ship now lives in game_update's
     // MODE_GLOBAL branch (with action-log feedback), so no input handling remains here.

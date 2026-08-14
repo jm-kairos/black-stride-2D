@@ -45,8 +45,12 @@ FrameOrchestrator.
 **Extension points:** **The intended extension is a data row.** `ai_ship.h` states the design
 thesis: one FSM for every ship type, differentiated only by `AiProfile` data and an
 `enabled_states` bitmask, "so new ship kinds are added as data rows — no new AI code". Adding an
-archetype means a value in `ShipArchetype`, a profile row returned by `ai_profile`, a hull path
-in `archetype_hull_path`, and a weapon id in `archetype_weapon_id`. A genuinely new *behaviour*
+archetype means a value in `ShipArchetype`, a profile row returned by `ai_profile`, a ship
+registry card id in `archetype_hull_id` (the card itself lives in `assets/ships/ships.list`;
+ids missing from the registry fall back to the shared `raider` hull), and a weapon id in
+`archetype_weapon_id`. A card that authors a `hull` line overrides the archetype's HP literal
+at spawn (`hull_authored`); un-authored cards keep the literals, so per-hull toughness is an
+opt-in data edit. A genuinely new *behaviour*
 needs an `AiState` value plus a tick function following `ai_trader_tick` / `ai_miner_tick`, and
 inclusion in the archetype's `enabled_states` mask.
 
@@ -77,4 +81,8 @@ inclusion in the archetype's `enabled_states` mask.
 
 **Source paths:** `sandbox/source/sim/ai_ship.{cpp,h}`
 
-**Last verified:** 2026-08-07, commit `812680c`
+**Last verified:** 2026-08-13, working tree on `game` (hull templates now instantiate from the
+ship registry: `archetype_hull_path` became `archetype_hull_id`, `ai_ships_init` builds
+`npc_template`/`npc_hulls` via `ship_instantiate` and no longer resolves textures per template —
+it copies the def's handles, which is why `ship_registry_resolve_textures` must run before it
+in `game_init`. Previously 2026-08-07, commit `812680c`.)

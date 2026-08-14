@@ -282,6 +282,16 @@ typedef struct bs_rml_hud_state
     char tip_top[16];
     char tip_text[1024];
 
+    // Ship hover nameplate (hull-anchored): vessel name over hull class while the cursor is
+    // over a hull in the world. Same binding contract as the tooltip: np_left/np_top are
+    // prebuilt CSS pixel strings that must ALWAYS hold a valid length (the data-style
+    // bindings evaluate even while hidden); np_class "" collapses the class line.
+    b8   np_visible;
+    char np_left[16];
+    char np_top[16];
+    char np_name[64];
+    char np_class[64];
+
     // Ship inspector: a FULL-SCREEN three-zone window (left status column, see-through center,
     // right bay column) opened via the bottom-center "Inspector" button (piloted ship) or a
     // roster row's "insp:N" (any fleet member). inspector_btn_visible shows the launcher during

@@ -16,6 +16,8 @@
 
 #include "sim/ship.h"
 
+#include "sim/ship_def.h"
+
 #include "sim/module.h"
 
 #include "sim/weapon_def.h"
@@ -3626,6 +3628,10 @@ struct game_state {
                                                // (the cursor sits over the hub itself while it is held)
 
 
+
+    // ---- Ship def registry (immutable hull stat cards loaded once from assets/ships) -------------
+
+    ShipRegistry     ship_registry;           // shared ShipDef pool; instances built via ship_instantiate
 
     // ---- Ship module registry (immutable defs loaded once from assets/modules) -------------------
 

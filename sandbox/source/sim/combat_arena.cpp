@@ -76,7 +76,7 @@ void combat_arena_rebuild_player_entities(game_state* s) {
         ce->radius   = ship_bounding_radius(&s->fleet_state.enemy_ship);
         ce->faction  = s->fleet_state.enemy_ship.faction;
         ce->faction_id = s->fleet_state.enemy_ship.faction_id;
-        ce->hp       = 100.0f;
+        ce->hp       = s->fleet_state.enemy_ship.hull_max_hp;   // card stat (`hull` line; 100 default)
         ce->ship     = &s->fleet_state.enemy_ship;
         ce->tint     = bs_color{ 1.0f, 0.3f, 0.3f, 1.0f };
         ce->radiation_emission = s->fleet_state.enemy_ship.radiation_emission;
@@ -94,7 +94,7 @@ void combat_arena_rebuild_player_entities(game_state* s) {
         ce->radius   = ship_bounding_radius(&fs.ship);
         ce->faction  = fs.ship.faction;
         ce->faction_id = fs.ship.faction_id;
-        ce->hp       = 100.0f;
+        ce->hp       = fs.ship.hull_max_hp;   // card stat (`hull` line; 100 default)
         ce->ship     = &fs.ship;
         ce->tint     = bs_color{ 0.3f, 0.8f, 1.0f, 1.0f };
         ce->radiation_emission = fs.ship.radiation_emission;

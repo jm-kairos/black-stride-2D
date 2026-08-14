@@ -2,6 +2,7 @@
 # Civilian bulk hull: contract traders and belt miners. Broad and slow-looking -- the
 # freighter silhouette that makes an unescorted convoy read as a target.
 
+id npc_hauler
 name "Ostrel-class Bulk Hauler"
 faction 0
 world_scale 0.28

@@ -8,7 +8,6 @@
 
 #include "sim/ship_mission.h"     // ship_mission_notify_destroyed (macro <-> local handoff)
 
-#include "render/ship_visual.h"          // ship_visual_resolve_textures
 
 #include "sim/steering.h"         // shared steering (arrive/seek/standoff + apply)
 
@@ -136,29 +135,27 @@ static const i32 NPC_PROJECTILE_BUDGET = (MAX_PROJECTILES * 3) / 4;
 
 // Phase 7: per-archetype hulls + weapons ------------------------------------------------------
 
-// Hulls are DATA: each archetype names a .ship file, so a new ship kind is a new asset plus one
+// Hulls are DATA: each archetype names a ship-registry card id, so a new ship kind is a
+// new card in assets/ships/ships.list plus one row here -- no new code. Ids missing from
+// the registry fall back to the shared raider hull, so the sim never depends on art existing.
 
-// row here -- no new code. Missing files fall back to the shared raider hull, so the sim never
-
-// depends on art existing.
-
-static const char* archetype_hull_path(u8 archetype) {
+static const char* archetype_hull_id(u8 archetype) {
 
     switch (archetype) {
 
-        case ARCHETYPE_WARSHIP:     return "assets/ships/npc/npc_warship.ship";
+        case ARCHETYPE_WARSHIP:     return "npc_warship";
 
-        case ARCHETYPE_PATROL:      return "assets/ships/npc/npc_escort.ship";
+        case ARCHETYPE_PATROL:      return "npc_escort";
 
-        case ARCHETYPE_INTERCEPTOR: return "assets/ships/npc/npc_escort.ship";
+        case ARCHETYPE_INTERCEPTOR: return "npc_escort";
 
-        case ARCHETYPE_SCOUT:       return "assets/ships/npc/npc_escort.ship";
+        case ARCHETYPE_SCOUT:       return "npc_escort";
 
-        case ARCHETYPE_TRADER:      return "assets/ships/npc/npc_hauler.ship";
+        case ARCHETYPE_TRADER:      return "npc_hauler";
 
-        case ARCHETYPE_MINER:       return "assets/ships/npc/npc_hauler.ship";
+        case ARCHETYPE_MINER:       return "npc_hauler";
 
-        default:                    return "assets/enemy_ship.ship";   // PIRATE keeps the raider hull
+        default:                    return "raider";   // PIRATE keeps the raider hull
 
     }
 
@@ -214,23 +211,16 @@ void ai_ships_init(game_state* s) {
 
 
 
-    // Shared hull template: loaded once, struct-copied on each spawn (visual texture handles are
+    // Shared hull template: instantiated once from the registry, struct-copied on each spawn
+    // (visual texture handles are shared -- safe for rendering, never freed per-agent; the
+    // registry's defs were resolved at game init, so the copy carries live handles). This is
+    // the FALLBACK hull; Phase 7 instantiates a per-archetype template on top of it below.
 
-    // shared -- safe for rendering, never freed per-agent). This is the FALLBACK hull; Phase 7
-
-    // loads a per-archetype template on top of it below.
-
-    if (ship_load(&s->npc_template, "assets/enemy_ship.ship")) {
-
-        ship_visual_resolve_textures(&s->npc_template.visual);
+    if (ship_instantiate(ship_registry_find(&s->ship_registry, "raider"), &s->npc_template)) {
 
         s->npc_template.faction = VESSEL_PIRATE;
 
         s->npc_template.faction_id = FACTION_PIRATE;
-
-        s->npc_template.active_weapon_idx = -1;
-
-        for (i32 w = 0; w < SHIP_MAX_HARDPOINTS; ++w) s->npc_template.mounts[w] = nullptr;
 
         s->npc_template.glow = s->render.glow_params;
 
@@ -240,7 +230,7 @@ void ai_ships_init(game_state* s) {
 
     } else {
 
-        BS_LOG_ERROR("ai_ships_init: failed to load NPC hull template.");
+        BS_LOG_ERROR("ai_ships_init: 'raider' missing from the ship registry; no NPC hull template.");
 
     }
 
@@ -262,25 +252,19 @@ void ai_ships_init(game_state* s) {
 
         if (!s->npc_template_ready) continue;
 
-        const char* path = archetype_hull_path((u8)a);
+        const char* hull_id = archetype_hull_id((u8)a);
 
-        if (!ship_load(&t, path)) {
+        if (!ship_instantiate(ship_registry_find(&s->ship_registry, hull_id), &t)) {
 
-            BS_LOG_WARN("ai_ships_init: archetype %d hull '%s' missing; using the fallback hull.", a, path);
+            BS_LOG_WARN("ai_ships_init: archetype %d hull '%s' not in the registry; using the fallback hull.", a, hull_id);
 
             continue;
 
         }
 
-        ship_visual_resolve_textures(&t.visual);
-
         t.faction           = VESSEL_PIRATE;      // binary friendly-fire enum; stance uses faction_id
 
         t.faction_id        = FACTION_PIRATE;
-
-        t.active_weapon_idx = -1;
-
-        for (i32 w = 0; w < SHIP_MAX_HARDPOINTS; ++w) t.mounts[w] = nullptr;
 
         t.glow               = s->render.glow_params;
 
@@ -387,6 +371,13 @@ static i32 spawn_npc(game_state* s, i16 faction, HierPos2 pos, i32 home_node, u8
     if (archetype == ARCHETYPE_WARSHIP)          n.hp = n.max_hp = 70.0f;   // line combatant
     else if (archetype == ARCHETYPE_INTERCEPTOR) n.hp = n.max_hp = 32.0f;   // fast, fragile
     else if (archetype == ARCHETYPE_SCOUT)       n.hp = n.max_hp = 22.0f;   // eyes only
+
+    // A hull card that authors `hull` overrides the archetype tuning -- toughness becomes a
+    // property of the HULL, deliberately tuned per card. Un-authored cards (hull_authored
+    // FALSE) keep the archetype literals above, so NPC balance is untouched until a card
+    // opts in.
+    if (n.ship.def && n.ship.def->hull_authored)
+        n.hp = n.max_hp = n.ship.def->hull_max_hp;
 
     n.last_contact  = pos;
     n.contact_timer = 0.0f;

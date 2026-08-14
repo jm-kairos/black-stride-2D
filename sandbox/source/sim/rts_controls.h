@@ -45,6 +45,10 @@ public:
     // Fleet member under the cursor in the WORLD (or -1) -- feeds the RML roster's row
     // hover cue, the fourth accessor existing solely for the HUD snapshot.
     i32 hovered_index() const { return m_hovered_ship_idx; }
+    // The hull the hover NAMEPLATE (RML HUD #nameplate) should describe, or nullptr: the
+    // hovered fleet member, else the hovered hostile once identified (undiscovered contacts
+    // stay anonymous). game_push_hud reads it to fill the np_* snapshot fields.
+    const Ship* hovered_nameplate_ship() const;
     // Take manual control of fleet member `idx`: recenter glide onto the hull, ending in
     // ship-follow. Works from the detached RTS view AND as a direct hull-to-hull transfer
     // while already piloting (it detaches in place first, so both paths share one glide).

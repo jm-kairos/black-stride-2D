@@ -19,7 +19,8 @@ The object is a `game_state` member, so it is reached through the hub rather tha
 no other subsystem includes this header.
 
 **Depends on:** FleetControl, ShipCombatModel, CoordinateFrames, GalaxyMapRendering
-(`galaxy_pick_planet`), ActionLog (standing-order feedback), GameStateModel;
+(`galaxy_pick_planet`), ActionLog (standing-order feedback), Discovery
+(`discovery_npc_is_known`, nameplate identification gate), GameStateModel;
 engine `core/input.h`, `renderer/renderer.h`,
 `renderer/camera2d.h`, `renderer/bs_imgui.h`, `renderer/bs_rml.h`, `math/math_utils.h`,
 `renderer/renderer_types.h`, `defines.h`.
@@ -162,7 +163,16 @@ drain.
 
 **Source paths:** `sandbox/source/sim/rts_controls.{cpp,h}`
 
-**Last verified:** 2026-08-13, working tree on `game` (adds the hover-gated order links —
+**Last verified:** 2026-08-13, working tree on `game` (adds the hover NAMEPLATE — an RmlUi
+HUD element (`hud.rml` `#nameplate`, hull-anchored via the same data-style-left/top contract
+as the galaxy tooltip): a thin translucent plate centered on the hovered hull, vessel name
+over the hull class from the registry card (`ship->def->name`). This module owns only WHICH
+hull qualifies — `hovered_nameplate_ship()`: fleet always, hostiles once identified
+(`discovery_npc_is_known`) — and `game_push_hud` fills the `np_*` snapshot fields; the plate
+is `pointer-events: none`, or its own hover would flip `bs_rml_wants_mouse` and kill the
+world hover that shows it. A hull whose vessel name IS its class name — the card-name
+fallback — collapses to one line; live-verified on the flagship. Earlier the same day: adds
+the hover-gated order links —
 pulsing screen-constant dashes marching from the ordered ship to its target, escort green /
 attack red, one `draw_order_link` helper, drawn in both camera modes; escort live-verified
 from both ends, hidden unhovered, attached and detached; attack verified in play. Earlier the

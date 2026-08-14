@@ -1,5 +1,6 @@
 # Black Stride ship definition (.ship format).
 
+id raider
 name "Raider-class Interceptor"
 faction 0
 world_scale 0.25

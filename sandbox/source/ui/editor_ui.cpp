@@ -17,7 +17,8 @@
 using namespace bs_math;
 
 // Rebuild the '|'-joined accepts list ("weapon|defense") from a MODULE_TYPE_* mask —
-// the exact reverse of ship_load's parse_module_mask, for .ship line round-tripping.
+// the exact reverse of ship_def_load's parse_module_mask (sim/ship_def.cpp), for .ship
+// line round-tripping.
 static void hardpoint_accepts_string(u32 mask, char* buf, i32 cap) {
     static const struct { u32 bit; const char* name; } KINDS[] = {
         { MODULE_TYPE_WEAPON,  "weapon"  },
