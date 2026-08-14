@@ -18,6 +18,17 @@ static constexpr f32 RTS_ATTACK_MIN_RANGE  = 150.0f; // do not fire closer than 
 // Strafing movement controller: how aggressively the ship corrects its velocity toward the
 // desired arrival velocity. Projected onto local thrusters (forward/back + lateral).
 static constexpr f32 RTS_STRAFE_GAIN = 3.0f;
+// Turn-and-burn: a move order farther than this rotates the ship onto the destination and
+// rides the MAIN drive; anything closer is precision work (docking-scale hops, formation
+// trims) flown on RCS by the strafing controller, where swinging a cruiser's nose around
+// twice would cost more time than sliding saves. Sized from the hull with a floor like the
+// other hull-derived rings, and comfortably above the vanguard's ~410-unit full-speed
+// braking distance, so main-engine cutoff hands over to RCS before the retro brake begins.
+static constexpr f32 RTS_MOVE_FACE_DIST_MUL = 3.0f;    // x own bounding radius
+static constexpr f32 RTS_MOVE_FACE_DIST_MIN = 1500.0f; // floor for small hulls
+// Lateral authority while cruising: cross-track error is TRIMMED at a fraction of full
+// thrust, so the side jets read as course corrections, never as a second drive axis.
+static constexpr f32 RTS_CRUISE_TRIM_FRAC   = 0.25f;
 // Formation layout.
 static constexpr f32 FORMATION_SPACING_MUL = 2.5f;   // x max bounding radius
 static constexpr f32 FORMATION_MIN_SPACING = 400.0f; // world units floor
@@ -42,6 +53,36 @@ static CombatEntity* find_combat_entity_for_ship(game_state* s, Ship* ship) {
     return nullptr;
 }
 // =====================================================================================
+// Thruster telemetry: ease one visual channel toward its clamped command. Attack is faster
+// than release so a tapped key flares immediately while the flame takes a beat to die --
+// the same asymmetry a real engine's spool-down shows, and what keeps the autopilot's
+// bang-bang thrust corrections from strobing the jets.
+static f32 telemetry_ease(f32 vis, f32 cmd, f32 dt) {
+    cmd = clampf(cmd, -1.0f, 1.0f);
+    f32 rate = (fabsf(cmd) > fabsf(vis)) ? 14.0f : 6.0f;
+    f32 k = rate * dt;
+    if (k > 1.0f) k = 1.0f;
+    return vis + (cmd - vis) * k;
+}
+void flight_telemetry_tick(ShipFlight* fl, f32 dt) {
+    if (!fl) return;
+    fl->thrust_vis.x = telemetry_ease(fl->thrust_vis.x, fl->thrust_cmd.x, dt);
+    fl->thrust_vis.y = telemetry_ease(fl->thrust_vis.y, fl->thrust_cmd.y, dt);
+    fl->turn_vis     = telemetry_ease(fl->turn_vis,     fl->turn_cmd,     dt);
+    // Nozzle thermal state: chases the forward burn on a SECONDS timescale (heat soaks in
+    // slower than it radiates nothing -- rise ~1s to glow, fall ~3s to cold), so the bell
+    // stays hot through throttle blips and the burn-vs-heat gap marks a cold ignition.
+    {
+        f32 target = fmaxf(0.0f, fl->thrust_vis.y);
+        f32 rate = (target > fl->heat_vis) ? 1.1f : 0.35f;
+        f32 k = rate * dt;
+        if (k > 1.0f) k = 1.0f;
+        fl->heat_vis += (target - fl->heat_vis) * k;
+    }
+    fl->thrust_cmd = Vec2{ 0.0f, 0.0f };
+    fl->turn_cmd   = 0.0f;
+}
+// =====================================================================================
 // FleetShip
 // =====================================================================================
 void FleetShip::simulate(f32 dt, b8 turn_commanded) {
@@ -62,6 +103,9 @@ void FleetShip::simulate(f32 dt, b8 turn_commanded) {
     // Integrate the rigid-body pose.
     sh->origin = hierpos_add_vec2(&sh->origin, vec2_scale(fl->velocity, dt));
     sh->angle += fl->angular_velocity * dt;
+    // Consume this tick's thruster commands (every control path has written by now: the
+    // pilot runs before the autopilot, the autopilot before this one integrator).
+    flight_telemetry_tick(fl, dt);
 }
 // =====================================================================================
 void FleetShip::update_move(f32 dt) {
@@ -87,11 +131,56 @@ void FleetShip::update_move(f32 dt) {
     Vec2 desired_acc = vec2_scale(vel_err, RTS_STRAFE_GAIN);
     Vec2 fwd   = vec2_rotate(Vec2{ 0.0f, 1.0f }, sh->angle);
     Vec2 right = vec2_rotate(Vec2{ 1.0f, 0.0f }, sh->angle);
+    // ---- TURN-AND-BURN regime: far orders fly nose-first on the main drive --------------
+    // The ship rotates to FACE the destination and accelerates along its own axis; lateral
+    // thrusters are demoted to cross-track trim. The strafing controller below survives as
+    // the PRECISION regime -- final approach, docking-scale hops, formation-slot corrections
+    // -- where sliding on RCS beats swinging a cruiser's nose around twice. The nose is only
+    // ours to steer when no attack order holds it on a target: move+attack coexist by design
+    // (strafe toward the destination while the guns track), and two writers on the angle
+    // would fight every frame.
+    f32 face_dist = fmaxf(ship_bounding_radius(sh) * RTS_MOVE_FACE_DIST_MUL,
+                          RTS_MOVE_FACE_DIST_MIN);
+    if (!has_attack_target && dist > face_dist) {
+        f32 desired_angle = atan2f(-dir.x, dir.y); // heading convention: angle 0 = nose +Y
+        f32 angle_diff = normalize_angle(desired_angle - sh->angle);
+        f32 max_rot = m.max_turn * dt;
+        // Angular ARRIVE: slew rate follows sqrt(2 * turn_accel * |error|), capped at
+        // max_turn -- the rotational twin of the linear sqrt(2*decel*dist) envelope above --
+        // so the nose sheds rotation over the last few degrees and eases onto the heading
+        // instead of slamming from full rate to a dead stop in one tick. The telemetry
+        // records the tapering step, so the turn jets fade out with the turn.
+        f32 slew = fminf(m.max_turn, sqrtf(2.0f * m.turn_accel * fabsf(angle_diff)));
+        f32 step = clampf(angle_diff, -slew * dt, slew * dt);
+        sh->angle += step;
+        fl->angular_velocity = 0.0f;
+        if (max_rot > 0.0f) fl->turn_cmd += clampf(step / max_rot, -1.0f, 1.0f);
+        // Main drive lights only once the nose is roughly on. Retro (negative) thrust stays
+        // allowed at any angle so leftover forward speed bleeds off while still turning.
+        f32 burn_acc = clampf(vec2_dot(desired_acc, fwd), -m.decel, m.accel);
+        if (burn_acc > 0.0f && fabsf(angle_diff) > RTS_MOVE_FACE_ANGLE) burn_acc = 0.0f;
+        f32 trim_cap = m.accel * RTS_CRUISE_TRIM_FRAC;
+        f32 trim_acc = clampf(vec2_dot(desired_acc, right), -trim_cap, trim_cap);
+        fl->thrust_cmd.y += (burn_acc >= 0.0f) ? ((m.accel > 0.0f) ? burn_acc / m.accel : 0.0f)
+                                               : ((m.decel > 0.0f) ? burn_acc / m.decel : 0.0f);
+        fl->thrust_cmd.x += (m.accel > 0.0f) ? trim_acc / m.accel : 0.0f;
+        Vec2 burn = vec2_add(vec2_scale(fwd, burn_acc), vec2_scale(right, trim_acc));
+        fl->velocity = vec2_add(fl->velocity, vec2_scale(burn, dt));
+        f32 cs = vec2_length(fl->velocity);
+        if (cs > m.max_speed) fl->velocity = vec2_scale(fl->velocity, m.max_speed / cs);
+        return;
+    }
+    // ---- PRECISION regime: the strafing controller (no rotation, RCS does the work) ------
     f32 fwd_acc  = vec2_dot(desired_acc, fwd);
     f32 right_acc = vec2_dot(desired_acc, right);
     if (fwd_acc > 0.0f) fwd_acc = fminf(fwd_acc, m.accel);
     else                fwd_acc = fmaxf(fwd_acc, -m.decel);
     right_acc = clampf(right_acc, -m.accel, m.accel);
+    // Thruster telemetry: the local-frame projection above IS this controller's thrust
+    // command; record it normalized to the caps so the exhaust pass fires the same jets.
+    fl->thrust_cmd.y += (fwd_acc >= 0.0f) ? ((m.accel > 0.0f) ? fwd_acc / m.accel : 0.0f)
+                                          : ((m.decel > 0.0f) ? fwd_acc / m.decel : 0.0f);
+    fl->thrust_cmd.x += (m.accel > 0.0f) ? right_acc / m.accel : 0.0f;
     Vec2 acc = vec2_add(vec2_scale(fwd, fwd_acc), vec2_scale(right, right_acc));
     fl->velocity = vec2_add(fl->velocity, vec2_scale(acc, dt));
     f32 cur_speed = vec2_length(fl->velocity);
@@ -122,8 +211,18 @@ void FleetShip::update_attack(game_state* s, f32 dt) {
     f32 desired_angle = atan2f(-to_target.x, to_target.y);
     f32 angle_diff = normalize_angle(desired_angle - sh->angle);
     f32 max_rot = m.max_turn * dt;
-    sh->angle += clampf(angle_diff, -max_rot, max_rot);
+    // Angular ARRIVE, same as update_move's cruise turn: ease onto the target bearing over
+    // the last few degrees rather than snapping to a dead stop the tick the error fits in
+    // one step. The alignment gates below keep reading the full angle_diff, and the taper
+    // zone (~4 degrees on a cruiser) is well inside RTS_ATTACK_FACE_ANGLE (~14), so firing
+    // starts before the ease-out even begins -- this is purely a visual-smoothness change.
+    f32 slew = fminf(m.max_turn, sqrtf(2.0f * m.turn_accel * fabsf(angle_diff)));
+    sh->angle += clampf(angle_diff, -slew * dt, slew * dt);
     fl->angular_velocity = 0.0f;
+    // Thruster telemetry: this controller turns by writing the pose directly, so the
+    // commanded turn is the applied rotation as a fraction of this tick's cap.
+    if (max_rot > 0.0f)
+        fl->turn_cmd += clampf(clampf(angle_diff, -slew * dt, slew * dt) / max_rot, -1.0f, 1.0f);
     // Turret tracking moved BELOW, to the engaging mount only -- see the note after `w` is
     // resolved. It used to slew EVERY mounted turret onto the target here, which now fights the
     // player: game_update aims the fire selection at the cursor earlier in the same frame, and
@@ -184,11 +283,18 @@ void FleetShip::update_attack(game_state* s, f32 dt) {
             // Only close distance when too far; never actively back away from the target.
             if (dist > desired_dist + brake_dist) {
                 fl->velocity = vec2_add(fl->velocity, vec2_scale(heading, m.accel * dt));
+                fl->thrust_cmd.y += 1.0f;   // telemetry: main engines, full burn
             } else if (speed > 0.0f) {
                 fl->velocity = vec2_add(fl->velocity, vec2_scale(fl->velocity, -m.decel * dt / speed));
+                // Telemetry: a velocity-opposing brake decomposes onto whichever local
+                // thrusters point against the drift (|velocity| is frame-independent).
+                fl->thrust_cmd = vec2_add(fl->thrust_cmd,
+                    vec2_scale(vec2_rotate(fl->velocity, -sh->angle), -1.0f / speed));
             }
         } else if (speed > 0.0f) {
             fl->velocity = vec2_add(fl->velocity, vec2_scale(fl->velocity, -m.decel * 0.5f * dt / speed));
+            fl->thrust_cmd = vec2_add(fl->thrust_cmd,
+                vec2_scale(vec2_rotate(fl->velocity, -sh->angle), -0.5f / speed));
         }
     }
     // Fire when facing the target, outside minimum range, and within each weapon's OWN reach --
@@ -318,12 +424,15 @@ void FleetShip::update_escort(f32 dt) {
     // deadband, which is exactly the leash Starsector's escort orders describe -- reusing it
     // keeps escorts out of the oscillation a bare seek would produce at the ring.
     Vec2 desired = steering::standoff(to_t, dist, station, m.max_speed);
-    // Face the escortee rather than the travel heading: a screening ship should keep its guns
-    // and shields oriented on what it is protecting, not on whichever way station-keeping
-    // happens to be nudging it that frame.
+    // NEAR the ring, face the escortee rather than the travel heading: a screening ship keeps
+    // its guns and shields oriented on what it is protecting, not on whichever way
+    // station-keeping happens to be nudging it that frame. FAR off the ring it is in a
+    // catch-up cruise, so it faces its TRAVEL direction and rides the main drive instead --
+    // a cross-system catch-up flown broadside reads absurd now that the thrusters are honest.
     // control_face, not apply_face: FleetShip::simulate integrates every fleet member's pose,
     // so the integrating form moved the ship twice per frame -- escorts flew at double speed.
-    steering::control_face(sh, &flight, desired, to_t, m.accel, m.max_speed, m.max_turn, dt);
+    Vec2 face = (dist > station * 3.0f) ? desired : to_t;
+    steering::control_face(sh, &flight, desired, face, m.accel, m.max_speed, m.max_turn, dt);
 }
 // How far outside the threat's reach an avoiding ship tries to get. Slightly over 1 so it does
 // not sit exactly on the boundary and flip between running and idling every frame.
@@ -401,8 +510,7 @@ FleetShip& Fleet::add() {
     fs.avoid_target      = nullptr;
     fs.move_target = HierPos2{};
     fs.attack_target = nullptr;
-    fs.flight.velocity = Vec2{ 0.0f, 0.0f };
-    fs.flight.angular_velocity = 0.0f;
+    fs.flight = ShipFlight{};   // velocity, spin and thruster telemetry all start at rest
     if (m_count > m_spawned) m_spawned = m_count;
     return fs;
 }
@@ -536,7 +644,8 @@ void Fleet::jump_selected(i32 center_idx, HierPos2 point) {
         m_ships[i].ship.origin = hierpos_add_vec2(&point, offset);
         m_ships[i].clear_move_target();
         m_ships[i].clear_attack_target();
-        m_ships[i].flight.velocity = Vec2{ 0.0f, 0.0f };
+        // Arrive at rest: no drift, and no thruster flame carried through the jump.
+        m_ships[i].flight = ShipFlight{};
     }
 }
 void Fleet::set_all_jump_radius(f32 radius) {
@@ -600,6 +709,9 @@ static void separation_adjust(FleetShip* fs, Vec2 to_other, f32 dist, f32 min_se
         f32  t    = 1.0f - dist / min_sep;  // penetration: 0 at the ring -> 1 at contact
         Vec2 away = vec2_scale(to_other, -1.0f / dist);
         fs->flight.velocity = vec2_add(fs->flight.velocity, vec2_scale(away, m.accel * t * dt));
+        // Telemetry: the nudge is t x the accel cap, along `away` -- record it in local frame.
+        fs->flight.thrust_cmd = vec2_add(fs->flight.thrust_cmd,
+            vec2_scale(vec2_rotate(away, -fs->ship.angle), t));
     } else {
         Vec2 desired = steering::separation(to_other, dist, min_sep, m.max_speed);
         Vec2 delta   = vec2_sub(desired, fs->flight.velocity);
@@ -607,6 +719,10 @@ static void separation_adjust(FleetShip* fs, Vec2 to_other, f32 dist, f32 min_se
         f32  dl      = vec2_length(delta);
         if (dl > step) delta = vec2_scale(delta, step / dl);
         fs->flight.velocity = vec2_add(fs->flight.velocity, delta);
+        // Telemetry: applied velocity change as a fraction of this tick's accel budget.
+        if (step > 0.0f)
+            fs->flight.thrust_cmd = vec2_add(fs->flight.thrust_cmd,
+                vec2_scale(vec2_rotate(delta, -fs->ship.angle), 1.0f / step));
     }
 }
 void Fleet::update_autopilot(game_state* s, f32 dt, i32 auto_skip) {

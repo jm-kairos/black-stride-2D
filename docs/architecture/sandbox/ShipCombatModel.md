@@ -285,7 +285,14 @@ unchanged, including
 optional and presentational — it multiplies everything the slot draws *and* the barrel origins
 with it, so a rescaled mount still fires from its muzzle; omit it and the slot behaves exactly
 as before it existed, which is why every pre-existing 7-field line is untouched. The hardpoint
-editor writes it into its "Log .ship hardpoint lines" dump only when it differs from 1.0. A genuinely new weapon *behaviour* needs a `Weapon` subclass plus a `WeaponKind` tag and
+editor writes it into its "Log .ship hardpoint lines" dump only when it differs from 1.0.
+**A hull's exhaust nozzles are card lines too** — repeatable
+`thruster <main|rcs> <x> <y> <facing_deg> [size]` lines (`ThrusterDef`, max
+`SHIP_MAX_THRUSTERS`), in the same art-texel space as hardpoints, with `facing` the direction
+the exhaust LEAVES the hull (CCW from the nose: 180 = stern main, 90 = port flank). Measure
+positions off the art's alpha like muzzles; purely visual — the flight model reads none of it,
+ShipRendering projects the flight telemetry onto each nozzle, and a card with no lines keeps
+the derived stern-plus-corners fallback. A genuinely new weapon *behaviour* needs a `Weapon` subclass plus a `WeaponKind` tag and
 a branch in `weapon_instantiate`. The subclass implements `spawn_shot` and `begin_cooldown`,
 **not** `fire` — `fire` is now a non-virtual composition of those two, so it cannot be
 overridden and a subclass defining only `fire` will not compile. Note also that
@@ -357,7 +364,11 @@ it reports affordability, and the caller commits via `ship_try_spend_cap`.
 `sandbox/source/sim/weapon.{cpp,h}`, `sandbox/source/sim/weapon_def.{cpp,h}`,
 `sandbox/source/sim/projectile.{cpp,h}`, `sandbox/source/render/ship_visual.{cpp,h}`
 
-**Last verified:** 2026-08-13, working tree on `game` (hulls become registry stat cards —
+**Last verified:** 2026-08-15, working tree on `game` (the `.ship` card grows repeatable
+`thruster <main|rcs> <x> <y> <facing_deg> [size]` lines — `ThrusterDef` on `ShipDef`, parsed
+like hardpoint lines with the same art-texel space and optional clamped trailing scale; all
+five catalog cards author their nozzles, measured off each sprite's alpha; consumed only by
+ShipRendering's exhaust pass). Previously 2026-08-13 (hulls become registry stat cards —
 `sim/ship_def.{h,cpp}` adds `ShipDef`/`ShipRegistry` mirroring the weapon/module pattern, a
 manifest at `assets/ships/ships.list`, and `ship_instantiate`; `ship_load` is retired, every
 spawn site converted, and the card grows `id`/`desc`/`hull`/`motion`/`sensors`/`price`/`tier`

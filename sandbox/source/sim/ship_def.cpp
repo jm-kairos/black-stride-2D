@@ -241,6 +241,36 @@ static b8 ship_def_load(ShipDef* out, const char* path) {
             hp.art_scale = (hp_fields == 8) ? clampf(hscale, 0.05f, 4.0f) : 1.0f;
             continue;
         }
+        // thruster <main|rcs> <x> <y> <facing_deg> [size]
+        // Same art-texel space and facing convention as hardpoints; `facing` is the
+        // direction the EXHAUST leaves the hull. The trailing size is optional exactly
+        // like a hardpoint's art_scale, and clamped for the same reason.
+        char th_kind[16];
+        f32 tx, ty, tfacing, tsize = 1.0f;
+        i32 th_fields = sscanf(line, "thruster %15s %f %f %f %f",
+                               th_kind, &tx, &ty, &tfacing, &tsize);
+        if (th_fields == 4 || th_fields == 5) {
+            if (out->thruster_count >= SHIP_MAX_THRUSTERS) {
+                BS_LOG_WARN("ship_def_load: too many thrusters in '%s' (max %d); skipped.",
+                            path, SHIP_MAX_THRUSTERS);
+                continue;
+            }
+            u8 kind;
+            if      (_stricmp(th_kind, "main") == 0) kind = THRUSTER_MAIN;
+            else if (_stricmp(th_kind, "rcs")  == 0) kind = THRUSTER_RCS;
+            else {
+                BS_LOG_WARN("ship_def_load: unknown thruster kind '%s' in '%s'; skipped.",
+                            th_kind, path);
+                continue;
+            }
+            ThrusterDef& th = out->thrusters[out->thruster_count++];
+            th = ThrusterDef{};
+            th.kind      = kind;
+            th.pos_local = Vec2{ tx, ty };
+            th.facing    = tfacing * BS_DEG2RAD;
+            th.size      = (th_fields == 5) ? clampf(tsize, 0.05f, 4.0f) : 1.0f;
+            continue;
+        }
     }
     fclose(f);
     if (out->id[0] == '\0') {

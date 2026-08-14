@@ -820,6 +820,120 @@ b8 game_init(Game* game_inst) {
 
     }
 
+    // Generate a DIRECTIONAL teardrop plume for engine jets: hot wide head at v=1 -- the
+
+    // sprite batcher maps v=1 to the quad's -Y edge, where origin {0.5,1} pivots, so a jet
+
+    // anchored at a nozzle stretches with throttle like a flame instead of scaling a blob.
+
+    // Tapers to a narrow faint tail at v=0. White; tint supplies the colour, and the shader's
+
+    // custom.x temperature ramp (white-hot head -> red tail) keys off the same v axis.
+
+    {
+
+        const u32 PL_W = 64;
+
+        const u32 PL_H = 128;
+
+        static u8 pl_pixels[PL_W * PL_H * 4];   // static, not stack: text.cpp/star_fx.cpp pattern
+
+        for (u32 y = 0; y < PL_H; ++y) {
+
+            f32 v = ((f32)y + 0.5f) / (f32)PL_H;            // 0 = tail ... 1 = head (nozzle)
+
+            f32 hw = 0.5f * (f32)PL_W * (0.16f + 0.84f * powf(v, 0.65f));
+
+            for (u32 x = 0; x < PL_W; ++x) {
+
+                f32 dx = ((f32)x + 0.5f - (f32)PL_W * 0.5f) / hw;
+
+                f32 lat = 1.0f - dx * dx;
+
+                if (lat < 0.0f) lat = 0.0f;
+
+                f32 alpha = lat * lat * powf(v, 1.35f);
+
+                u32 i = (y * PL_W + x) * 4;
+
+                pl_pixels[i + 0] = 255;
+
+                pl_pixels[i + 1] = 255;
+
+                pl_pixels[i + 2] = 255;
+
+                pl_pixels[i + 3] = (u8)(alpha * 255.0f);
+
+            }
+
+        }
+
+        s->render.exhaust_plume_texture = renderer_create_texture(pl_pixels, PL_W, PL_H);
+
+    }
+
+    // Generate the MACH-DIAMOND core column for main drives: a narrow jet whose boundary
+
+    // necks periodically and whose brightness peaks at each neck -- the shock-diamond train
+
+    // of a real underexpanded rocket exhaust. Five nodes marching aft from the head (v=1),
+
+    // fading toward the tail. Drawn as a thin extra layer inside the plume core at high
+
+    // throttle only, so a cruising flame stays soft and a full burn reads supersonic.
+
+    {
+
+        const u32 CO_W = 32;
+
+        const u32 CO_H = 256;
+
+        const f32 CO_NODES = 5.0f;
+
+        static u8 co_pixels[CO_W * CO_H * 4];
+
+        for (u32 y = 0; y < CO_H; ++y) {
+
+            f32 v = ((f32)y + 0.5f) / (f32)CO_H;            // 0 = tail ... 1 = head
+
+            f32 sphase = CO_NODES * (1.0f - v);             // node phase, 0 at the head
+
+            f32 neck   = 0.74f + 0.26f * fabsf(sinf(BS_PI * sphase));
+
+            f32 nodec  = cosf(BS_PI * sphase);
+
+            f32 bright = nodec * nodec; bright *= bright; bright *= bright;  // cos^8: sharp nodes
+
+            f32 hw = 0.5f * (f32)CO_W * (0.30f + 0.50f * v) * neck;
+
+            for (u32 x = 0; x < CO_W; ++x) {
+
+                f32 dx = ((f32)x + 0.5f - (f32)CO_W * 0.5f) / hw;
+
+                f32 lat = 1.0f - dx * dx;
+
+                if (lat < 0.0f) lat = 0.0f;
+
+                f32 alpha = lat * lat * powf(v, 1.3f) * (0.30f + 0.70f * bright);
+
+                u32 i = (y * CO_W + x) * 4;
+
+                co_pixels[i + 0] = 255;
+
+                co_pixels[i + 1] = 255;
+
+                co_pixels[i + 2] = 255;
+
+                co_pixels[i + 3] = (u8)(alpha * 255.0f);
+
+            }
+
+        }
+
+        s->render.exhaust_core_texture = renderer_create_texture(co_pixels, CO_W, CO_H);
+
+    }
+
     // ---- Ship type emblems for system-mode battlefield -----------------------------------
 
     s->render.emblem_drone     = renderer_load_texture("assets/fleet/emblems/fleet_emblem_type_drone.png");

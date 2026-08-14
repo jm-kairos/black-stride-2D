@@ -2650,6 +2650,10 @@ struct game_state {
 
     bs_texture exhaust_texture;   // soft radial gradient for engine exhaust (runtime-generated)
 
+    bs_texture exhaust_plume_texture; // directional teardrop for engine jets: hot head at v=1, tapered tail (runtime-generated)
+
+    bs_texture exhaust_core_texture;  // mach-diamond core column for main drives at high burn (runtime-generated)
+
 
 
     bs_texture emblem_drone;      // combat-mode ship type emblem (loaded from PNG)

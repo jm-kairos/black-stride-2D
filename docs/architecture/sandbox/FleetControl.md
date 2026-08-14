@@ -8,7 +8,8 @@ issues the order; this executes it), does not own the ship data model (ShipComba
 does not own NPC movement — although LocalAgentAi is the sole external consumer of `steering.h`.
 
 **Public interface:** `sandbox/source/sim/fleet.h` — `FLEET_MAX_SHIPS`, `JUMP_RADIUS_DEFAULT`,
-`enum ShipType`, `enum FleetStance`, `struct ShipFlight`, `struct FleetShip`, `class Fleet`
+`enum ShipType`, `enum FleetStance`, `struct ShipFlight`, `flight_telemetry_tick`,
+`struct FleetShip`, `class Fleet`
 (membership, piloting, selection, orders, stance, jump, `update_autopilot`, `simulate_all`).
 `sandbox/source/sim/ship_control.h` — `control_ship_global`, `resolve_ship_collision`,
 `piloted_ship_origin`.
@@ -67,6 +68,22 @@ InWorldOverlays, FrameOrchestrator, GameStateModel.
   trigger, because shadowing a target while not authorised to shoot is a different thing from
   refusing the engagement. Default is Aggressive: it is the pre-stance behaviour, and any other
   default would silently re-tune how every existing escort fights.
+- **A move order flies in TWO regimes, split by distance.** Beyond
+  `max(3 x own bounding radius, 1500)` (`RTS_MOVE_FACE_DIST_MUL/MIN`) the ship
+  TURN-AND-BURNS: it rotates its nose onto the destination, lights the main drive once
+  within `RTS_MOVE_FACE_ANGLE`, keeps retro thrust available at any angle so leftover speed
+  bleeds while turning, and TRIMS cross-track drift at `RTS_CRUISE_TRIM_FRAC` (0.25) of
+  full thrust — side jets read as course corrections, never as a second drive axis. Inside
+  the band the original strafing controller survives as the PRECISION regime (final
+  approach, docking-scale hops, formation-slot corrections), where sliding on RCS beats
+  swinging a cruiser's nose around twice; the band sits above the vanguard's ~410-unit
+  full-speed braking distance, so main-engine cutoff hands over to RCS before the retro
+  brake begins. The nose is only steered when NO attack order holds it on a target —
+  move+attack keeps the old broadside strafe by design (strafe toward the destination
+  while the guns track), because two writers on the angle would fight every frame.
+  Escorts get the same courtesy in catch-up: far off the station ring (>3x station) they
+  face their TRAVEL direction and ride the main drive, swinging guns back onto the
+  escortee once near the ring.
 - **The three position orders are mutually exclusive by construction.** Each `order_*` clears
   the others, so at most one of `update_move` / `update_escort` / `update_avoid` drives a ship
   in a frame — they all write velocity, and two of them running would fight every tick. Avoid is
@@ -74,6 +91,21 @@ InWorldOverlays, FrameOrchestrator, GameStateModel.
   *(`order_move` predated escort/avoid and did not clear them until 2026-08-13 — the stale
   escort was masked behind `update_move`'s priority until arrival, then silently resumed, and
   the roster labelled the ship with the order it was not executing.)*
+- **Every control path RECORDS the thrust it commands on `ShipFlight`'s telemetry channels,
+  and the exhaust pass draws ONLY from them.** `thrust_cmd`/`turn_cmd` are ship-local,
+  normalized to the hull's own caps, accumulated with `+=` by whoever writes velocity that
+  tick — the pilot (`control_ship_global`), `update_move`/`update_attack`'s strafing
+  controllers, the separation post-pass, and `steering::apply_impl` (which covers escort,
+  avoid and every NPC agent at one site). `flight_telemetry_tick` consumes them exactly once
+  per ship per tick — from `FleetShip::simulate` for fleet ships, from `ai_ships_update` for
+  agents — easing the `*_vis` copies ShipRendering reads and zeroing the commands, so a tick
+  nobody commands anything decays the jets to zero. Purely visual: nothing in the simulation
+  reads the telemetry back, and a coasting ship (this sim has no drag) correctly burns
+  nothing. The channels answer "what are the engines doing", never "how fast is the hull
+  moving" — the mistake the old speed-driven exhaust made. The same tick also eases
+  `heat_vis`, the main-drive THERMAL state, toward the forward burn on a seconds timescale
+  (rise ~1.1/s, fall ~0.35/s): it lags the throttle the way a nozzle bell lags its flame,
+  and the burn-vs-heat gap is how the exhaust pass detects a cold ignition.
 - **`FleetShip::simulate` is the ONLY pose integrator for fleet ships.** Escort and avoid go
   through `steering::control_face` — the same control law as `apply_face` minus the pose add —
   because `simulate_all` integrates every member every frame and the integrating form moved
@@ -157,7 +189,23 @@ characteristics without touching this code.
 **Source paths:** `sandbox/source/sim/fleet.{cpp,h}`, `sandbox/source/sim/ship_control.{cpp,h}`,
 `sandbox/source/sim/steering.{cpp,h}`
 
-**Last verified:** 2026-08-13, working tree on `game` (the `player_gunnery` plumb is REMOVED —
+**Last verified:** 2026-08-15, working tree on `game` (same day, later: move orders become
+two-regime — `update_move` turn-and-burns beyond the hull-derived face distance and keeps
+the strafing controller as the precision regime inside it, and `update_escort` faces the
+travel direction during catch-up. Autopilot turns gain an angular ARRIVE: pose-stepped
+slew is capped by `sqrt(2 * turn_accel * |error|)` in `update_move`/`update_attack` — the
+rotational twin of the linear braking envelope — and by a proportional `SLEW_EASE_RAD`
+taper in `steering::apply_impl`, so a nose settles onto its goal heading instead of
+snapping from full rate to a dead stop in one tick; live-verified: a fleet-wide far move order rotated all
+five hulls onto the destination heading and they cruised nose-first at max speed, roster
+MOVE across the board. Earlier: ShipFlight grows `heat_vis`, the
+slow-eased main-drive thermal scalar behind the exhaust pass's bell glow and ignition-flare
+detection). Previously 2026-08-14 (ShipFlight grows the thruster-telemetry
+channels — `thrust_cmd`/`turn_cmd` accumulated by every velocity-writing control path,
+`flight_telemetry_tick` easing `thrust_vis`/`turn_vis` for the exhaust pass; `Fleet::add` and
+`jump_selected` now reset the whole `ShipFlight`, so a jump also zeroes residual spin;
+live-verified: pilot W/E/A/S each light the correct jets, coasting at 240 u/s shows none, a
+move order brakes on RCS and arrives dark). Previously 2026-08-13 (the `player_gunnery` plumb is REMOVED —
 manual gunnery became attached-only with the command overlay's retirement, so `auto_skip`
 alone arbitrates player-vs-autopilot fire and `update_autopilot` is back to three parameters;
 `order_move` now clears escort/avoid, making the position-order mutual exclusion actually hold.

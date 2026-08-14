@@ -356,9 +356,7 @@ static i32 spawn_npc(game_state* s, i16 faction, HierPos2 pos, i32 home_node, u8
 
     n.ship.angle  = rrange(st, 0.0f, 2.0f * BS_PI);
 
-    n.flight.velocity = Vec2{ 0.0f, 0.0f };
-
-    n.flight.angular_velocity = 0.0f;
+    n.flight = ShipFlight{};   // at rest: no drift, no spin, no thruster telemetry
 
     n.faction   = faction;
 
@@ -2283,7 +2281,14 @@ void ai_ships_update(game_state* s, f32 dt) {
 
     for (i32 i = 0; i < NPC_SHIP_MAX; ++i) {
 
-        if (s->npc_ships[i].active) ai_ship_tick(s, s->npc_ships[i], i, dt);
+        if (!s->npc_ships[i].active) continue;
+
+        ai_ship_tick(s, s->npc_ships[i], i, dt);
+
+        // Consume this tick's thruster commands (recorded inside steering::apply/apply_face)
+        // so the exhaust pass draws what the agent's controller actually fired. Runs for every
+        // active agent regardless of behaviour state, so a docked or idle hull decays to cold.
+        flight_telemetry_tick(&s->npc_ships[i].flight, dt);
 
     }
 

@@ -35,6 +35,11 @@
 //   layer mapped <diffuse> <normal> <depth> <position> <ox> <oy> <ppu> <z> <roof>
 //   collider <x> <y>                          # repeated; omitted = box from `size`
 //   hardpoint <id> <accepts> <size> <x> <y> <facing_deg> <arc_deg> [art_scale]
+//   thruster <main|rcs> <x> <y> <facing_deg> [size]   # repeated; exhaust nozzles pinned
+//                                    # to art pixels (facing = the direction the exhaust
+//                                    # LEAVES the hull, CCW from nose: 180 = stern main,
+//                                    # 90 = port flank). Visual only; omitted = the draw
+//                                    # pass derives a stern-plus-corners layout.
 //
 // The registry is a manifest (assets/ships/ships.list) naming one `.ship` path per
 // line. Defs load once at game init into a fixed pool; textures resolve in the
@@ -72,6 +77,9 @@ struct ShipDef {
 
     HardpointDef  hardpoints[SHIP_MAX_HARDPOINTS];
     i32           hardpoint_count;
+
+    ThrusterDef   thrusters[SHIP_MAX_THRUSTERS];   // authored exhaust nozzles (visual only;
+    i32           thruster_count;                  // 0 = the draw pass derives a layout)
 
     ShipVisual    visual;         // layer paths at load; handles live after resolve;
                                   // size_local here is pre-multiplied by world_scale

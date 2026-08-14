@@ -49,3 +49,17 @@ hardpoint dorsal_pd  defense         S    0   33   0 360
 hardpoint aft_pd     defense         S    0 -387 180 360
 hardpoint engine_bay engine          L    0 -687 180   0
 hardpoint cargo_bay  utility         M    0 -247   0   0
+
+# Thruster nozzles pinned to art pixels (same texel space as hardpoints; facing is the
+# direction the exhaust LEAVES the hull, CCW from the nose; positions measured off the
+# sprite's alpha -- the twin stern nozzle blocks sit at px 130-159 / 234-264, exit plane
+# ~py 1565). Visual only: ShipRendering projects the flight telemetry onto each nozzle.
+# Format: thruster <main|rcs> <x> <y> <facing_deg> [size]
+thruster main -52 -772 180 0.55    # port main engine
+thruster main  52 -772 180 0.55    # starboard main engine
+thruster rcs  -66  523  90 0.8     # bow port lateral (hull edge at row 270)
+thruster rcs   66  523 -90 0.8     # bow starboard lateral
+thruster rcs  -25  693   0 0.8     # bow port retro (reverse burn, nose flank at row 100)
+thruster rcs   25  693   0 0.8     # bow starboard retro
+thruster rcs  -75 -577  90 0.8     # stern port lateral (aft skirt at row 1370)
+thruster rcs   75 -577 -90 0.8     # stern starboard lateral

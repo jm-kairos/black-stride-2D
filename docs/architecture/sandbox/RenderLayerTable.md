@@ -7,7 +7,9 @@ the bloom split (`BS_LAYER_BLOOM_THRESHOLD`), and via `renderer_set_lights`'s `u
 argument as the fullbright cutoff. This header only names the values the game uses.
 
 **Public interface:** `sandbox/source/core/render_layers.h` — `LAYER_STARFIELD_FAR` (0),
-`LAYER_STARFIELD_MID` (2), `LAYER_MAPPED_SYSTEM` (3), `LAYER_SHIP` (10), `LAYER_CELESTIAL` (11),
+`LAYER_STARFIELD_MID` (2), `LAYER_MAPPED_SYSTEM` (3), `LAYER_EXHAUST` (9), `LAYER_SHIP` (10),
+`LAYER_CELESTIAL` (11), `LAYER_EXHAUST_SPILL` (11 — deliberately shares the number: engine
+light spill must draw ABOVE the hull; see the collision note below),
 `LAYER_PROJECTILE` (12), `LAYER_PROJECTILE_FX` (13), `LAYER_UI` (50), `LAYER_HUD_TEXT` (100),
 `LAYER_DEBUG` (`BS_LAYER_BLOOM_THRESHOLD`), `LAYER_GIZMO` (`BS_LAYER_BLOOM_THRESHOLD + 1`).
 Included by **7 subsystems**.
@@ -32,10 +34,12 @@ InWorldOverlays, SceneOrchestration, ShipRendering, SystemContentRendering.
   scene lighting as the price; both opt back out per-sprite with the shader's `custom.z = 1`
   self-emissive flag. Any new layer placed under 50 for bloom must make the same choice, and
   getting it wrong is invisible in the arena look (which submits no lights) and only shows on
-  the galaxy-map side.
-- Ordering must remain ascending by intended depth (starfield → system → ship → celestial →
-  weapon fire → UI → HUD text). Nothing enforces it; a mis-numbered constant produces a silent
-  z-order bug.
+  the galaxy-map side. `LAYER_EXHAUST` (9) makes the identical bargain: engine plumes bloom,
+  and every exhaust sprite sets `custom.z = 1`.
+- Ordering must remain ascending by intended depth (starfield → system → exhaust → ship →
+  celestial → weapon fire → UI → HUD text). Nothing enforces it; a mis-numbered constant
+  produces a silent z-order bug. Exhaust sits ONE below ship deliberately — a plume must render
+  under every hull, which submission order inside `LAYER_SHIP` could not guarantee.
 
 **Extension points:** A new layer is one `static const u32` line. Place it by value relative to
 the existing constants, and derive from `BS_LAYER_BLOOM_THRESHOLD` (as `LAYER_DEBUG` and
@@ -58,7 +62,9 @@ number.
   occupant. It is why the weapon-fire layers are 12/13 rather than the more natural 15/16, and
   it is a live hazard: the next module to pick a number in that gap has nothing to read.
 - `LAYER_MOUNT_ART` is a *third* privately-defined layer (`render/ship_render.cpp`, `LAYER_SHIP
-  + 1` = 11), colliding with `LAYER_CELESTIAL`.
+  + 1` = 11), colliding with `LAYER_CELESTIAL`. `LAYER_EXHAUST_SPILL` now names the same 11 in
+  this header for the engine-light spill — above the hull is the point — so the number carries
+  three meanings; the spill is an additive glow, so order within the layer cannot matter to it.
 - `render/debug_overlay.cpp` draws its parity checkerboard on the bare literal layer `1`, which
   has no name in this table.
 - The file is one of only two single-header subsystems in the sandbox and arguably belongs
@@ -68,5 +74,9 @@ number.
 
 **Source paths:** `sandbox/source/core/render_layers.h`
 
-**Last verified:** 2026-08-09, working tree on `game` (adds `LAYER_PROJECTILE` /
-`LAYER_PROJECTILE_FX` under the bloom threshold)
+**Last verified:** 2026-08-15, working tree on `game` (adds `LAYER_EXHAUST_SPILL` (11) for
+the warm glow a burning drive throws onto its own stern plating). Previously 2026-08-14
+(adds `LAYER_EXHAUST` (9) so engine
+plumes and RCS jets draw under every hull, bloomed + self-emissive like the projectile
+layers). Previously 2026-08-09 (adds `LAYER_PROJECTILE` / `LAYER_PROJECTILE_FX` under the
+bloom threshold)

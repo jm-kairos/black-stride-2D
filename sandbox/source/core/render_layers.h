@@ -7,8 +7,18 @@
 static const u32 LAYER_STARFIELD_FAR = 0;  // procedural far stars (custom GPU)
 static const u32 LAYER_STARFIELD_MID = 2;  // procedural mid-distance stars (custom GPU)
 static const u32 LAYER_MAPPED_SYSTEM = 3;  // current system star + planets
+// Engine plumes + RCS jets: one below LAYER_SHIP so exhaust renders UNDER every hull -- a
+// plume must never glow on top of ship art. Below BS_LAYER_BLOOM_THRESHOLD (so jets bloom)
+// and below the unlit_layer cutoff (so sprites here are LIT): everything drawn on it must
+// set custom.z = 1 to stay self-emissive, same as the projectile layers below.
+static const u32 LAYER_EXHAUST       = 9;
 static const u32 LAYER_SHIP          = 10; // ship sprite art
 static const u32 LAYER_CELESTIAL     = 11; // stars, planets, orbit rings (below bloom threshold)
+// Engine light SPILL: the warm glow a burning drive throws onto its own stern plating. Must
+// sit ABOVE the hull (the whole point is additively lighting hull pixels), so it shares 11
+// with LAYER_CELESTIAL and ship_render.cpp's private LAYER_MOUNT_ART -- the same documented
+// collision; additive glows are order-insensitive within the layer.
+static const u32 LAYER_EXHAUST_SPILL = 11;
 // Weapon fire. BOTH sit below BS_LAYER_BLOOM_THRESHOLD deliberately: shots used to draw on
 // LAYER_UI, which IS the threshold, so every tracer and impact in the game was composited after
 // the bloom pass and got no bloom at all. Moving them under it is what makes a hit read as hot

@@ -35,7 +35,32 @@ enum ShipType {
 struct ShipFlight {
     bs_math::Vec2 velocity;          // world-space linear velocity
     f32           angular_velocity;  // rad/s, CCW positive; auto-stabilizes when A/D released
+    // ---- Thruster telemetry (visual-only: the exhaust pass draws from it) ---------------
+    // Every control path RECORDS the thrust it commands here, so the drawn flames answer
+    // "what are the engines doing" rather than "how fast is the hull moving" -- a coasting
+    // ship burns nothing, a braking ship fires its bow thrusters, a strafing ship its side
+    // ones. SHIP-LOCAL axes normalized to the hull's own caps: thrust_cmd.x = starboard
+    // strafe, .y = forward thrust, turn_cmd CCW-positive, all nominally -1..1 (writers
+    // ACCUMULATE with +=, so a tick with several contributors can exceed it; the consumer
+    // clamps). flight_telemetry_tick consumes them once per simulation tick -- fleet ships
+    // from FleetShip::simulate, NPC agents from ai_ships_update -- easing the *_vis copies
+    // the exhaust pass reads and zeroing the commands for the next tick's writers, so a
+    // tick nobody commands anything decays the jets to zero. Rendering never writes these.
+    bs_math::Vec2 thrust_cmd;        // this tick's commanded thrust, ship-local, -1..1
+    f32           turn_cmd;          // this tick's commanded turn, -1..1 (CCW positive)
+    bs_math::Vec2 thrust_vis;        // smoothed thrust the exhaust pass draws
+    f32           turn_vis;          // smoothed turn the exhaust pass draws
+    // Main-drive THERMAL state, 0..1: eased toward the forward-thrust burn far slower than
+    // thrust_vis (seconds, not tenths), so it lags the throttle the way a nozzle bell lags
+    // its flame. The exhaust pass reads it two ways: sustained burn heats the bell glow
+    // toward white-hot, and burn >> heat is the ignition transient -- a drive lighting from
+    // cold -- which draws as a brief overbright flare. Visual only, like the rest.
+    f32           heat_vis;
 };
+// Consume one simulation tick's thruster commands: clamp, ease the *_vis copies toward them
+// (fast attack / slower release so taps read as puffs, not strobes), then zero the commands.
+// Call exactly once per ship per tick, AFTER every control path has written.
+void flight_telemetry_tick(ShipFlight* fl, f32 dt);
 // Standing posture for a fleet ship: what it does when nobody is issuing it a fresh order.
 //
 // Modelled on DefenseLaser's stance/priority/gate trio rather than invented fresh -- that one

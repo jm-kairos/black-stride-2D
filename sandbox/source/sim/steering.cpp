@@ -8,6 +8,13 @@ using namespace bs_math;
 
 namespace steering {
 
+// Nose-slew ease-out: the error (rad) where the turn starts shedding rate. Inside it the
+// slew rate falls proportionally with the remaining error, so the nose settles onto the
+// goal exponentially (time constant EASE/turn_rate, ~a third of a second at fleet turn
+// rates) instead of snapping from full rate to a dead stop in one tick. A constant rather
+// than a braking envelope because apply()'s signature carries no angular acceleration.
+static constexpr f32 SLEW_EASE_RAD = 0.15f;
+
 Vec2 arrive(Vec2 to_target, f32 max_speed, f32 slow_radius) {
     f32 d = vec2_length(to_target);
     if (d < 1.0f) return Vec2{ 0.0f, 0.0f };
@@ -51,6 +58,12 @@ static void apply_impl(Ship* sh, ShipFlight* fl, Vec2 desired_vel, const Vec2* f
     f32 el = vec2_length(err);
     if (el > a) err = vec2_scale(err, a / el);
     fl->velocity = vec2_add(fl->velocity, err);
+    // Thruster telemetry: the applied velocity change IS this tick's thrust; record it in
+    // the ship's local frame as a fraction of the accel budget. One site here covers every
+    // steering consumer -- fleet escorts/avoid (control_face) and NPC agents (apply/apply_face).
+    if (a > 0.0f)
+        fl->thrust_cmd = vec2_add(fl->thrust_cmd,
+            vec2_scale(vec2_rotate(err, -sh->angle), 1.0f / a));
     f32 spd = vec2_length(fl->velocity);
     if (spd > max_speed) fl->velocity = vec2_scale(fl->velocity, max_speed / spd);
     // Slew the nose (heading convention: angle 0 => nose +Y).
@@ -60,10 +73,13 @@ static void apply_impl(Ship* sh, ShipFlight* fl, Vec2 desired_vel, const Vec2* f
         f32 d = desired_angle - sh->angle;
         while (d >  BS_PI) d -= 2.0f * BS_PI;
         while (d < -BS_PI) d += 2.0f * BS_PI;
-        f32 mr = turn_rate * dt;
+        f32 rate = turn_rate * clampf(fabsf(d) / SLEW_EASE_RAD, 0.0f, 1.0f);
+        f32 mr_full = turn_rate * dt;   // full-rate step: the telemetry's reference
+        f32 mr = rate * dt;
         if (d >  mr) d =  mr;
         if (d < -mr) d = -mr;
         sh->angle += d;
+        if (mr_full > 0.0f) fl->turn_cmd += d / mr_full;   // telemetry: slew / this tick's cap
     }
     // Integrate the pose (precision-safe HierPos2 add) -- skipped for ships whose integrator
     // runs elsewhere (control_face).

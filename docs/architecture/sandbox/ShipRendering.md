@@ -34,8 +34,39 @@ GameStateModel; engine `renderer/renderer.h`, `renderer/camera2d.h`, `defines.h`
 - **`bs_sprite.custom` is used as a shader flag field in three distinct ways here**, each
   documented against `sprite.frag.hlsl`: hull art zeroes `custom.x`/`custom.w` so ship-glow
   parameters cannot warp the hull, sets `custom.z = 1` to mark it self-emissive against
-  map-look star light, and exhaust sets `custom.x = speed_ratio * glow_mul` to drive heat
-  distortion. The channel meanings exist only in HLSL.
+  map-look star light, and exhaust jets set `custom = {heat, time, 1, 0}` — heat drives the
+  travelling distortion and the white-hot-head/red-tail temperature ramp, scaled by commanded
+  thrust. The channel meanings exist only in HLSL.
+- **The exhaust pass draws from `ShipFlight`'s thruster telemetry, never from velocity.**
+  `draw_engine_exhaust` reads `thrust_vis`/`turn_vis` (see FleetControl for the write/consume
+  contract): main drives burn with commanded FORWARD thrust, RCS puffs fire for
+  strafe/reverse/turn on the flank a real control jet would exhaust from, and a hull nobody
+  is thrusting shows only the idle pilot lights — a coasting ship burns nothing. Every jet
+  is a teardrop plume (`exhaust_plume_texture`) anchored head-at-nozzle via `origin {0.5, 1}`
+  — the same idiom as the missile plume in `projectile.cpp` — and sits on `LAYER_EXHAUST`
+  (9), one below the hulls, so a flame can never glow on top of ship art. The enemy derelict
+  draws no exhaust, correctly: it has no `ShipFlight` and no engines to light.
+- **Nozzle SOURCES are hull-accurate: the card's authored `thruster` lines are the layout,
+  and each nozzle's burn is a PROJECTION, not a wiring table.** `draw_engine_exhaust` walks
+  `ship->def->thrusters` (art-pixel positions + exhaust facings — see ShipCombatModel for
+  the format) and computes each nozzle's burn as the commanded thrust projected onto what
+  that nozzle can do: linear thrust against its force direction, turn against its torque
+  sign (`cross(pos, force)`, unit-normalized). That is what makes twin off-axis mains
+  thrust differentially in a turn with zero per-nozzle code. A card that authors no
+  thrusters falls back to a derived stern-plus-corners layout, so a bare hull card still
+  reads as a ship. All five catalog cards author their nozzles today.
+- **A main drive is a layered effect stack keyed on TWO scalars — burn and heat — not one.**
+  `draw_main_flame` composes: a bell glow whose colour runs ember-red → white-hot on
+  `ShipFlight::heat_vis` (thermal, lags the throttle by seconds — a drive that just cut
+  keeps glowing while it coasts); an ignition flare where burn runs far ahead of heat (a
+  cold start's overbright transient, gone in half a second as the bell soaks); three plumes
+  with per-layer flicker phases and a small tail sway about the head pivot, the halo drawn
+  wider and shorter than its slot (vacuum expansion); a mach-diamond core train
+  (`exhaust_core_texture`) fading in above `EXHAUST_DIAMOND_MIN` burn; a time-scrolled
+  ember stream racing aft; and a light SPILL on `LAYER_EXHAUST_SPILL`, above the hull, so
+  the drive visibly lights its own stern plating. Twin engines are de-phased by nozzle
+  index so they never pulse in lockstep. RCS jets are deliberately NOT flames: a cold-gas
+  blue outer cone with a bright dart core and a fast shimmer.
 - **`arsenal_drag_fits` must mirror `arsenal_drop_on_slot`** in `game.cpp` — the comment says so
   — or the green/red world feedback disagrees with what a drop actually does. Two switch
   statements over six drag kinds kept in step by hand.
@@ -99,7 +130,22 @@ with it. A new *procedural* mount art kind still follows `draw_turret` /
 **Source paths:** `sandbox/source/render/ship_scene.{cpp,h}`,
 `sandbox/source/render/ship_render.{cpp,h}`
 
-**Last verified:** 2026-08-12, working tree on `game` (adds the ship-portrait sub-pass in
+**Last verified:** 2026-08-15, working tree on `game` (same day, later: the main drive
+becomes a burn+heat effect stack — thermal bell glow, cold-start ignition flare,
+per-layer flicker/tail-sway plumes with a ballooned halo, mach-diamond core, ember stream,
+and stern light spill on `LAYER_EXHAUST_SPILL`; RCS becomes a two-layer cold-gas dart;
+live-verified: twin flares on cold ignition, bells stay lit coasting after cutoff,
+diamond-banded cores at full burn, spill visible on the stern plating. Earlier: nozzles
+become AUTHORED data: the pass
+walks the card's `thruster` lines and projects the thrust telemetry onto each nozzle — linear
+against force direction, turn against torque sign — with the derived stern-plus-corners
+layout demoted to a no-lines fallback; live-verified on the vanguard: twin mains burn from
+the art's two nozzle blocks, the CCW diagonal fires bow-stbd + stern-port plus a faint
+differential burn on the starboard main). Previously 2026-08-14 (the exhaust pass is rewritten around
+thruster telemetry: `draw_engine_exhaust` takes the ship's `ShipFlight`, draws a head-anchored
+teardrop main plume + six corner RCS jets + an idle nozzle glow on the new `LAYER_EXHAUST`,
+and the speed-ratio parameter is gone — live-verified across pilot keys, coasting, and an RTS
+move order's brake/arrive cycle). Previously 2026-08-12 (adds the ship-portrait sub-pass in
 `ship_scene.cpp`: `ship_portrait_submit` captures the inspected hull + mounts + hardpoint
 skeleton + drag fit-feedback into the engine's offscreen portrait scope with its own camera,
 plus one thumbnail scope per fleet member (`renderer_thumb_begin`, `portrait_fit_camera`) for

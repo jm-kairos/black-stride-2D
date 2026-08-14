@@ -107,6 +107,42 @@ struct HardpointDef {
 
 };
 
+// =====================================================================================
+// Thruster nozzles: authored exhaust sources for the ship's engine visuals, pinned to
+// art pixels exactly like hardpoints (same ship-local art-texel space, +Y = nose).
+// `facing` is the direction the EXHAUST leaves the hull (CCW from the nose), so a stern
+// main engine faces 180 and a port-flank RCS faces +90. Purely visual: the flight model
+// reads none of this. ShipRendering projects the ShipFlight thrust telemetry onto each
+// nozzle -- linear thrust against the nozzle's force direction, turn against its torque
+// sign -- to decide what burns, so an authored layout responds correctly to strafe,
+// reverse and turn without any per-nozzle wiring. A card that authors none falls back
+// to the derived stern-plus-corners layout.
+// =====================================================================================
+
+#define SHIP_MAX_THRUSTERS 12
+
+enum ThrusterKind : u8 {
+
+    THRUSTER_MAIN = 0,   // the drive: layered flame + idle nozzle glow; burns on forward thrust
+
+    THRUSTER_RCS,        // control jet: short cool puff for strafe / reverse / turn
+
+};
+
+struct ThrusterDef {
+
+    u8            kind;        // ThrusterKind
+
+    bs_math::Vec2 pos_local;   // nozzle exit, ship-local art texels
+
+    f32           facing;      // exhaust direction (radians, CCW from nose = +Y local)
+
+    // Visual multiplier on the jet's width/length. Like HardpointDef::art_scale, a default
+    // member initialiser because a zeroed size would draw the jet at nothing.
+    f32           size = 1.0f;
+
+};
+
 // Half-extent (ship-local units) of a hardpoint's visual/placement box.
 
 f32 hardpoint_half_extent(HardpointSize s);

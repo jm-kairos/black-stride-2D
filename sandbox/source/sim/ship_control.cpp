@@ -28,11 +28,14 @@ b8 control_ship_global(game_state* s, FleetShip* pf, f32 dt) {
     const ShipMotion& m = ship->motion;
     f32 strafe = m.accel; // full strafe thrust
     // ---- Linear thrust (accumulate this frame's acceleration along the heading) ----
+    // Each key also records its thrust on the telemetry channels (already ship-local by
+    // construction: W/S are the fwd axis, Q/E the right axis) so the exhaust pass fires
+    // the jets the pilot is actually commanding rather than inferring them from speed.
     Vec2 acc{ 0.0f, 0.0f };
-    if (input_is_key_down(KEY_W)) acc = vec2_add(acc, vec2_scale(fwd,   m.accel)); // forward
-    if (input_is_key_down(KEY_S)) acc = vec2_add(acc, vec2_scale(fwd,  -m.decel)); // reverse
-    if (input_is_key_down(KEY_E)) acc = vec2_add(acc, vec2_scale(right, strafe));     // strafe right
-    if (input_is_key_down(KEY_Q)) acc = vec2_add(acc, vec2_scale(right,-strafe));     // strafe left
+    if (input_is_key_down(KEY_W)) { acc = vec2_add(acc, vec2_scale(fwd,   m.accel)); fl->thrust_cmd.y += 1.0f; } // forward
+    if (input_is_key_down(KEY_S)) { acc = vec2_add(acc, vec2_scale(fwd,  -m.decel)); fl->thrust_cmd.y -= 1.0f; } // reverse
+    if (input_is_key_down(KEY_E)) { acc = vec2_add(acc, vec2_scale(right, strafe));  fl->thrust_cmd.x += 1.0f; } // strafe right
+    if (input_is_key_down(KEY_Q)) { acc = vec2_add(acc, vec2_scale(right,-strafe));  fl->thrust_cmd.x -= 1.0f; } // strafe left
     fl->velocity = vec2_add(fl->velocity, vec2_scale(acc, dt));
     // ---- Brake (C): bleed the current velocity toward zero at the decel rate ----
     if (input_is_key_down(KEY_C)) {
@@ -41,6 +44,10 @@ b8 control_ship_global(game_state* s, FleetShip* pf, f32 dt) {
             f32 ns = spd - m.decel * dt;
             if (ns < 0.0f) ns = 0.0f;
             fl->velocity = vec2_scale(fl->velocity, ns / spd);
+            // Telemetry: braking thrusts against the drift -- decompose the opposing unit
+            // vector into the local frame so the correct side/bow jets light up.
+            fl->thrust_cmd = vec2_add(fl->thrust_cmd,
+                vec2_scale(vec2_rotate(fl->velocity, -ship->angle), (ns > 0.0f) ? -1.0f / ns : 0.0f));
         }
     }
     // ---- Angular: A/D ramp angular velocity toward +/- max. The COMPLEMENTARY auto-stabilize
@@ -71,6 +78,7 @@ b8 control_ship_global(game_state* s, FleetShip* pf, f32 dt) {
     }
     if (turn_in != 0.0f) {
         fl->angular_velocity += turn_in * m.turn_accel * dt;
+        fl->turn_cmd += turn_in;   // telemetry: -1..1 for keys and the mouse PD alike
         return TRUE;  // a turn is actively commanded this frame
     }
     return FALSE;     // no turn commanded -> simulate_ship will auto-stabilize the spin
