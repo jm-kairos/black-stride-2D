@@ -6,13 +6,17 @@ struct PlatformState{
     VOID_PTR internal_state; // type of this will be determined on the particular implementation on the cpp file
 };
 
+// width/height are IN/OUT: in windowed mode they are the requested client size and pass
+// through unchanged; in fullscreen the window takes the desktop resolution and they are
+// overwritten with the actual pixel size, so the caller seeds its state from reality.
 b8 platform_initialize(
     PlatformState* plat_state,
     const char* app_name,
     i32 x,
     i32 y,
-    i32 width,
-    i32 height);
+    i32* width,
+    i32* height,
+    b8 fullscreen);
 
 void platform_terminate(PlatformState* plat_state);
 

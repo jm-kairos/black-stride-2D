@@ -81,4 +81,8 @@ init-list, so the order is hand-maintained. New global bus handlers are added by
 **Source paths:** `engine/source/core/application.{cpp,h}`, `engine/source/entry.h`,
 `engine/source/game_types.h`
 
-**Last verified:** 2026-08-07, commit `812680c`
+**Last verified:** 2026-08-15, working tree on `game` (`ApplicationConfig` gains `b8 fullscreen`
+— the sandbox's `game_create` sets it TRUE, start_width/height demote to windowed-mode fallback
+geometry — and `application_init` re-seeds `app_state.width/height` from the size
+`platform_initialize` reports back, so the renderer and the game's first `on_resize` see the
+real desktop resolution, not the config size). Previously 2026-08-07, commit `812680c`

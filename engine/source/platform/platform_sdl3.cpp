@@ -29,8 +29,9 @@ b8 platform_initialize(
     const char* app_name,
     i32 x,
     i32 y,
-    i32 width,
-    i32 height)
+    i32* width,
+    i32* height,
+    b8 fullscreen)
 {
     plat_state->internal_state = malloc(sizeof(InternalState));
     InternalState* state = (InternalState*)plat_state->internal_state;
@@ -42,14 +43,24 @@ b8 platform_initialize(
         return FALSE;
     }
 
-    state->window = SDL_CreateWindow(app_name, width, height, SDL_WINDOW_RESIZABLE);
+    // SDL3's FULLSCREEN flag with no explicit display mode = borderless fullscreen at the
+    // desktop resolution (no mode switch). width/height then only describe the windowed
+    // geometry the window falls back to on leaving fullscreen.
+    SDL_WindowFlags flags = SDL_WINDOW_RESIZABLE;
+    if (fullscreen) flags |= SDL_WINDOW_FULLSCREEN;
+    state->window = SDL_CreateWindow(app_name, *width, *height, flags);
     if (!state->window)
     {
         BS_LOG_FATAL("SDL_CreateWindow failed: %s", SDL_GetError());
         return FALSE;
     }
 
-    SDL_SetWindowPosition(state->window, x, y);
+    if (!fullscreen)
+        SDL_SetWindowPosition(state->window, x, y);
+
+    // Report the size the window ACTUALLY came up at (the desktop resolution when
+    // fullscreen), so the application seeds its state from reality instead of the config.
+    SDL_GetWindowSizeInPixels(state->window, width, height);
 
     perf_freq = SDL_GetPerformanceFrequency();
     perf_start = SDL_GetPerformanceCounter();

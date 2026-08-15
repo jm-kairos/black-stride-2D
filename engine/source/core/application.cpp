@@ -40,8 +40,9 @@ b8 application_init(Game* game_inst){
 
     app_state.game_inst = game_inst;
 
-    // Seed the window dimensions from the requested config size. The platform
-    // resize event will keep these current once the window is live.
+    // Seeded from the config size here, then corrected to the ACTUAL window size right
+    // after platform_initialize (fullscreen comes up at the desktop resolution, not the
+    // config size). The platform resize event keeps these current once the window is live.
     app_state.width  = (i16)game_inst->app_config.start_width;
     app_state.height = (i16)game_inst->app_config.start_height;
     app_state.last_time = 0;
@@ -73,16 +74,23 @@ b8 application_init(Game* game_inst){
     event_register(EVENT_CODE_KEY_RELEASED, 0, application_on_key);
     event_register(EVENT_CODE_WINDOW_RESIZED, 0, application_on_resized);
 
-    if (!platform_initialize(&app_state.platform, 
-        game_inst->app_config.name, 
-        game_inst->app_config.start_pos_x, 
-        game_inst->app_config.start_pos_y, 
-        game_inst->app_config.start_width, 
-        game_inst->app_config.start_height)){
+    i32 window_w = game_inst->app_config.start_width;
+    i32 window_h = game_inst->app_config.start_height;
+    if (!platform_initialize(&app_state.platform,
+        game_inst->app_config.name,
+        game_inst->app_config.start_pos_x,
+        game_inst->app_config.start_pos_y,
+        &window_w,
+        &window_h,
+        game_inst->app_config.fullscreen)){
 
         BS_LOG_ERROR("platform_initialize failed !");
         return FALSE;
     }
+    // The window may have come up at a different size than requested (fullscreen = the
+    // desktop resolution): adopt reality before the renderer and game initialize.
+    app_state.width  = (i16)window_w;
+    app_state.height = (i16)window_h;
 
     // Bring up the renderer after the window exists but before the game's init, so the
     // game can create GPU resources during its own initialization.

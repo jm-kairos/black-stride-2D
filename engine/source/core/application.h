@@ -14,6 +14,9 @@ struct ApplicationConfig{
     i16 start_width;
     // Window starting height, if applicable.
     i16 start_height;
+    // Start as a borderless fullscreen window at the desktop resolution. start_pos/size then
+    // only describe the windowed-mode geometry the window would fall back to.
+    b8 fullscreen;
     // Application name used in windowing, if applicable.
     const char* name;
 };

@@ -7,8 +7,10 @@ b8 game_create(Game* out_game){
     out_game->app_config.name = "Black Stride Engine Sandbox";
     out_game->app_config.start_pos_x = 100;
     out_game->app_config.start_pos_y = 100;
+    // Windowed-mode fallback geometry; the game starts fullscreen at the desktop resolution.
     out_game->app_config.start_width = 1280;
     out_game->app_config.start_height = 720;
+    out_game->app_config.fullscreen = TRUE;
     out_game->init = game_init;
     out_game->update = game_update;
     out_game->render = game_render;

@@ -75,4 +75,8 @@ non-Windows branches do not currently compile. Adding a key means a `DEFINE_KEY`
 
 **Source paths:** `engine/source/platform/**`
 
-**Last verified:** 2026-08-07, commit `812680c`
+**Last verified:** 2026-08-15, working tree on `game` (`platform_initialize` gains a
+`fullscreen` flag — `SDL_WINDOW_FULLSCREEN` with no display mode set, i.e. borderless at the
+desktop resolution, window position left to SDL — and its width/height params become IN/OUT so
+the caller learns the size the window actually came up at; live-verified 1920x1080). Previously
+2026-08-07, commit `812680c`
