@@ -3549,6 +3549,14 @@ struct game_state {
 
     i32              insp_tab;                 // Inspector middle-section tab: 0 = Loadout, 1 = Doctrine
 
+    // Inspector portrait view: the portrait is a camera onto the hull, not a fixed frame.
+    // game.cpp's portrait input writes these (wheel zoom, empty-space drag pan); the portrait
+    // camera in ship_scene.cpp folds them over the fit framing. Reset on open / hull switch.
+    f32              insp_view_zoom;           // multiplier over the fit framing (1 = whole hull framed; clamped in game.cpp)
+    bs_math::Vec2    insp_view_pan;            // camera offset from the hull's render_pos, render-space units
+    bool             insp_view_dragging;       // left-drag pan in progress (armed by a press on empty portrait space)
+    bs_math::Vec2    insp_view_drag_px;        // cursor at the previous pan frame, screen px
+
 
 
     // ---- Space-station interaction (hover -> right-click menu -> Inspect window) -----------------

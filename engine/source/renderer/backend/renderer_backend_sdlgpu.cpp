@@ -4860,7 +4860,8 @@ struct BsRmlHudModel
     Rml::String                 insp_status;
     Rml::String                 insp_portrait_left = "0px";
     Rml::String                 insp_portrait_top  = "0px";
-    Rml::String                 insp_portrait_size = "64px";
+    Rml::String                 insp_portrait_w    = "64px";
+    Rml::String                 insp_portrait_h    = "64px";
     int                           insp_ship_count = 0;
     Rml::Vector<BsRmlHudInspShip> insp_ships;
     bool                          insp_show_loadout  = true;
@@ -5109,7 +5110,8 @@ b8 bs_rml_hud_init(const char* rml_path)
     c.Bind("insp_status",           &g_hud_model.insp_status);
     c.Bind("insp_portrait_left",    &g_hud_model.insp_portrait_left);
     c.Bind("insp_portrait_top",     &g_hud_model.insp_portrait_top);
-    c.Bind("insp_portrait_size",    &g_hud_model.insp_portrait_size);
+    c.Bind("insp_portrait_w",       &g_hud_model.insp_portrait_w);
+    c.Bind("insp_portrait_h",       &g_hud_model.insp_portrait_h);
     c.Bind("insp_ship_count",       &g_hud_model.insp_ship_count);
     c.Bind("insp_ships",            &g_hud_model.insp_ships);
     c.Bind("insp_show_loadout",     &g_hud_model.insp_show_loadout);
@@ -5335,7 +5337,8 @@ void bs_rml_hud_update(const bs_rml_hud_state* s)
     bs_rml_assign(g_hud_model.insp_status,    s->insp_status,    sizeof(s->insp_status));
     bs_rml_assign(g_hud_model.insp_portrait_left, s->insp_portrait_left, sizeof(s->insp_portrait_left));
     bs_rml_assign(g_hud_model.insp_portrait_top,  s->insp_portrait_top,  sizeof(s->insp_portrait_top));
-    bs_rml_assign(g_hud_model.insp_portrait_size, s->insp_portrait_size, sizeof(s->insp_portrait_size));
+    bs_rml_assign(g_hud_model.insp_portrait_w,    s->insp_portrait_w,    sizeof(s->insp_portrait_w));
+    bs_rml_assign(g_hud_model.insp_portrait_h,    s->insp_portrait_h,    sizeof(s->insp_portrait_h));
     g_hud_model.insp_show_loadout  = s->insp_show_loadout ? true : false;
     g_hud_model.insp_show_doctrine = s->insp_show_doctrine ? true : false;
     {

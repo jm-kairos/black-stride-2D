@@ -314,13 +314,16 @@ typedef struct bs_rml_hud_state
     char               insp_status[512];
     // Portrait element placement, as CSS px strings that must ALWAYS hold a valid length
     // (data-style bindings evaluate even while hidden -- same rule as tip_left/tip_top).
-    // left/top are relative to the inspector's middle zone. The game computes the square from
+    // left/top are relative to the inspector's middle zone. The game computes the rect from
     // its own layout constants, so the RML element and the game-side portrait hit-test share
-    // one rect. The element's source is the reserved texture name "bs:portrait", which the
-    // engine resolves to the live portrait render target.
+    // one rect. The rect is the whole middle-zone well and generally NON-square; the square
+    // "bs:portrait" render target (which the engine resolves from that reserved source name)
+    // paints through it as an image decorator with `cover` fit, cropping the central band
+    // undistorted -- the target itself stays square engine-side.
     char               insp_portrait_left[16];
     char               insp_portrait_top[16];
-    char               insp_portrait_size[16];
+    char               insp_portrait_w[16];
+    char               insp_portrait_h[16];
     // Fleet list (inspector left section): live thumbnails of every member.
     i32                insp_ship_count;
     bs_rml_insp_ship   insp_ships[BS_RML_ROSTER_MAX];

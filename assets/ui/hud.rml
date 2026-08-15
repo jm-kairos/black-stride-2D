@@ -188,9 +188,15 @@
             </div>
         </div>
         <div class="insp-center">
-            <img class="insp-portrait" src="bs:portrait"
+            <!-- Full-zone portrait: the well is the whole (generally non-square) middle zone;
+                 the square render target shows through it as a DECORATOR with `cover` fit,
+                 which crops to the element's central band in-geometry (texcoords) -- no
+                 oversized child, no overflow, nothing for RmlUi to (fail to) clip. Same
+                 pattern as the fleet-list thumbs. NOT an <img>: overflow:hidden on a wrapper
+                 does not clip absolutely-positioned children here (verified live). -->
+            <div class="insp-portrait"
                  data-style-left="insp_portrait_left" data-style-top="insp_portrait_top"
-                 data-style-width="insp_portrait_size" data-style-height="insp_portrait_size"/>
+                 data-style-width="insp_portrait_w" data-style-height="insp_portrait_h"></div>
             <div class="insp-tabpanel">
                 <div class="insp-tabs">
                     <div class="insp-tab" data-class-active="insp_show_loadout" data-event-click="hud_action('insp_tab:0')">Loadout</div>

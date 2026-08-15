@@ -566,8 +566,27 @@ static Camera2D portrait_fit_camera(const Ship* ship, f32 target_px) {
     return cam;
 }
 
-static Camera2D ship_portrait_camera(const Ship* ship) {
-    return portrait_fit_camera(ship, PORTRAIT_PX);
+// The inspector's interactive view over the fit framing: game.cpp's portrait input writes
+// insp_view_zoom/_pan (wheel zoom pinned to the cursor, left-drag pan). Every portrait
+// consumer -- the submit pass and both cursor hit-tests -- builds its camera HERE, so what is
+// drawn and what is picked cannot disagree.
+//
+// The well is generally NON-SQUARE while the render target stays square: the square img
+// spans max(w,h) screen px and the well clips it to h (or w), so only the target's central
+// band is visible -- 1024*min/max target px across the clipped dimension. The fit framing
+// sizes the hull against that visible band, not the full 1024, so the hull fills the well's
+// short side exactly as it used to fill the square.
+static Camera2D ship_portrait_camera(const game_state* s, const Ship* ship) {
+    f32 rx, ry, rw, rh;
+    ship_portrait_rect(s, &rx, &ry, &rw, &rh);
+    f32 smax = (rw > rh) ? rw : rh;
+    f32 smin = (rw < rh) ? rw : rh;
+    Camera2D cam = portrait_fit_camera(ship, PORTRAIT_PX * smin / smax);
+    // Below-1 (including the zero of a not-yet-reset state) means the fit framing.
+    f32 z = s->insp_view_zoom;
+    cam.zoom    *= (z > 1.0f) ? z : 1.0f;
+    cam.position = vec2_add(cam.position, s->insp_view_pan);
+    return cam;
 }
 
 void ship_portrait_center_origin(const game_state* s, f32* out_x, f32* out_y) {
@@ -575,23 +594,25 @@ void ship_portrait_center_origin(const game_state* s, f32* out_x, f32* out_y) {
     *out_y = INSP_INSET_T + INSP_TITLE_H;
 }
 
-void ship_portrait_rect(const game_state* s, f32* out_x, f32* out_y, f32* out_size) {
+void ship_portrait_rect(const game_state* s, f32* out_x, f32* out_y, f32* out_w, f32* out_h) {
     f32 cx0, cy0;
     ship_portrait_center_origin(s, &cx0, &cy0);
     f32 cx1 = (f32)s->fb_width  - INSP_INSET_R - INSP_COL_R;
     f32 cy1 = (f32)s->fb_height - INSP_INSET_B - INSP_TABS_H;   // above the tab panel
-    f32 cw = cx1 - cx0, ch = cy1 - cy0;
-    f32 side = ((cw < ch) ? cw : ch) - PORTRAIT_MARGIN * 2.0f;
-    if (side < 64.0f) side = 64.0f;
-    *out_x    = cx0 + (cw - side) * 0.5f;
-    *out_y    = cy0 + (ch - side) * 0.5f;
-    *out_size = side;
+    f32 w = (cx1 - cx0) - PORTRAIT_MARGIN * 2.0f;
+    f32 h = (cy1 - cy0) - PORTRAIT_MARGIN * 2.0f;
+    if (w < 64.0f) w = 64.0f;
+    if (h < 64.0f) h = 64.0f;
+    *out_x = cx0 + PORTRAIT_MARGIN;
+    *out_y = cy0 + PORTRAIT_MARGIN;
+    *out_w = w;
+    *out_h = h;
 }
 
 void ship_portrait_submit(game_state* s) {
     if (!s->show_flagship_inspector || s->editor.edit_mode_active) return;
     Ship* ship = &s->inspected_ship();
-    Camera2D pcam = ship_portrait_camera(ship);
+    Camera2D pcam = ship_portrait_camera(s, ship);
     // The frontend divides debug-line thickness by ITS stored camera zoom, so the hardpoint
     // boxes need the portrait camera installed for the duration of the scope. Restored to the
     // scene camera immediately after -- render_scene calls this pass LAST, but the restore
@@ -634,19 +655,33 @@ void ship_portrait_submit(game_state* s) {
     }
 }
 
+b8 ship_portrait_screen_to_world(game_state* s, f32 mx, f32 my, f32* out_wx, f32* out_wy) {
+    f32 rx, ry, rw, rh;
+    ship_portrait_rect(s, &rx, &ry, &rw, &rh);
+    Camera2D pcam = ship_portrait_camera(s, &s->inspected_ship());
+    // Cursor -> square-img pixels -> render-space world point. The square img spans
+    // max(rw,rh) screen px with only its central band visible through the well, so the
+    // cursor offsets by the cropped margin before scaling. The mapping extends beyond the
+    // well (a pan drag keeps tracking after the cursor leaves it); the return value is the
+    // inside test, not a validity test.
+    f32 S = (rw > rh) ? rw : rh;
+    Vec2 ppx = Vec2{ (mx - rx + (S - rw) * 0.5f) / S * PORTRAIT_PX,
+                     (my - ry + (S - rh) * 0.5f) / S * PORTRAIT_PX };
+    Vec2 world = camera2d_screen_to_world(&pcam, (u16)PORTRAIT_PX, (u16)PORTRAIT_PX, ppx);
+    *out_wx = world.x;
+    *out_wy = world.y;
+    return (mx >= rx && mx <= rx + rw && my >= ry && my <= ry + rh) ? TRUE : FALSE;
+}
+
 i32 ship_portrait_hardpoint_at(game_state* s, f32 mx, f32 my) {
     if (!s->show_flagship_inspector) return -1;
-    f32 rx, ry, rs;
-    ship_portrait_rect(s, &rx, &ry, &rs);
-    if (mx < rx || mx > rx + rs || my < ry || my > ry + rs) return -1;
+    f32 wx, wy;
+    if (!ship_portrait_screen_to_world(s, mx, my, &wx, &wy)) return -1;
     Ship* ship = &s->inspected_ship();
-    Camera2D pcam = ship_portrait_camera(ship);
-    // Cursor -> portrait pixels -> render-space world point -> ship-local units (the same
-    // conversion ship_world_to_local performs, but anchored on render_pos -- the portrait
-    // camera frames the RENDERED hull, which is what the player is pointing at).
-    Vec2 ppx = Vec2{ (mx - rx) / rs * PORTRAIT_PX, (my - ry) / rs * PORTRAIT_PX };
-    Vec2 world = camera2d_screen_to_world(&pcam, (u16)PORTRAIT_PX, (u16)PORTRAIT_PX, ppx);
-    Vec2 rel = vec2_sub(world, ship->render_pos);
+    // Render-space world point -> ship-local units (the same conversion ship_world_to_local
+    // performs, but anchored on render_pos -- the portrait camera frames the RENDERED hull,
+    // which is what the player is pointing at).
+    Vec2 rel = vec2_sub(Vec2{ wx, wy }, ship->render_pos);
     Vec2 lp  = vec2_scale(vec2_rotate(rel, -ship->angle), 1.0f / ship->world_scale);
     // Same box test as the world-side inspected_hardpoint_at_cursor: grace margin over the
     // drawn overlay box, nearest center wins where boxes overlap.

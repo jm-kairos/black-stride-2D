@@ -17,10 +17,11 @@ void draw_ship_scene(game_state* s);
 // closed, so the pass costs nothing in normal play.
 void ship_portrait_submit(game_state* s);
 
-// The portrait square's SCREEN rect: centred in the inspector's middle zone, sized to fit.
+// The portrait well's SCREEN rect: the inspector's whole middle zone minus margin --
+// generally NON-square (the square render target shows its central band through it).
 // game_push_hud pushes the same rect (zone-relative, via ship_portrait_center_origin) to the
-// RML <img> element, so the element and the hit-test below share one source of truth.
-void ship_portrait_rect(const game_state* s, f32* out_x, f32* out_y, f32* out_size);
+// RML clip wrapper, so the element and the hit-test below share one source of truth.
+void ship_portrait_rect(const game_state* s, f32* out_x, f32* out_y, f32* out_w, f32* out_h);
 
 // Screen origin of the inspector's middle zone (the .insp-center element) -- the coordinate
 // the RML element's left/top are relative to.
@@ -29,3 +30,10 @@ void ship_portrait_center_origin(const game_state* s, f32* out_x, f32* out_y);
 // Which of the inspected ship's hardpoints sits under screen pixel (mx,my), hit-tested through
 // the portrait mapping? -1 when the cursor is outside the portrait square or over no box.
 i32 ship_portrait_hardpoint_at(game_state* s, f32 mx, f32 my);
+
+// Screen pixel (mx,my) -> render-space world point through the CURRENT portrait view (the
+// fit camera folded with insp_view_zoom/_pan -- the same camera the submit pass and the
+// hardpoint hit-test use). Returns whether the cursor is inside the portrait square; the
+// out-params are written either way, so a pan drag can keep tracking outside it. game.cpp's
+// portrait input uses this to pin the zoom to the cursor and to pan in world units.
+b8 ship_portrait_screen_to_world(game_state* s, f32 mx, f32 my, f32* out_wx, f32* out_wy);

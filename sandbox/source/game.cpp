@@ -372,6 +372,9 @@ b8 game_init(Game* game_inst) {
     s->show_flagship_inspector = false;
     s->inspected_ship_idx = 0;
     s->insp_tab = 0;
+    s->insp_view_zoom = 1.0f;       // portrait view at the fit framing
+    s->insp_view_pan = Vec2{ 0.0f, 0.0f };
+    s->insp_view_dragging = false;
     s->hovered_station_id = -1;
     s->station_menu_visible = false;
     s->station_menu_station_id = -1;
@@ -1369,9 +1372,9 @@ static i32 inspected_hardpoint_at_cursor(game_state* s) {
         input_get_mouse_position(&pmx, &pmy);
         i32 hit = ship_portrait_hardpoint_at(s, (f32)pmx, (f32)pmy);
         if (hit >= 0) return hit;
-        f32 rx, ry, rs;
-        ship_portrait_rect(s, &rx, &ry, &rs);
-        if ((f32)pmx >= rx && (f32)pmx <= rx + rs && (f32)pmy >= ry && (f32)pmy <= ry + rs)
+        f32 rx, ry, rw, rh;
+        ship_portrait_rect(s, &rx, &ry, &rw, &rh);
+        if ((f32)pmx >= rx && (f32)pmx <= rx + rw && (f32)pmy >= ry && (f32)pmy <= ry + rh)
             return -1;
     }
     Ship& fs   = s->inspected_ship();
@@ -1388,6 +1391,74 @@ static i32 inspected_hardpoint_at_cursor(game_state* s) {
         }
     }
     return hit;
+}
+
+// Portrait view back to the fit framing. Opening the inspector and switching hulls both go
+// through here -- a new ship must never inherit the previous one's zoom/pan.
+static void inspector_view_reset(game_state* s) {
+    s->insp_view_zoom     = 1.0f;
+    s->insp_view_pan      = Vec2{ 0.0f, 0.0f };
+    s->insp_view_dragging = false;
+}
+
+// ---- Inspector portrait view input (wheel zoom + drag pan) -------------------------------
+// The portrait is a camera onto the hull: the wheel zooms toward the cursor and a left-drag
+// on EMPTY portrait space pans. Presses on a hardpoint box are left alone -- they arm the
+// loadout drag in the pickup block below, which keeps priority. Both gestures work through
+// ship_portrait_screen_to_world, so the pin/pan math shares the exact camera the portrait is
+// drawn and hit-tested with. The world camera cannot fight over the wheel: CameraControl
+// discards it while the inspector is open (camera_controller.cpp).
+static const f32 PORTRAIT_ZOOM_STEP = 1.15f;   // multiplicative per wheel notch
+static const f32 PORTRAIT_ZOOM_MAX  = 8.0f;    // x the fit framing
+
+static void update_portrait_view_input(game_state* s) {
+    i32 mxi = 0, myi = 0;
+    input_get_mouse_position(&mxi, &myi);
+    f32 mx = (f32)mxi, my = (f32)myi;
+    f32 rx, ry, rw, rh;
+    ship_portrait_rect(s, &rx, &ry, &rw, &rh);
+    b8 inside  = mx >= rx && mx <= rx + rw && my >= ry && my <= ry + rh;
+    b8 over_ui = bs_imgui_wants_mouse() || bs_rml_wants_mouse();
+
+    // Wheel: zoom toward the cursor. Re-projecting the cursor before and after the zoom
+    // change and folding the drift into the pan keeps the pointed-at spot pinned in place.
+    i32 wheel = input_get_mouse_wheel();
+    if (wheel != 0 && inside && !over_ui) {
+        f32 bx, by, ax, ay;
+        ship_portrait_screen_to_world(s, mx, my, &bx, &by);
+        s->insp_view_zoom = clampf(s->insp_view_zoom * powf(PORTRAIT_ZOOM_STEP, (f32)wheel),
+                                   1.0f, PORTRAIT_ZOOM_MAX);
+        ship_portrait_screen_to_world(s, mx, my, &ax, &ay);
+        s->insp_view_pan = vec2_add(s->insp_view_pan, Vec2{ bx - ax, by - ay });
+    }
+
+    // Left-drag pan: armed by a press on empty portrait space (inside the square, over no
+    // hardpoint box, no loadout drag airborne); keeps tracking after the cursor leaves the
+    // square; any release disarms. The grabbed world point stays under the cursor.
+    b8 held    = input_is_button_down(BUTTON_LEFT);
+    b8 pressed = held && !input_was_button_down(BUTTON_LEFT);
+    if (pressed && inside && !over_ui && !s->world_module_drag &&
+        s->pending_weapon_drag < 0 && ship_portrait_hardpoint_at(s, mx, my) < 0) {
+        s->insp_view_dragging = true;
+        s->insp_view_drag_px  = Vec2{ mx, my };
+    }
+    if (s->insp_view_dragging) {
+        if (!held) {
+            s->insp_view_dragging = false;
+        } else {
+            f32 px, py, cx, cy;
+            ship_portrait_screen_to_world(s, s->insp_view_drag_px.x, s->insp_view_drag_px.y, &px, &py);
+            ship_portrait_screen_to_world(s, mx, my, &cx, &cy);
+            s->insp_view_pan     = vec2_add(s->insp_view_pan, Vec2{ px - cx, py - cy });
+            s->insp_view_drag_px = Vec2{ mx, my };
+        }
+    }
+
+    // Keep the hull reachable: the pan may never exceed its bounding radius, so some part of
+    // the ship always stays inside (or one screen away from) the frame.
+    f32 r   = ship_bounding_radius(&s->inspected_ship());
+    f32 len = sqrtf(s->insp_view_pan.x * s->insp_view_pan.x + s->insp_view_pan.y * s->insp_view_pan.y);
+    if (len > r) s->insp_view_pan = vec2_scale(s->insp_view_pan, r / len);
 }
 
 // ---- RmlUi HUD snapshot ------------------------------------------------------------------
@@ -1733,12 +1804,13 @@ static void game_push_hud(game_state* s, f32 dt) {
     // are relative to the inspector's middle zone; the same rect drives the game-side portrait
     // hardpoint hit-test, so the element and the hit-test cannot drift from each other.
     {
-        f32 prx, pry, prs, pcx, pcy;
-        ship_portrait_rect(s, &prx, &pry, &prs);
+        f32 prx, pry, prw, prh, pcx, pcy;
+        ship_portrait_rect(s, &prx, &pry, &prw, &prh);
         ship_portrait_center_origin(s, &pcx, &pcy);
         snprintf(hud.insp_portrait_left, sizeof(hud.insp_portrait_left), "%.0fpx", prx - pcx);
         snprintf(hud.insp_portrait_top,  sizeof(hud.insp_portrait_top),  "%.0fpx", pry - pcy);
-        snprintf(hud.insp_portrait_size, sizeof(hud.insp_portrait_size), "%.0fpx", prs);
+        snprintf(hud.insp_portrait_w,    sizeof(hud.insp_portrait_w),    "%.0fpx", prw);
+        snprintf(hud.insp_portrait_h,    sizeof(hud.insp_portrait_h),    "%.0fpx", prh);
     }
     if (!s->editor.edit_mode_active) {
         hud.inspector_btn_visible = TRUE;
@@ -2483,8 +2555,10 @@ static void game_push_hud(game_state* s, f32 dt) {
         // arrive as "insp:N" below and pick any member.
         if (strcmp(action, "toggle_inspector") == 0) {
             s->show_flagship_inspector = !s->show_flagship_inspector;
-            if (s->show_flagship_inspector)
+            if (s->show_flagship_inspector) {
                 s->inspected_ship_idx = s->fleet_state.fleet.piloted_index();
+                inspector_view_reset(s);
+            }
             continue;
         }
         if (strcmp(action, "close_inspector") == 0) {
@@ -2503,6 +2577,8 @@ static void game_push_hud(game_state* s, f32 dt) {
         if (strncmp(action, "insp:", 5) == 0) {
             i32 i = atoi(action + 5);
             if (i >= 0 && i < s->fleet_state.fleet.count()) {
+                if (i != s->inspected_ship_idx || !s->show_flagship_inspector)
+                    inspector_view_reset(s);
                 s->inspected_ship_idx      = i;
                 s->show_flagship_inspector = true;
                 if (s->camera_state.free_camera_active && !s->camera_state.recentering)
@@ -3271,6 +3347,9 @@ b8 game_update(Game* game_inst, f32 dt) {
         // its inventory. Safe alongside firing: firing is fully suppressed while the inspector
         // is open.
         if (s->show_flagship_inspector && !s->editor.edit_mode_active) {
+            // Portrait view first: it arms the pan only when the press hits NO hardpoint box,
+            // so the pickup below always wins the presses it cares about.
+            update_portrait_view_input(s);
             Ship& fsh      = s->inspected_ship();  // the hull being refitted
             Ship& pool     = s->player_ship();     // fleet-wide inventory (stow target)
             b8    pressed  = input_is_button_down(BUTTON_LEFT) && !input_was_button_down(BUTTON_LEFT);

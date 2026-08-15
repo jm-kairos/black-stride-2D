@@ -724,10 +724,16 @@ body {
 }
 
 /* The live hull portrait (offscreen render target via the reserved "bs:portrait" source).
-   left/top/width/height arrive per-frame from the game; click-through so the game-side
-   portrait hit-test owns every interaction over it. */
+   The element is the full middle-zone well (non-square); the SQUARE target paints as an
+   image decorator with `cover` fit, which scales to the well's long side and crops the
+   central band via texcoords -- undistorted, and clipped in-geometry, so it needs no
+   overflow container (overflow:hidden does NOT clip absolutely-positioned children here;
+   an oversized <img> leaked over the tab panel, verified live). left/top/width/height
+   arrive per-frame from the game; click-through so the game-side portrait hit-test owns
+   every interaction over it. */
 .insp-portrait {
     position: absolute;
+    decorator: image("bs:portrait" cover);
     pointer-events: none;
 }
 
