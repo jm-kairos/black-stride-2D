@@ -120,16 +120,22 @@ typedef struct mapped_vertex
     f32 angle;      // sprite rotation in radians
 } mapped_vertex;
 
-// Directional light uniform for the mapped sprite fragment shader.
+// Max 2D lights packed into the fragment uniform. MUST equal BS_MAX_LIGHTS in sprite.frag.hlsl
+// (and in mapped_sprite.frag.hlsl, which consumes the same light list).
+#define BS_BACKEND_MAX_LIGHTS 16
+
+// Light uniform for the mapped sprite fragment shader: the star (directional) light plus the
+// same movable 2D point-light list the sprite pass consumes, shaded there per-pixel against
+// the normal map. MUST match LightUBO in mapped_sprite.frag.hlsl and preview_light_t in
+// tools/map_extractor/preview.cpp.
 typedef struct mapped_light
 {
     f32 light_dir[4];  // xyz = normalized world-space light direction, w = intensity
     f32 ambient[4];    // rgb = ambient color, a = unused
-    f32 tuning[4];     // x = normal strength, y = depth parallax scale, z = unused, w = unused
+    f32 tuning[4];     // x = normal strength, y = depth parallax scale, z = point light count
+    f32 pos_radius[BS_BACKEND_MAX_LIGHTS][4]; // xy = world pos, z = radius, w = intensity
+    f32 color[BS_BACKEND_MAX_LIGHTS][4];      // rgb = color, w = per-light enabled
 } mapped_light;
-
-// Max 2D lights packed into the fragment uniform. MUST equal BS_MAX_LIGHTS in sprite.frag.hlsl.
-#define BS_BACKEND_MAX_LIGHTS 16
 
 // Fragment light uniform — MUST match LightUBO in sprite.frag.hlsl (2 + 2*N float4s).
 // Pushed per draw-run via SDL_PushGPUFragmentUniformData. params.y is the per-run lit flag
@@ -2685,8 +2691,29 @@ b8 sdlgpu_backend_end_frame(struct renderer_backend* backend, f32 dt)
         lit.ambient[3]   = 1.0f;
         lit.tuning[0]    = 1.0f; // normal strength
         lit.tuning[1]    = 0.02f; // depth parallax scale
-        lit.tuning[2]    = 0.0f;
+        lit.tuning[2]    = 0.0f; // point light count (0 = star + ambient only)
         lit.tuning[3]    = 0.0f;
+
+        // Scene point lights (thruster burns, muzzle flashes, editor lights) shade the hull
+        // maps per-pixel. The portrait pass (vp_override != NULL) deliberately stays
+        // point-light-free: it renders the inspected hull in a neutral studio look, same as
+        // draw_sprite_batch's fullbright flag.
+        if (!vp_override)
+        {
+            lit.tuning[2] = (f32)g_sdl.light_count;
+            for (u32 li = 0; li < g_sdl.light_count; ++li)
+            {
+                const bs_light2d& L = g_sdl.lights[li];
+                lit.pos_radius[li][0] = L.position.x;
+                lit.pos_radius[li][1] = L.position.y;
+                lit.pos_radius[li][2] = L.radius;
+                lit.pos_radius[li][3] = L.intensity;
+                lit.color[li][0]      = L.color.r;
+                lit.color[li][1]      = L.color.g;
+                lit.color[li][2]      = L.color.b;
+                lit.color[li][3]      = L.enabled ? 1.0f : 0.0f;
+            }
+        }
 
         SDL_GPUBufferBinding vbind; SDL_zero(vbind);
         vbind.buffer = g_sdl.mapped_vbuffer; vbind.offset = 0;

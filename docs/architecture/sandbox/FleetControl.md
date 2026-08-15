@@ -98,10 +98,12 @@ InWorldOverlays, FrameOrchestrator, GameStateModel.
   controllers, the separation post-pass, and `steering::apply_impl` (which covers escort,
   avoid and every NPC agent at one site). `flight_telemetry_tick` consumes them exactly once
   per ship per tick — from `FleetShip::simulate` for fleet ships, from `ai_ships_update` for
-  agents — easing the `*_vis` copies ShipRendering reads and zeroing the commands, so a tick
-  nobody commands anything decays the jets to zero. Purely visual: nothing in the simulation
-  reads the telemetry back, and a coasting ship (this sim has no drag) correctly burns
-  nothing. The channels answer "what are the engines doing", never "how fast is the hull
+  agents — easing the `*_vis` copies the render tier reads (ShipRendering's exhaust pass, and
+  since 2026-08-15 SceneOrchestration's frame-lighting collector, which projects the same
+  telemetry onto the authored nozzles to place a thruster-burn point light) and zeroing the
+  commands, so a tick nobody commands anything decays the jets to zero. Purely visual: nothing
+  in the simulation reads the telemetry back, and a coasting ship (this sim has no drag)
+  correctly burns nothing. The channels answer "what are the engines doing", never "how fast is the hull
   moving" — the mistake the old speed-driven exhaust made. The same tick also eases
   `heat_vis`, the main-drive THERMAL state, toward the forward burn on a seconds timescale
   (rise ~1.1/s, fall ~0.35/s): it lags the throttle the way a nozzle bell lags its flame,

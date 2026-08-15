@@ -4,10 +4,112 @@
 #include "sim/celestial_parallax.h" // celestial_center_render
 #include "render/star_fx.h"
 #include "core/render_layers.h"
+#include "core/view_transform.h"    // render_from_hierpos (light positions, computed fresh)
+#include "core/projectile_fx.h"     // ProjectileFxEvent ring (weapon-flash lights)
 #include <renderer/renderer.h>
 #include <math.h>
 
 using namespace bs_math;
+
+// ---- Dynamic ship lights: thruster burns and weapon flashes -----------------------------
+// Every light source the scene draws also LIGHTS the scene: a burning main drive throws
+// warm light onto its own stern plating and nearby hulls, and a muzzle flash / impact /
+// flak burst strobes the hull that produced it. The mapped-hull shader shades these
+// per-pixel against the ship's normal map; lit sprite runs pick them up too. Positions are
+// computed fresh from hierpos here (Ship::render_pos is written later, by draw_ship_scene),
+// so the lights track this frame's camera anchor exactly.
+//
+// Budget: shares the engine's 16-light array with the star + editor lights. One light per
+// burning main-drive cluster (not per nozzle) keeps a 5-ship fleet at 5 slots; FX-ring
+// flashes fill what remains, newest first by ring order. NPC drives are skipped for now —
+// they fly distant trade lanes and would starve the fleet's slots.
+static u32 collect_dynamic_ship_lights(game_state* s, bs_light2d* out, u32 max_out) {
+    u32 count = 0;
+
+    // ---- Main-drive burn light, one per fleet ship --------------------------------------
+    // Same projection as draw_engine_exhaust: commanded thrust (thrust_vis/turn_vis
+    // telemetry, never velocity) against each authored MAIN nozzle, so the light burns
+    // exactly when the flames draw and goes dark on a coasting hull.
+    for (i32 i = 0; i < s->fleet_state.fleet.count() && count < max_out; ++i) {
+        const FleetShip& fs = s->fleet_state.fleet.at(i);
+        const Ship* ship = &fs.ship;
+        const ShipFlight* fl = &fs.flight;
+        if (!ship->def || ship->def->thruster_count <= 0) continue;
+
+        Vec2 T = Vec2{ clampf(fl->thrust_vis.x, -1.0f, 1.0f),
+                       clampf(fl->thrust_vis.y, -1.0f, 1.0f) };
+        f32  u = clampf(fl->turn_vis, -1.0f, 1.0f);
+
+        Vec2 pos_sum  = Vec2{ 0.0f, 0.0f };
+        Vec2 dir_sum  = Vec2{ 0.0f, 0.0f };
+        f32  burn_sum = 0.0f;
+        f32  burn_max = 0.0f;
+        for (i32 t = 0; t < ship->def->thruster_count; ++t) {
+            const ThrusterDef& td = ship->def->thrusters[t];
+            if (td.kind != THRUSTER_MAIN) continue;
+            Vec2 e = vec2_rotate(Vec2{ 0.0f, 1.0f }, td.facing);  // exhaust direction, local
+            Vec2 f = Vec2{ -e.x, -e.y };                          // force it puts on the hull
+            f32 burn = fmaxf(0.0f, T.x * f.x + T.y * f.y);
+            f32 pl = vec2_length(td.pos_local);
+            if (pl > 1.0e-3f) {
+                f32 tau = (td.pos_local.x * f.y - td.pos_local.y * f.x) / pl;
+                burn += fmaxf(0.0f, u * tau);
+            }
+            burn = clampf(burn, 0.0f, 1.0f);
+            if (burn <= 0.02f) continue;
+            pos_sum   = vec2_add(pos_sum, vec2_scale(td.pos_local, burn));
+            dir_sum   = vec2_add(dir_sum, vec2_scale(e, burn));
+            burn_sum += burn;
+            burn_max  = fmaxf(burn_max, burn);
+        }
+        if (burn_sum <= 0.05f) continue;
+
+        Vec2 nozzle_local = vec2_scale(pos_sum, 1.0f / burn_sum);   // burn-weighted mean, art texels
+        f32 dl = vec2_length(dir_sum);
+        Vec2 exhaust_dir = (dl > 1.0e-3f) ? vec2_scale(dir_sum, 1.0f / dl) : Vec2{ 0.0f, -1.0f };
+
+        Vec2 render_pos = render_from_hierpos(s, &ship->origin);
+        Vec2 world_off = vec2_rotate(vec2_scale(nozzle_local, ship->world_scale), ship->angle);
+        // Push the light down the mean exhaust direction so it sits in the plume, not
+        // inside the hull — the stern bevels then face it and catch the spill.
+        f32 hull_w = ship->visual.size_local.x;
+        Vec2 plume_off = vec2_rotate(vec2_scale(exhaust_dir, hull_w * 0.45f), ship->angle);
+
+        f32 heat = clampf(fl->heat_vis, 0.0f, 1.0f);
+        bs_light2d& L = out[count++];
+        L = {};
+        L.position  = vec2_add(render_pos, vec2_add(world_off, plume_off));
+        L.radius    = hull_w * (2.0f + 1.5f * burn_max);
+        L.intensity = 0.55f * clampf(burn_sum, 0.0f, 1.5f);
+        // Ember-red cold drive warming toward white-hot, matching the bell-glow ramp.
+        L.color     = bs_color{ 1.0f, 0.55f + 0.40f * heat, 0.25f + 0.70f * heat, 1.0f };
+        L.enabled   = TRUE;
+    }
+
+    // ---- Weapon flashes: every live FX-ring event is a brief light ----------------------
+    // Muzzle, impact, flak airburst and PD intercept all read as incandescent events; the
+    // ring already carries position (hierpos), size, damage-derived power and the shot's
+    // tint. Radius rides the same 12x-45x sizing band the drawn effects use, and the
+    // squared fade matches their brightness decay.
+    for (i32 i = 0; i < MAX_PROJECTILE_FX && count < max_out; ++i) {
+        const ProjectileFxEvent& e = s->projectile_fx.events[i];
+        if (!e.active || e.life <= 0.0f) continue;
+        f32 fade = 1.0f - clampf(e.age / e.life, 0.0f, 1.0f);
+        if (fade <= 0.01f) continue;
+        bs_light2d& L = out[count++];
+        L = {};
+        L.position  = render_from_hierpos(s, &e.position);
+        L.radius    = e.scale * (30.0f + 18.0f * e.power);
+        L.intensity = fade * fade * (0.5f + 0.35f * e.power);
+        // Hot-shift the shot's tint toward white so the flash reads as incandescence.
+        L.color     = bs_color{ e.tint.r + (1.0f - e.tint.r) * 0.5f,
+                                e.tint.g + (1.0f - e.tint.g) * 0.5f,
+                                e.tint.b + (1.0f - e.tint.b) * 0.5f, 1.0f };
+        L.enabled   = TRUE;
+    }
+
+    return count;
+}
 
 void submit_frame_lighting(game_state* s) {
     // Volumetric star light accumulator (filled in the galaxy-map look, consumed here).
@@ -65,6 +167,10 @@ void submit_frame_lighting(game_state* s) {
     for (u32 i = 0; i < s->render.lights.size() && frame_light_count < 16; ++i) {
         frame_lights[frame_light_count++] = s->render.lights[i];
     }
+
+    // Dynamic ship lights (thruster burns, weapon flashes) fill the remaining slots.
+    frame_light_count += collect_dynamic_ship_lights(s, frame_lights + frame_light_count,
+                                                     16u - frame_light_count);
 
     // When a star light is active, boost ambient so the galaxy map stays visible
     // (the default ambient is ~0.2, which makes the map 80% darker than fullbright).

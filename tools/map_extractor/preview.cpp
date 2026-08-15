@@ -37,12 +37,17 @@ typedef struct preview_vertex
     float angle;      // sprite rotation in radians
 } preview_vertex_t;
 
-// Mirror the engine's mapped-sprite fragment UBO.
+// Mirror the engine's mapped-sprite fragment UBO (mapped_light in
+// renderer_backend_sdlgpu.cpp / LightUBO in mapped_sprite.frag.hlsl). The preview keeps
+// the point-light arrays zeroed (tuning[2] = count = 0): star + ambient only.
+#define PREVIEW_MAX_LIGHTS 16
 typedef struct preview_light
 {
     float light_dir[4];  // xyz = direction, w = intensity
     float ambient[4];
-    float tuning[4];
+    float tuning[4];     // x = normal strength, y = parallax scale, z = point light count
+    float pos_radius[PREVIEW_MAX_LIGHTS][4];
+    float color[PREVIEW_MAX_LIGHTS][4];
 } preview_light_t;
 
 static SDL_GPUShader* load_shader(SDL_GPUDevice* device, const char* name, const char* stage_ext,

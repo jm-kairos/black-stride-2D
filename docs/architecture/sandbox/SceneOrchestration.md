@@ -44,6 +44,17 @@ InWorldOverlays, CelestialParallax, CelestialFx, RenderLayerTable, GameStateMode
   rather than an obvious failure.
 - `submit_frame_lighting` reads `s->celestial_anchor`, which `game_render` computes earlier in
   the same frame — a precondition it cannot enforce.
+- **Dynamic ship lights are collected here, not where their effects draw.**
+  `collect_dynamic_ship_lights` fills the frame array's remaining slots with one point light
+  per burning main-drive cluster (the same thrust-telemetry-onto-authored-nozzles projection
+  `draw_engine_exhaust` uses, so the light burns exactly when the flames draw; color rides
+  `heat_vis` ember→white) and one per live projectile-FX-ring event (muzzle, impact, flak
+  burst, PD intercept — radius from the effect's own sizing, squared age fade, tint
+  hot-shifted). Both the lit sprite passes and the engine's mapped-hull pass consume the one
+  list. Light positions are computed FRESH from hierpos here because `Ship::render_pos` is
+  written later, by `draw_ship_scene` — reading it would light last frame's positions. Budget:
+  the same 16 slots as the star + editor lights; fleet drives take at most 5, FX events fill
+  what remains, NPC drives are deliberately skipped.
 
 **Extension points:** **A new world pass** is a function in its own `render/` module plus one
 call placed correctly in `render_scene` — and, if it produces state a later pass consumes, a
@@ -77,5 +88,8 @@ this and says so. **A new light source** is an entry appended to the `frame_ligh
 **Source paths:** `sandbox/source/render/scene_renderer.{cpp,h}`,
 `sandbox/source/render/frame_lighting.{cpp,h}`
 
-**Last verified:** 2026-08-09, working tree on `game` (no code change here; `bloom_threshold`
-became a live control once the engine's offscreen targets moved to `RGBA16F`)
+**Last verified:** 2026-08-15, working tree on `game` (adds `collect_dynamic_ship_lights`:
+thruster-burn and weapon-flash point lights appended to the frame array after the star and
+editor lights; live-verified — a held main burn warms the flagship's stern plating through the
+engine's mapped-hull pass). Previously verified 2026-08-09 (no code change here;
+`bloom_threshold` became a live control once the engine's offscreen targets moved to `RGBA16F`)

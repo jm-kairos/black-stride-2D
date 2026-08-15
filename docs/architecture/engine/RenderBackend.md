@@ -120,8 +120,19 @@ deliberate, because that pass is where the tone map converts HDR back to 8 bits.
   before, 246.5 after) and only previously-clipping pixels move. A rational tail was chosen over
   an exponential one because the exponential saturated by ~2x nominal white, which would have
   left a triple-barrel salvo barely brighter than a single shot.
-- The mapped-sprite pass takes its light direction from `mapped_batch[0]` for the entire batch
-  (`:2437-2441`), on the stated assumption that all ships share one star direction.
+- The mapped-sprite pass takes its light direction from `mapped_batch[0]` for the entire batch,
+  on the stated assumption that all ships share one star direction.
+- **The `mapped_light` uniform now carries the scene's 16-slot point-light list alongside the
+  star**, filled from the same `g_sdl.lights` the sprite pass packs; the mapped fragment shader
+  shades each light per-pixel against the hull's normal map (direction rotated into ship-local
+  space like the star, same quadratic radius falloff as `sprite.frag.hlsl`, no volumetric
+  term). The layout MUST stay in sync across three sites: `mapped_light` here, `LightUBO` in
+  `mapped_sprite.frag.hlsl`, and `preview_light_t` in `tools/map_extractor/preview.cpp` (the
+  tool loads the same compiled blobs). The portrait pass (`vp_override != NULL`) deliberately
+  keeps its point-light count at zero — studio look, matching `draw_sprite_batch`'s fullbright
+  flag. Per-pixel light distance needs the fragment's true world position, so the mapped
+  vertex shader forwards the raw corner position as a `world_xy` varying (the `world_pos`
+  attribute is the sprite CENTER, same for all four corners).
 - `stb_image_impl.cpp` is a build artifact, not a module: it declares nothing, has no includers,
   and exists only to compile stb_image's body once under seven warning suppressions.
 - The "Phase 3"/"Phase 4" section markers record build order rather than a designed grouping;
@@ -131,7 +142,12 @@ deliberate, because that pass is where the tone map converts HDR back to 8 bits.
 `engine/source/renderer/renderer_backend.cpp`, and the post-chain shaders under
 `assets/shaders/src/bloom_*.frag.hlsl`
 
-**Last verified:** 2026-08-12, working tree on `game` (adds the ship-portrait passes: capture
+**Last verified:** 2026-08-15, working tree on `game` (the mapped-sprite pass consumes the
+scene point-light list: `mapped_light` grows the 16-light arrays + a count in `tuning.z`,
+`draw_mapped_batch` packs `g_sdl.lights` except for portraits, and `mapped_sprite.vert/frag`
+gain the `world_xy` varying + per-pixel normal-mapped accumulation loop — live-verified,
+thruster-burn light warming a hull's stern plating).
+Previously verified 2026-08-12 (adds the ship-portrait passes: capture
 runs as per-frame SCOPE RECORDS — the main portrait plus one 256x256 fleet-thumbnail slot per
 member — sharing one capture array with per-scope sub-range sorts; targets are the fixed-size
 `portrait_rt` and the `thumb_rt` strip, both in `offscreen_format`, rendered as pre-passes

@@ -31,11 +31,11 @@
 #endif
 
 static char g_input_path[1024] = "";
+static char g_side_path[1024] = "";
 static char g_output_dir[1024] = "";
 static char g_ship_name[128] = "my_ship";
-static float g_alpha_threshold = 0.05f;
-static float g_normal_strength = 1.0f;
-static float g_depth_contrast = 1.0f;
+static extract_params_t g_params = extract_params_default();
+static image_t g_side_input = {};
 static float g_world_scale = 0.06f;
 static int g_ship_size_w = 2048;
 static int g_ship_size_h = 2048;
@@ -50,7 +50,6 @@ static bool g_auto_rotate = false;
 static bool g_preview_dirty = true;
 static bool g_slider_active = false;
 static float g_preview_size = 512.0f;
-static normal_algorithm_t g_normal_algo = NORMAL_ALGORITHM_SDF_TRUE_EDT;
 static SDL_GPUTexture* g_preview_sampler_tex = NULL;
 static float g_thumb_zoom = 1.0f;
 
@@ -80,10 +79,7 @@ static std::atomic<bool> g_worker_running{ false };
 static std::atomic<bool> g_worker_done{ false };
 static extracted_maps_t g_worker_maps = {};
 static std::thread g_worker_thread;
-static float g_worker_alpha = 0.0f;
-static float g_worker_normal_strength = 0.0f;
-static float g_worker_depth_contrast = 0.0f;
-static normal_algorithm_t g_worker_algo = NORMAL_ALGORITHM_SDF_TRUE_EDT;
+static extract_params_t g_worker_params = {};
 
 static image_t image_copy(const image_t* src)
 {
@@ -97,11 +93,11 @@ static image_t image_copy(const image_t* src)
     return out;
 }
 
-static void worker_extract_maps(image_t input, float alpha_threshold, float normal_strength, float depth_contrast,
-                               normal_algorithm_t algo)
+static void worker_extract_maps(image_t input, image_t side, extract_params_t params)
 {
-    g_worker_maps = extract_maps(input, alpha_threshold, normal_strength, depth_contrast, algo);
+    g_worker_maps = extract_maps(input, side, &params);
     image_free(&input);
+    image_free(&side);
     g_worker_done.store(true);
 }
 
@@ -110,16 +106,13 @@ static void start_worker()
     if (g_worker_running.load()) return;
     image_t input = image_copy(&g_input);
     if (!input.rgba) return;
+    image_t side = image_copy(&g_side_input); // empty when no side view is loaded
     g_worker_running.store(true);
     g_worker_done.store(false);
-    g_worker_alpha = g_alpha_threshold;
-    g_worker_normal_strength = g_normal_strength;
-    g_worker_depth_contrast = g_depth_contrast;
-    g_worker_algo = g_normal_algo;
+    g_worker_params = g_params;
     extracted_maps_free(&g_worker_maps);
     g_worker_maps = {};
-    g_worker_thread = std::thread(worker_extract_maps, input, g_alpha_threshold, g_normal_strength, g_depth_contrast,
-                                  g_normal_algo);
+    g_worker_thread = std::thread(worker_extract_maps, input, side, g_params);
 }
 
 static void finish_worker()
@@ -127,10 +120,7 @@ static void finish_worker()
     if (!g_worker_done.load()) return;
     if (g_worker_thread.joinable()) g_worker_thread.join();
 
-    bool stale = (g_worker_alpha != g_alpha_threshold ||
-                  g_worker_normal_strength != g_normal_strength ||
-                  g_worker_depth_contrast != g_depth_contrast ||
-                  g_worker_algo != g_normal_algo);
+    bool stale = (memcmp(&g_worker_params, &g_params, sizeof(g_params)) != 0);
 
     if (stale)
     {
@@ -285,18 +275,45 @@ static SDL_GPUTexture* create_texture(SDL_GPUDevice* device, image_t* img, SDL_G
 
 int main(int argc, char* argv[])
 {
-    // Headless preview mode: --preview <input.png> <output_screenshot.png> [star_angle_deg]
-    if (argc > 1 && strcmp(argv[1], "--preview") == 0)
+    // Optional --side <path> flag (any position, all modes): a side-view image of the
+    // same hull whose top silhouette supplies the dorsal elevation profile. It is
+    // filtered out here so the positional arguments below stay stable.
+    const char* fargv[16];
+    int fargc = 0;
+    for (int i = 0; i < argc && fargc < 16; ++i)
     {
-        if (argc < 4)
+        if (strcmp(argv[i], "--side") == 0 && i + 1 < argc)
         {
-            fprintf(stderr, "Usage: map_extractor --preview <input.png> <output.png> [star_angle_deg]\n");
+            strncpy(g_side_path, argv[i + 1], sizeof(g_side_path) - 1);
+            ++i;
+        }
+        else
+        {
+            fargv[fargc++] = argv[i];
+        }
+    }
+    if (g_side_path[0])
+    {
+        g_side_input = image_load(g_side_path);
+        if (!g_side_input.rgba)
+        {
+            fprintf(stderr, "Failed to load side view: %s\n", g_side_path);
             return 1;
         }
-        const char* input_path = argv[2];
-        const char* output_path = argv[3];
+    }
+
+    // Headless preview mode: --preview <input.png> <output_screenshot.png> [star_angle_deg]
+    if (fargc > 1 && strcmp(fargv[1], "--preview") == 0)
+    {
+        if (fargc < 4)
+        {
+            fprintf(stderr, "Usage: map_extractor --preview <input.png> <output.png> [star_angle_deg] [--side <side.png>]\n");
+            return 1;
+        }
+        const char* input_path = fargv[2];
+        const char* output_path = fargv[3];
         float star_deg = 45.0f;
-        if (argc > 4) star_deg = (float)atof(argv[4]);
+        if (fargc > 4) star_deg = (float)atof(fargv[4]);
         float star_rad = star_deg * ((float)M_PI / 180.0f);
 
         if (!SDL_Init(SDL_INIT_VIDEO))
@@ -332,8 +349,7 @@ int main(int argc, char* argv[])
             return 1;
         }
 
-        extracted_maps_t maps = extract_maps(input, g_alpha_threshold, g_normal_strength, g_depth_contrast,
-                                               NORMAL_ALGORITHM_SDF_TRUE_EDT);
+        extracted_maps_t maps = extract_maps(input, g_side_input, &g_params);
         image_free(&input);
         if (!maps.diffuse.rgba)
         {
@@ -374,16 +390,16 @@ int main(int argc, char* argv[])
     }
 
     // Headless export mode: --export <input.png> <output_dir> [ship_name]
-    if (argc > 1 && strcmp(argv[1], "--export") == 0)
+    if (fargc > 1 && strcmp(fargv[1], "--export") == 0)
     {
-        if (argc < 4)
+        if (fargc < 4)
         {
-            fprintf(stderr, "Usage: map_extractor --export <input.png> <output_dir> [ship_name]\n");
+            fprintf(stderr, "Usage: map_extractor --export <input.png> <output_dir> [ship_name] [--side <side.png>]\n");
             return 1;
         }
-        strncpy(g_input_path, argv[2], sizeof(g_input_path) - 1);
-        strncpy(g_output_dir, argv[3], sizeof(g_output_dir) - 1);
-        if (argc > 4) strncpy(g_ship_name, argv[4], sizeof(g_ship_name) - 1);
+        strncpy(g_input_path, fargv[2], sizeof(g_input_path) - 1);
+        strncpy(g_output_dir, fargv[3], sizeof(g_output_dir) - 1);
+        if (fargc > 4) strncpy(g_ship_name, fargv[4], sizeof(g_ship_name) - 1);
 
         g_input = image_load(g_input_path);
         if (!g_input.rgba)
@@ -393,8 +409,7 @@ int main(int argc, char* argv[])
         }
         g_ship_size_w = g_input.w;
         g_ship_size_h = g_input.h;
-        g_maps = extract_maps(g_input, g_alpha_threshold, g_normal_strength, g_depth_contrast,
-                              NORMAL_ALGORITHM_SDF_TRUE_EDT);
+        g_maps = extract_maps(g_input, g_side_input, &g_params);
         if (!g_maps.diffuse.rgba)
         {
             fprintf(stderr, "Map extraction failed\n");
@@ -410,9 +425,9 @@ int main(int argc, char* argv[])
     }
 
     // GUI mode: optional initial image path.
-    if (argc > 1 && argv[1])
+    if (fargc > 1 && fargv[1])
     {
-        strncpy(g_input_path, argv[1], sizeof(g_input_path) - 1);
+        strncpy(g_input_path, fargv[1], sizeof(g_input_path) - 1);
         const char* name = strrchr(g_input_path, '\\');
         if (!name) name = strrchr(g_input_path, '/');
         if (!name) name = g_input_path;
@@ -608,6 +623,24 @@ int main(int argc, char* argv[])
                         g_maps_dirty = TRUE;
                     }
                 }
+                if (ImGui::MenuItem("Open Side View PNG..."))
+                {
+                    char tmp[1024] = {};
+                    imgui_open_file_dialog(tmp, sizeof(tmp));
+                    if (tmp[0])
+                    {
+                        strncpy(g_side_path, tmp, sizeof(g_side_path) - 1);
+                        image_free(&g_side_input);
+                        g_side_input = image_load(g_side_path);
+                        g_maps_dirty = TRUE;
+                    }
+                }
+                if (ImGui::MenuItem("Clear Side View", NULL, false, g_side_input.rgba != NULL))
+                {
+                    image_free(&g_side_input);
+                    g_side_path[0] = '\0';
+                    g_maps_dirty = TRUE;
+                }
                 if (ImGui::MenuItem("Export", "Ctrl+E", false, g_maps.diffuse.rgba != NULL))
                 {
                     char tmp[1024] = {};
@@ -641,24 +674,48 @@ int main(int argc, char* argv[])
         ImGui::BeginChild("Controls", ImVec2(0, 0), true);
         ImGui::Text("Input");
         ImGui::InputText("Path", g_input_path, sizeof(g_input_path), ImGuiInputTextFlags_ReadOnly);
+        ImGui::InputText("Side view", g_side_path, sizeof(g_side_path), ImGuiInputTextFlags_ReadOnly);
         ImGui::InputText("Output dir", g_output_dir, sizeof(g_output_dir));
         ImGui::InputText("Ship name", g_ship_name, sizeof(g_ship_name));
 
         ImGui::Separator();
         ImGui::Text("Parameters");
         bool any_slider_active = false;
-        if (ImGui::SliderFloat("Alpha threshold", &g_alpha_threshold, 0.0f, 1.0f)) g_slider_active = true;
+        if (ImGui::SliderFloat("Alpha threshold", &g_params.alpha_threshold, 0.0f, 1.0f)) g_slider_active = true;
         any_slider_active |= ImGui::IsItemActive();
-        if (ImGui::SliderFloat("Normal strength", &g_normal_strength, 0.0f, 4.0f)) g_slider_active = true;
+        if (ImGui::SliderFloat("Normal strength", &g_params.normal_strength, 0.0f, 4.0f)) g_slider_active = true;
         any_slider_active |= ImGui::IsItemActive();
-        if (ImGui::SliderFloat("Depth contrast", &g_depth_contrast, 0.1f, 4.0f)) g_slider_active = true;
+        if (ImGui::SliderFloat("Depth contrast", &g_params.depth_contrast, 0.1f, 4.0f)) g_slider_active = true;
         any_slider_active |= ImGui::IsItemActive();
-
-        const char* normal_names[] = { "Chamfer SDF", "True EDT SDF", "Alpha gradient", "Gaussian height" };
-        int algo = (int)g_normal_algo;
-        if (ImGui::Combo("Normal algorithm", &algo, normal_names, NORMAL_ALGORITHM_COUNT))
+        if (ImGui::SliderFloat("Bevel width px (0=auto)", &g_params.bevel_px, 0.0f, 96.0f)) g_slider_active = true;
+        any_slider_active |= ImGui::IsItemActive();
+        if (ImGui::SliderFloat("Dome amount", &g_params.dome_amount, 0.0f, 1.0f)) g_slider_active = true;
+        any_slider_active |= ImGui::IsItemActive();
+        if (ImGui::SliderFloat("Detail relief px", &g_params.detail_amp_px, 0.0f, 10.0f)) g_slider_active = true;
+        any_slider_active |= ImGui::IsItemActive();
+        if (ImGui::SliderFloat("Detail scale px", &g_params.detail_radius_px, 2.0f, 48.0f)) g_slider_active = true;
+        any_slider_active |= ImGui::IsItemActive();
+        if (ImGui::SliderFloat("Cavity AO", &g_params.ao_strength, 0.0f, 1.0f)) g_slider_active = true;
+        any_slider_active |= ImGui::IsItemActive();
+        if (g_side_input.rgba)
         {
-            g_normal_algo = (normal_algorithm_t)algo;
+            if (ImGui::SliderFloat("Side profile amp", &g_params.profile_amp, 0.0f, 3.0f)) g_slider_active = true;
+            any_slider_active |= ImGui::IsItemActive();
+            const char* nose_names[] = { "Auto", "Left", "Right" };
+            int nose_idx = (g_params.side_nose_dir == 0) ? 0 : (g_params.side_nose_dir < 0 ? 1 : 2);
+            if (ImGui::Combo("Side nose", &nose_idx, nose_names, 3))
+            {
+                g_params.side_nose_dir = (nose_idx == 0) ? 0 : (nose_idx == 1 ? -1 : 1);
+                g_slider_active = true;
+            }
+            any_slider_active |= ImGui::IsItemActive();
+        }
+
+        const char* normal_names[] = { "Bevel (chamfer SDF)", "Bevel (true EDT)", "Alpha height", "Gaussian height" };
+        int algo = (int)g_params.normal_algo;
+        if (ImGui::Combo("Shape source", &algo, normal_names, NORMAL_ALGORITHM_COUNT))
+        {
+            g_params.normal_algo = (normal_algorithm_t)algo;
             g_slider_active = true;
         }
         any_slider_active |= ImGui::IsItemActive();
@@ -825,6 +882,7 @@ int main(int argc, char* argv[])
     SDL_Quit();
 
     image_free(&g_input);
+    image_free(&g_side_input);
     extracted_maps_free(&g_maps);
 
     return 0;
