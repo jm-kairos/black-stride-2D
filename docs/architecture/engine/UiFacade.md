@@ -54,7 +54,7 @@ uses 10 of the 23 functions across 9 files.
 (`assets/ui/hud.rml`). Adding an interaction means emitting a new action string from the
 document and handling it in the game's `bs_rml_hud_poll_action` drain loop
 (`sandbox/source/game.cpp:1912+`); the action grammar (`"group:N"`, `"gm:W:G"`, `"inv:K"`,
-`"pd:stance:N"`, …) is documented only in `bs_rml.h`'s comments. Adding a facade function means
+`"pd:stance:N"`, `"spd:N"`, …) is documented only in `bs_rml.h`'s comments. Adding a facade function means
 a `bs__api__` declaration here plus an implementation at the bottom of the backend TU.
 
 **Known limitations / tech debt:**
@@ -99,7 +99,10 @@ a `bs__api__` declaration here plus an implementation at the bottom of the backe
 **Source paths:** `engine/source/renderer/bs_imgui.h`, `engine/source/renderer/bs_rml.h`
 (implementation: `engine/source/renderer/backend/renderer_backend_sdlgpu.cpp`)
 
-**Last verified:** 2026-08-13, working tree on `game` (the ship context menu gains
+**Last verified:** 2026-08-15, working tree on `game` (`bs_rml_hud_state` gains the fleet
+panel's speed-limit gear chips — `speed_sel` + `speed_lim[5][12]` u/s labels, action grammar
+`"spd:N"`; the gear list is hull-card data, see ShipCombatModel). Previously 2026-08-13 (the
+ship context menu gains
 `ship_menu_can_escort` — the Escort row that absorbed the retired command overlay's RMB-escort
 gesture. Previously 2026-08-12: `bs_rml_hud_state` gains the fleet-ship
 context menu block — `ship_menu_visible/left/top/name` + `ship_menu_can_pilot/_can_release`,

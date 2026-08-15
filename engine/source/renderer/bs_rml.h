@@ -261,6 +261,10 @@ typedef struct bs_rml_hud_state
     char               fleet_cap_label[32];   // "Capacitor 62 / 100"
     char               fleet_pd_label[40];    // "PD: OVERDRIVE - missiles first - 80%"
     b8                 fleet_pd_warn;         // TRUE when stance != STANDARD (amber cue)
+    // Speed-limit gear chips: the panel hull's governor list (first 5 gears, u/s labels)
+    // and the selected index. Clicks emit hud_action("spd:N").
+    i32                speed_sel;             // selected gear index (0..4)
+    char               speed_lim[5][12];      // per-chip u/s label ("240", "1500", ...)
 
     // Fleet roster (top-left, command overlay only): one row per fleet member, so the panel
     // answers "what is every ship doing" while the player is commanding.

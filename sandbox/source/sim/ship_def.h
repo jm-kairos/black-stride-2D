@@ -24,6 +24,12 @@
 //   hull        100                  # max hull HP (combat entity health at spawn)
 //   motion      240 90 70 1.4 0.45   # max_speed accel decel turn_accel max_turn;
 //                                    # omitted = the size class's tuning table
+//   speed_limits 120 240 600 1500 4000  # speed-governor gears (u/s), 5..8 strictly
+//                                    # ascending values. The player-selected gear -- not
+//                                    # motion.max_speed -- is the live velocity cap (see
+//                                    # ship_speed_cap). Omitted = derived from
+//                                    # motion.max_speed x {0.5, 1, 2.5, 6, 15}, so gear 2
+//                                    # reproduces the pre-gear cap.
 //   capacitor   100 8                # cap_max cap_regen baselines
 //   sensors     250000 500000 1e6    # sensor baseline l0 l1 l2 (strictly increasing)
 //   price       12000                # market-forward: credits (unused v1)
@@ -64,6 +70,10 @@ struct ShipDef {
     ShipSizeClass size_class;     // resolved: authored `class`, else derived from world length
     ShipMotion    motion;         // resolved: authored `motion`, else the class tuning table
     b8            motion_authored;// TRUE when the card overrode the class table
+
+    f32           speed_limits[SHIP_MAX_SPEED_LIMITS]; // ascending governor gears (u/s);
+    i32           speed_limit_count;                   // >= SHIP_MIN_SPEED_LIMITS after load
+                                                       // (authored or derived from motion)
 
     f32           hull_max_hp;    // combat entity health at spawn (default 100)
     b8            hull_authored;  // TRUE when the card authored `hull` -- consumers with

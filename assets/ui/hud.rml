@@ -78,6 +78,15 @@
         <div class="cap-gauge"><div class="cap-gauge-fill" data-style-width="fleet_cap_w"><div class="cap-gauge-core"></div></div></div>
         <div class="fleet-pd" data-class-warn="fleet_pd_warn">{{ fleet_pd_label }}</div>
         <div class="rule"></div>
+        <div class="fleet-hdr">SPEED LIMIT</div>
+        <div class="spd-row">
+            <span class="spd-opt" data-class-active="speed_sel == 0" data-event-click="hud_action('spd:0')">{{ speed_l0 }}</span>
+            <span class="spd-opt" data-class-active="speed_sel == 1" data-event-click="hud_action('spd:1')">{{ speed_l1 }}</span>
+            <span class="spd-opt" data-class-active="speed_sel == 2" data-event-click="hud_action('spd:2')">{{ speed_l2 }}</span>
+            <span class="spd-opt" data-class-active="speed_sel == 3" data-event-click="hud_action('spd:3')">{{ speed_l3 }}</span>
+            <span class="spd-opt" data-class-active="speed_sel == 4" data-event-click="hud_action('spd:4')">{{ speed_l4 }}</span>
+        </div>
+        <div class="rule"></div>
         <div class="fleet-hdr">FIRE GROUPS</div>
         <div class="weapon-row" data-for="g : fleet_group"
              data-class-selected="g.selected" data-class-dim="g.empty"

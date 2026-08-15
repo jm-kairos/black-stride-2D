@@ -1,4 +1,5 @@
 #include "sim/ship.h"
+#include "sim/ship_def.h" // ShipDef speed_limits (ship_speed_cap)
 #include "sim/weapon.h"   // Weapon::ready (bearing-weapon selection)
 #include "sim/weapon_def.h" // WeaponDef muzzles (ship_hardpoint_fire)
 #include "sim/module.h"   // ModuleDef (fit test + sensor stat composition)
@@ -38,6 +39,16 @@ const ShipMotion& ship_motion_for_class(ShipSizeClass c) {
 const char* ship_size_class_name(ShipSizeClass c) {
     if ((i32)c < 0 || (i32)c >= SHIP_CLASS_COUNT) return "Unknown";
     return g_class_names[c];
+}
+f32 ship_speed_cap(const Ship* ship) {
+    if (!ship) return 0.0f;
+    if (ship->def && ship->def->speed_limit_count > 0) {
+        i32 sel = ship->speed_limit_sel;
+        if (sel < 0) sel = 0;
+        if (sel >= ship->def->speed_limit_count) sel = ship->def->speed_limit_count - 1;
+        return ship->def->speed_limits[sel];
+    }
+    return ship->motion.max_speed;
 }
 f32 hardpoint_half_extent(HardpointSize s) {
     switch (s) {

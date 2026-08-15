@@ -4,6 +4,7 @@
 #include "sim/ship_def.h"
 #include <core/logger.h>
 #include <stdio.h>
+#include <stdlib.h>   // strtof (speed_limits list parsing)
 #include <string.h>
 #include <math.h>
 #include <new>
@@ -118,6 +119,31 @@ static b8 ship_def_load(ShipDef* out, const char* path) {
             } else {
                 BS_LOG_WARN("ship_def_load: invalid motion line in '%s' (all five values must be "
                             "> 0); using the class table.", path);
+            }
+            continue;
+        }
+        if (strncmp(line, "speed_limits", 12) == 0) {
+            f32 v[SHIP_MAX_SPEED_LIMITS];
+            i32 n = 0;
+            const char* p = line + 12;
+            char* endp = nullptr;
+            while (n < SHIP_MAX_SPEED_LIMITS) {
+                f32 val = strtof(p, &endp);
+                if (endp == p) break;
+                v[n++] = val;
+                p = endp;
+            }
+            // 5..8 strictly ascending positive values; anything else keeps the derived list.
+            b8 ok = (n >= SHIP_MIN_SPEED_LIMITS);
+            for (i32 k = 0; ok && k < n; ++k)
+                if (v[k] <= 0.0f || (k > 0 && v[k] <= v[k - 1])) ok = FALSE;
+            if (ok) {
+                for (i32 k = 0; k < n; ++k) out->speed_limits[k] = v[k];
+                out->speed_limit_count = n;
+            } else {
+                BS_LOG_WARN("ship_def_load: invalid speed_limits line in '%s' (need %d..%d "
+                            "strictly ascending values > 0); deriving from motion.",
+                            path, SHIP_MIN_SPEED_LIMITS, SHIP_MAX_SPEED_LIMITS);
             }
             continue;
         }
@@ -315,6 +341,15 @@ static b8 ship_def_load(ShipDef* out, const char* path) {
         out->size_class = ship_size_class_from_length(hull_length);
     if (!out->motion_authored)
         out->motion = ship_motion_for_class(out->size_class);
+    // Speed-limit gears (unless authored) derive from the RESOLVED motion cap, so every
+    // hull gets a governor without a card edit. The 1.0x gear equals motion.max_speed --
+    // the instance's default selection -- so an untouched ship flies exactly as before.
+    if (out->speed_limit_count == 0) {
+        const f32 mul[SHIP_MIN_SPEED_LIMITS] = { 0.5f, 1.0f, 2.5f, 6.0f, 15.0f };
+        for (i32 k = 0; k < SHIP_MIN_SPEED_LIMITS; ++k)
+            out->speed_limits[k] = out->motion.max_speed * mul[k];
+        out->speed_limit_count = SHIP_MIN_SPEED_LIMITS;
+    }
     return TRUE;
 }
 
@@ -374,6 +409,12 @@ b8 ship_instantiate(const ShipDef* def, Ship* out_ship) {
     out_ship->world_scale  = def->world_scale;
     out_ship->size_class   = def->size_class;
     out_ship->motion       = def->motion;
+    // Default gear: the highest limit not exceeding the authored motion cap, so an
+    // untouched instance keeps its pre-gear cruise speed until the player shifts.
+    out_ship->speed_limit_sel = 0;
+    for (i32 k = 0; k < def->speed_limit_count; ++k)
+        if (def->speed_limits[k] <= def->motion.max_speed + 0.001f)
+            out_ship->speed_limit_sel = k;
     out_ship->origin       = HierPos2{};
     out_ship->angle        = 0.0f;
     out_ship->faction      = def->faction;

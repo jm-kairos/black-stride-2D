@@ -1067,6 +1067,36 @@ body {
     margin-bottom: 3px;
 }
 
+/* Speed-limit gear chips (fleet panel): the pd-opt chip pattern, sized for five short
+   u/s numbers on one row. The selected gear is the ship's live velocity cap. */
+.spd-row {
+    display: block;
+    margin-bottom: 3px;
+}
+
+.spd-opt {
+    display: inline-block;
+    padding: 2px 5px;
+    margin-right: 2px;
+    color: #a89a7e;
+    font-size: 11px;
+    letter-spacing: 1px;
+    border: 1px #2e333a00;       /* transparent border keeps inactive chips the same size */
+    pointer-events: auto;        /* clickable gear chip */
+    transition: color background-color border-color 0.12s quadratic-out;
+}
+
+.spd-opt:hover {
+    color: #f2ead6;
+    background-color: #2e333a;
+}
+
+.spd-opt.active {
+    color: #e8b45a;              /* amber = the selected gear */
+    border-color: #c9963f;
+    background-color: #2b2415;
+}
+
 .pd-lbl {
     display: inline-block;
     width: 58px;

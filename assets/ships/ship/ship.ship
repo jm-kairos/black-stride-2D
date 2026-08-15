@@ -25,6 +25,10 @@ size 394 1586
 hull 100
 capacitor 100 8
 motion 240 90 70 1.4 0.45
+# Speed-governor gears (u/s), ascending; the player-selected gear is the live velocity
+# cap for autopilot AND pilot flight (ship_speed_cap). Gear 2 = the motion cap above,
+# the instance default, so an untouched hull cruises at 240 exactly as before.
+speed_limits 120 240 600 1500 4000
 price 78000
 tier 3
 

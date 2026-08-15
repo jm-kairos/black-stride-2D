@@ -4799,6 +4799,8 @@ struct BsRmlHudModel
     Rml::String                 fleet_cap_label;      // "Capacitor 62 / 100"
     Rml::String                 fleet_pd_label;       // "PD: STANDARD - impact time - 100%"
     bool                        fleet_pd_warn = false;
+    int                         speed_sel = 0;        // selected speed-limit gear (0..4)
+    Rml::String                 speed_l0, speed_l1, speed_l2, speed_l3, speed_l4; // chip labels
 
     bool                            roster_visible = false;
     Rml::Vector<BsRmlHudRosterRow>  roster;
@@ -5037,6 +5039,12 @@ b8 bs_rml_hud_init(const char* rml_path)
     c.Bind("fleet_cap_label",    &g_hud_model.fleet_cap_label);
     c.Bind("fleet_pd_label",     &g_hud_model.fleet_pd_label);
     c.Bind("fleet_pd_warn",      &g_hud_model.fleet_pd_warn);
+    c.Bind("speed_sel",          &g_hud_model.speed_sel);
+    c.Bind("speed_l0",           &g_hud_model.speed_l0);
+    c.Bind("speed_l1",           &g_hud_model.speed_l1);
+    c.Bind("speed_l2",           &g_hud_model.speed_l2);
+    c.Bind("speed_l3",           &g_hud_model.speed_l3);
+    c.Bind("speed_l4",           &g_hud_model.speed_l4);
 
     c.Bind("roster_visible", &g_hud_model.roster_visible);
     c.Bind("roster",         &g_hud_model.roster);
@@ -5221,6 +5229,12 @@ void bs_rml_hud_update(const bs_rml_hud_state* s)
     bs_rml_assign(g_hud_model.fleet_cap_label, s->fleet_cap_label, sizeof(s->fleet_cap_label));
     bs_rml_assign(g_hud_model.fleet_pd_label,  s->fleet_pd_label,  sizeof(s->fleet_pd_label));
     g_hud_model.fleet_pd_warn = s->fleet_pd_warn ? true : false;
+    g_hud_model.speed_sel = s->speed_sel;
+    bs_rml_assign(g_hud_model.speed_l0, s->speed_lim[0], sizeof(s->speed_lim[0]));
+    bs_rml_assign(g_hud_model.speed_l1, s->speed_lim[1], sizeof(s->speed_lim[1]));
+    bs_rml_assign(g_hud_model.speed_l2, s->speed_lim[2], sizeof(s->speed_lim[2]));
+    bs_rml_assign(g_hud_model.speed_l3, s->speed_lim[3], sizeof(s->speed_lim[3]));
+    bs_rml_assign(g_hud_model.speed_l4, s->speed_lim[4], sizeof(s->speed_lim[4]));
     {
         g_hud_model.fleet_group.resize((size_t)BS_RML_GROUP_MAX);
         for (i32 i = 0; i < BS_RML_GROUP_MAX; ++i)

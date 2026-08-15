@@ -108,6 +108,15 @@ InWorldOverlays, FrameOrchestrator, GameStateModel.
   `heat_vis`, the main-drive THERMAL state, toward the forward burn on a seconds timescale
   (rise ~1.1/s, fall ~0.35/s): it lags the throttle the way a nozzle bell lags its flame,
   and the burn-vs-heat gap is how the exhaust pass detects a cold ignition.
+- **The linear speed cap is `ship_speed_cap` — the ship's player-selected speed-limit
+  gear — never `motion.max_speed` directly.** The simulate clamp, both `update_move`
+  regimes, `update_attack`, escort/avoid's steering calls and the separation post-pass all
+  read the accessor, so the gear governs the autopilot AND the pilot seat together (the
+  piloted hull's only cap is simulate's clamp). `motion.accel/decel` are untouched: a high
+  gear just accelerates longer, and `update_move`'s `sqrt(2·decel·dist)` braking envelope
+  starts the burn-down proportionally further out with no arrival-logic change. Gears are
+  card data (`speed_limits`, ShipCombatModel); the player shifts them from the fleet
+  panel's SPEED LIMIT chips, which target the selection while detached.
 - **`FleetShip::simulate` is the ONLY pose integrator for fleet ships.** Escort and avoid go
   through `steering::control_face` — the same control law as `apply_face` minus the pose add —
   because `simulate_all` integrates every member every frame and the integrating form moved
@@ -191,7 +200,10 @@ characteristics without touching this code.
 **Source paths:** `sandbox/source/sim/fleet.{cpp,h}`, `sandbox/source/sim/ship_control.{cpp,h}`,
 `sandbox/source/sim/steering.{cpp,h}`
 
-**Last verified:** 2026-08-15, working tree on `game` (same day, later: move orders become
+**Last verified:** 2026-08-15, working tree on `game` (same day, latest: every linear speed
+cap routes through `ship_speed_cap` — the selected speed-limit gear from the hull's card —
+live-verified: gear 5 (4000 u/s) took a move order past 1787 u/s and still braked to a
+clean arrival, gear default reproduced the old 240 cap. Same day, earlier: move orders become
 two-regime — `update_move` turn-and-burns beyond the hull-derived face distance and keeps
 the strafing controller as the precision regime inside it, and `update_escort` faces the
 travel direction during catch-up. Autopilot turns gain an angular ARRIVE: pose-stepped

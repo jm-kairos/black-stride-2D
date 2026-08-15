@@ -96,9 +96,12 @@ void FleetShip::simulate(f32 dt, b8 turn_commanded) {
         if (fl->angular_velocity > 0.0f)      fl->angular_velocity = (fl->angular_velocity > drop) ? fl->angular_velocity - drop : 0.0f;
         else if (fl->angular_velocity < 0.0f) fl->angular_velocity = (fl->angular_velocity < -drop) ? fl->angular_velocity + drop : 0.0f;
     }
-    // Clamp linear + angular speed to their caps.
+    // Clamp linear + angular speed to their caps. The linear cap is the SELECTED
+    // speed-limit gear (ship_speed_cap), not motion.max_speed -- this clamp governs the
+    // piloted ship too, so the gear is a true per-ship throttle in both control modes.
+    f32 cap = ship_speed_cap(sh);
     f32 spd = vec2_length(fl->velocity);
-    if (spd > m.max_speed) fl->velocity = vec2_scale(fl->velocity, m.max_speed / spd);
+    if (spd > cap) fl->velocity = vec2_scale(fl->velocity, cap / spd);
     fl->angular_velocity = clampf(fl->angular_velocity, -m.max_turn, m.max_turn);
     // Integrate the rigid-body pose.
     sh->origin = hierpos_add_vec2(&sh->origin, vec2_scale(fl->velocity, dt));
@@ -122,9 +125,12 @@ void FleetShip::update_move(f32 dt) {
         fl->velocity = Vec2{ 0.0f, 0.0f };
         return;
     }
-    // Desired velocity: toward the target, capped by the distance we can still brake from.
+    // Desired velocity: toward the target, capped by the distance we can still brake from
+    // and by the ship's selected speed-limit gear (the braking envelope handles a high
+    // gear automatically -- the ship just starts braking proportionally further out).
+    f32 cap = ship_speed_cap(sh);
     Vec2 dir = (dist > 0.0001f) ? vec2_scale(to_target, 1.0f / dist) : Vec2{ 0.0f, 0.0f };
-    f32 desired_speed = (dist > 0.0001f) ? fminf(m.max_speed, sqrtf(2.0f * m.decel * dist)) : 0.0f;
+    f32 desired_speed = (dist > 0.0001f) ? fminf(cap, sqrtf(2.0f * m.decel * dist)) : 0.0f;
     Vec2 desired_vel = vec2_scale(dir, desired_speed);
     Vec2 vel_err = vec2_sub(desired_vel, fl->velocity);
     // Desired acceleration to correct velocity error, then project onto local thrusters.
@@ -167,7 +173,7 @@ void FleetShip::update_move(f32 dt) {
         Vec2 burn = vec2_add(vec2_scale(fwd, burn_acc), vec2_scale(right, trim_acc));
         fl->velocity = vec2_add(fl->velocity, vec2_scale(burn, dt));
         f32 cs = vec2_length(fl->velocity);
-        if (cs > m.max_speed) fl->velocity = vec2_scale(fl->velocity, m.max_speed / cs);
+        if (cs > cap) fl->velocity = vec2_scale(fl->velocity, cap / cs);
         return;
     }
     // ---- PRECISION regime: the strafing controller (no rotation, RCS does the work) ------
@@ -184,7 +190,7 @@ void FleetShip::update_move(f32 dt) {
     Vec2 acc = vec2_add(vec2_scale(fwd, fwd_acc), vec2_scale(right, right_acc));
     fl->velocity = vec2_add(fl->velocity, vec2_scale(acc, dt));
     f32 cur_speed = vec2_length(fl->velocity);
-    if (cur_speed > m.max_speed) fl->velocity = vec2_scale(fl->velocity, m.max_speed / cur_speed);
+    if (cur_speed > cap) fl->velocity = vec2_scale(fl->velocity, cap / cur_speed);
 }
 // =====================================================================================
 void FleetShip::update_attack(game_state* s, f32 dt) {
@@ -387,7 +393,8 @@ void FleetShip::update_attack(game_state* s, f32 dt) {
         }
     }
     f32 cur_speed = vec2_length(fl->velocity);
-    if (cur_speed > m.max_speed) fl->velocity = vec2_scale(fl->velocity, m.max_speed / cur_speed);
+    f32 cap = ship_speed_cap(sh);
+    if (cur_speed > cap) fl->velocity = vec2_scale(fl->velocity, cap / cur_speed);
 }
 // =====================================================================================
 void FleetShip::clear_move_target() {
@@ -423,7 +430,7 @@ void FleetShip::update_escort(f32 dt) {
     // steering::standoff already expresses "approach when far, back off when close" with a
     // deadband, which is exactly the leash Starsector's escort orders describe -- reusing it
     // keeps escorts out of the oscillation a bare seek would produce at the ring.
-    Vec2 desired = steering::standoff(to_t, dist, station, m.max_speed);
+    Vec2 desired = steering::standoff(to_t, dist, station, ship_speed_cap(sh));
     // NEAR the ring, face the escortee rather than the travel heading: a screening ship keeps
     // its guns and shields oriented on what it is protecting, not on whichever way
     // station-keeping happens to be nudging it that frame. FAR off the ring it is in a
@@ -432,7 +439,7 @@ void FleetShip::update_escort(f32 dt) {
     // control_face, not apply_face: FleetShip::simulate integrates every fleet member's pose,
     // so the integrating form moved the ship twice per frame -- escorts flew at double speed.
     Vec2 face = (dist > station * 3.0f) ? desired : to_t;
-    steering::control_face(sh, &flight, desired, face, m.accel, m.max_speed, m.max_turn, dt);
+    steering::control_face(sh, &flight, desired, face, m.accel, ship_speed_cap(sh), m.max_turn, dt);
 }
 // How far outside the threat's reach an avoiding ship tries to get. Slightly over 1 so it does
 // not sit exactly on the boundary and flip between running and idling every frame.
@@ -456,9 +463,9 @@ void FleetShip::update_avoid(f32 dt) {
     if (dist > threat * AVOID_CLEAR_MUL) { clear_avoid_target(); return; }  // clear: order done
     // Nose stays ON the threat while running: backing away facing the enemy keeps forward
     // weapons and the strongest arc pointed at it, which is what withdrawing under fire wants.
-    Vec2 desired = steering::flee(to_t, m.max_speed);
+    Vec2 desired = steering::flee(to_t, ship_speed_cap(sh));
     // control_face for the same reason as update_escort: simulate owns pose integration.
-    steering::control_face(sh, &flight, desired, to_t, m.accel, m.max_speed, m.max_turn, dt);
+    steering::control_face(sh, &flight, desired, to_t, m.accel, ship_speed_cap(sh), m.max_turn, dt);
 }
 // =====================================================================================
 // Fleet
@@ -713,7 +720,7 @@ static void separation_adjust(FleetShip* fs, Vec2 to_other, f32 dist, f32 min_se
         fs->flight.thrust_cmd = vec2_add(fs->flight.thrust_cmd,
             vec2_scale(vec2_rotate(away, -fs->ship.angle), t));
     } else {
-        Vec2 desired = steering::separation(to_other, dist, min_sep, m.max_speed);
+        Vec2 desired = steering::separation(to_other, dist, min_sep, ship_speed_cap(&fs->ship));
         Vec2 delta   = vec2_sub(desired, fs->flight.velocity);
         f32  step    = m.accel * dt;
         f32  dl      = vec2_length(delta);

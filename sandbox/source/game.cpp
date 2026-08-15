@@ -1566,6 +1566,20 @@ static void game_push_hud(game_state* s, f32 dt) {
                 snprintf(hud.fleet_pd_label, sizeof(hud.fleet_pd_label), "PD: --");
                 hud.fleet_pd_warn = FALSE;
             }
+            // Speed-limit gear chips: the hull's governor list (first 5 gears, u/s labels)
+            // and the selected index. The chips emit "spd:N" into the action drain below.
+            {
+                const ShipDef* def = ship->def;
+                i32 nlim = def ? def->speed_limit_count : 0;
+                i32 sel  = ship->speed_limit_sel;
+                if (sel < 0) sel = 0;
+                if (nlim > 0 && sel >= nlim) sel = nlim - 1;
+                hud.speed_sel = sel;
+                for (i32 k = 0; k < 5; ++k) {
+                    f32 v = (def && k < nlim) ? def->speed_limits[k] : ship->motion.max_speed;
+                    snprintf(hud.speed_lim[k], sizeof(hud.speed_lim[k]), "%.0f", v);
+                }
+            }
         }
     }
 
@@ -2585,6 +2599,39 @@ static void game_push_hud(game_state* s, f32 dt) {
                     action_log_push(s, "PD engagement gate: %s range", PD_GATE_NAMES[v]);
                 }
             }
+            continue;
+        }
+        // Speed-limit gear chips ("spd:N"): set the chosen governor gear (ship_speed_cap).
+        // Attached, it throttles the hull being flown (the panel's hull). Detached it
+        // targets the SELECTION -- the same surface RMB orders use -- falling back to the
+        // panel's hull when nothing is selected, so the chips never click into a void.
+        if (strncmp(action, "spd:", 4) == 0) {
+            i32 gear = atoi(action + 4);
+            Fleet& fleet = s->fleet_state.fleet;
+            FleetShip* panel_hull = fleet.piloted();
+            if (!panel_hull && fleet.count() > 0) panel_hull = &fleet.at(0);
+            b8 use_selection = s->camera_state.free_camera_active && fleet.any_selected();
+            i32 applied = 0;
+            f32 cap_val = 0.0f;
+            const char* one_name = nullptr;
+            for (i32 i = 0; i < fleet.count(); ++i) {
+                FleetShip& fs = fleet.at(i);
+                b8 hit = use_selection ? fleet.is_selected(i) : (&fs == panel_hull);
+                if (!hit) continue;
+                const ShipDef* d = fs.ship.def;
+                if (!d || d->speed_limit_count <= 0) continue;
+                i32 g = gear;
+                if (g < 0) g = 0;
+                if (g >= d->speed_limit_count) g = d->speed_limit_count - 1;
+                fs.ship.speed_limit_sel = g;
+                cap_val  = d->speed_limits[g];
+                one_name = fs.ship.vessel_name;
+                ++applied;
+            }
+            if (applied == 1 && one_name)
+                action_log_push(s, "%s: speed limit %d - %.0f u/s", one_name, gear + 1, cap_val);
+            else if (applied > 1)
+                action_log_push(s, "Speed limit %d set - %d ships", gear + 1, applied);
             continue;
         }
         // Legacy per-tray drop actions removed: the unified Modules bay emits "baydrop" (below).

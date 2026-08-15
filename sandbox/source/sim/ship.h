@@ -327,6 +327,15 @@ struct ShipMotion {
 
 };
 
+// Speed-limit gears: every hull carries an ascending list of speed-governor settings
+// (card line `speed_limits`, or derived from motion.max_speed when unauthored). The
+// SELECTED gear -- not motion.max_speed -- is the live velocity cap for both the
+// autopilot and the pilot seat; read it through ship_speed_cap so no consumer can
+// disagree. The player picks the gear from the fleet panel's SPEED LIMIT chips.
+
+#define SHIP_MAX_SPEED_LIMITS 8
+#define SHIP_MIN_SPEED_LIMITS 5
+
 // Classify a hull by its WORLD length (size_local.y * world_scale).
 
 ShipSizeClass ship_size_class_from_length(f32 hull_length_world);
@@ -338,6 +347,14 @@ const ShipMotion& ship_motion_for_class(ShipSizeClass c);
 // Display name ("Drone", "Cruiser", ...).
 
 const char* ship_size_class_name(ShipSizeClass c);
+
+// The live speed cap: the ship's selected speed-limit gear (clamped to the card's list),
+// falling back to motion.max_speed when the instance carries no card. The single source
+// of truth for every velocity clamp -- the simulate integrator, the autopilot orders and
+// the separation pass all read this, never motion.max_speed directly.
+
+struct Ship; // declared below
+f32 ship_speed_cap(const Ship* ship);
 
 // Immutable hull stat card this instance was built from (full declaration in
 // sim/ship_def.h). Ships reference registry defs by pointer, like weapons do -- the
@@ -354,6 +371,10 @@ struct Ship {
     ShipSizeClass size_class;     // hull size category (drives motion feel)
 
     ShipMotion    motion;         // per-ship flight tuning, resolved at load from size_class
+
+    i32           speed_limit_sel; // player-chosen gear: index into def->speed_limits.
+                                   // Defaults to the highest gear <= motion.max_speed at
+                                   // instantiate, so an untouched hull flies as before.
 
     bs_math::HierPos2 origin;    // world position (hierarchical grid cell + local offset)
 

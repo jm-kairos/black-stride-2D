@@ -276,7 +276,12 @@ statement about a weapon rather than something to infer from `proj_speed`.
 registry key spawn sites pass to `ship_registry_find`) plus optional stat lines, each
 defaulting to the pre-card behaviour: `hull <max_hp>` (entity health; default 100),
 `motion <max_speed> <accel> <decel> <turn_accel> <max_turn>` (overrides the class tuning
-table), `sensors <l0> <l1> <l2>` (baseline suite, validated strictly increasing),
+table), `speed_limits <v1> ... <v5..8>` (the speed-governor gear list — 5..8 strictly
+ascending u/s values; the PLAYER-SELECTED gear, not `motion.max_speed`, is the live
+velocity cap, read only through `ship_speed_cap`; omitted = derived from
+`motion.max_speed` × {0.5, 1, 2.5, 6, 15}, and the instance default selection is the
+highest gear ≤ the motion cap, so an untouched hull flies exactly as before),
+`sensors <l0> <l1> <l2>` (baseline suite, validated strictly increasing),
 `desc "..."`, and market-forward `price`/`tier`. `assets/ships/ship/ship.ship`
 (`vanguard_cruiser` — by design a high-tier LATE-game hull; the starting fleet flies it only
 until a dedicated starter hull card exists) is the worked example. The art/skeleton lines are
@@ -364,7 +369,13 @@ it reports affordability, and the caller commits via `ship_try_spend_cap`.
 `sandbox/source/sim/weapon.{cpp,h}`, `sandbox/source/sim/weapon_def.{cpp,h}`,
 `sandbox/source/sim/projectile.{cpp,h}`, `sandbox/source/render/ship_visual.{cpp,h}`
 
-**Last verified:** 2026-08-15, working tree on `game` (the `.ship` card grows repeatable
+**Last verified:** 2026-08-15, working tree on `game` (same day, later: the card grows the
+`speed_limits` gear list — `ShipDef::speed_limits[8]`/`speed_limit_count`, the runtime
+`Ship::speed_limit_sel`, and `ship_speed_cap` as the single velocity-cap authority that
+FleetControl's integrator and autopilot consume; the fleet panel's SPEED LIMIT chips
+("spd:N" hud_action) pick the gear, applying to the selection when detached; live-verified —
+the vanguard's authored `120 240 600 1500 4000` list defaults to 240, gear 5 cruised past
+1787 u/s under a move order and still braked to a clean arrival. Earlier: the `.ship` card grows repeatable
 `thruster <main|rcs> <x> <y> <facing_deg> [size]` lines — `ThrusterDef` on `ShipDef`, parsed
 like hardpoint lines with the same art-texel space and optional clamped trailing scale; all
 five catalog cards author their nozzles, measured off each sprite's alpha; consumed only by
