@@ -2758,6 +2758,27 @@ b8 sdlgpu_backend_end_frame(struct renderer_backend* backend, f32 dt)
         return calls;
     };
 
+    // First index in a SORTED sprite range [start, end) whose layer exceeds the mapped
+    // batch's highest layer. Mapped hulls interleave with the sprite batch BY LAYER:
+    // sprites at or below the mapped layer (exhaust) draw first, then the mapped hulls,
+    // then everything above them (mount art, exhaust light spill, projectile streaks,
+    // muzzle/impact FX). Without the split the whole mapped batch painted after the full
+    // sprite pass and buried every above-hull sprite wherever a hull overlapped it.
+    auto mapped_layer_split = [](const batched_sprite* sprites, u32 start, u32 end,
+                                 const bs_mapped_sprite* msprites, u32 mcount) -> u32
+    {
+        if (mcount == 0) return end;
+        u32 mlayer = 0;
+        for (u32 i = 0; i < mcount; ++i)
+            if (msprites[i].layer > mlayer) mlayer = msprites[i].layer;
+        for (u32 i = start; i < end; ++i)
+        {
+            u32 layer = (sprites[i].sort_key >> 20) & 0xFFFu;
+            if (layer > mlayer) return i;
+        }
+        return end;
+    };
+
     // Find the split between game-world sprites (below threshold -> bloom) and
     // UI/debug overlays (at/above threshold -> draw after composite, bypass bloom).
     u32 bloom_split = g_sdl.batch_count;
@@ -2895,13 +2916,21 @@ b8 sdlgpu_backend_end_frame(struct renderer_backend* backend, f32 dt)
         auto draw_portrait_scope = [&](const portrait_scope* sc, u16 vw, u16 vh)
         {
             Mat4 vp = camera2d_view_proj(&sc->camera, vw, vh);
+            // Layer-interleave the scope's mapped hull with its sprites, same as the main
+            // path: below-hull sprites, hull, then mounts/hardpoint boxes above it.
+            u32 msplit = mapped_layer_split(g_sdl.portrait_batch, sc->sprite_start, sc->sprite_end,
+                                            g_sdl.portrait_mapped + sc->mapped_start,
+                                            sc->mapped_end - sc->mapped_start);
             draw_calls += draw_sprite_batch(TRUE, g_sdl.portrait_batch, g_sdl.portrait_batch_count,
                                             aux_count + g_sdl.batch_count,
-                                            sc->sprite_start, sc->sprite_end, &vp, TRUE);
+                                            sc->sprite_start, msplit, &vp, TRUE);
             draw_calls += draw_mapped_batch(TRUE,
                                             g_sdl.portrait_mapped + sc->mapped_start,
                                             sc->mapped_end - sc->mapped_start,
                                             g_sdl.mapped_batch_count + sc->mapped_start, &vp);
+            draw_calls += draw_sprite_batch(TRUE, g_sdl.portrait_batch, g_sdl.portrait_batch_count,
+                                            aux_count + g_sdl.batch_count,
+                                            msplit, sc->sprite_end, &vp, TRUE);
         };
 
         // Main portrait scopes (slot -1) -> portrait_rt. Mostly-transparent smoked-glass
@@ -3078,8 +3107,13 @@ b8 sdlgpu_backend_end_frame(struct renderer_backend* backend, f32 dt)
         }
         // Composite the half-res radiation heat map behind the sprite batch (upscaled, premult-over).
         composite_heat(g_sdl.pipeline_nebula_composite);
-        draw_calls = draw_sprite_batch(TRUE, g_sdl.batch, g_sdl.batch_count, aux_count, 0, bloom_split, NULL, FALSE);
+        // Mapped hulls draw BETWEEN the sprite layers at and below them (exhaust) and the
+        // ones above (mount art, spill, projectiles) -- see mapped_layer_split.
+        u32 msplit = mapped_layer_split(g_sdl.batch, 0, bloom_split,
+                                        g_sdl.mapped_batch, g_sdl.mapped_batch_count);
+        draw_calls = draw_sprite_batch(TRUE, g_sdl.batch, g_sdl.batch_count, aux_count, 0, msplit, NULL, FALSE);
         draw_calls += draw_mapped_batch(TRUE, g_sdl.mapped_batch, g_sdl.mapped_batch_count, 0, NULL);
+        draw_calls += draw_sprite_batch(TRUE, g_sdl.batch, g_sdl.batch_count, aux_count, msplit, bloom_split, NULL, FALSE);
         SDL_EndGPURenderPass(g_sdl.pass);
         g_sdl.pass = NULL;
 
@@ -3403,8 +3437,12 @@ b8 sdlgpu_backend_end_frame(struct renderer_backend* backend, f32 dt)
         }
         // Composite the half-res radiation heat map behind the sprite batch (upscaled, premult-over).
         composite_heat(g_sdl.pipeline_nebula_composite_swapchain);
-        draw_calls = draw_sprite_batch(FALSE, g_sdl.batch, g_sdl.batch_count, aux_count, 0, g_sdl.batch_count, NULL, FALSE);
+        // Same layer interleave as the offscreen path (mapped_layer_split above).
+        u32 msplit = mapped_layer_split(g_sdl.batch, 0, g_sdl.batch_count,
+                                        g_sdl.mapped_batch, g_sdl.mapped_batch_count);
+        draw_calls = draw_sprite_batch(FALSE, g_sdl.batch, g_sdl.batch_count, aux_count, 0, msplit, NULL, FALSE);
         draw_calls += draw_mapped_batch(FALSE, g_sdl.mapped_batch, g_sdl.mapped_batch_count, 0, NULL);
+        draw_calls += draw_sprite_batch(FALSE, g_sdl.batch, g_sdl.batch_count, aux_count, msplit, g_sdl.batch_count, NULL, FALSE);
 
         // RmlUi in-game UI, drawn into the swapchain pass beneath the ImGui editor overlay.
         {

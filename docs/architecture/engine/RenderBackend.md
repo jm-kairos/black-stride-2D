@@ -122,6 +122,15 @@ deliberate, because that pass is where the tone map converts HDR back to 8 bits.
   left a triple-barrel salvo barely brighter than a single shot.
 - The mapped-sprite pass takes its light direction from `mapped_batch[0]` for the entire batch,
   on the stated assumption that all ships share one star direction.
+- **The mapped batch interleaves with the sprite batch BY LAYER, not after it.**
+  `mapped_layer_split` finds the first sorted sprite whose layer exceeds the mapped batch's
+  highest `bs_mapped_sprite.layer`, and all three draw sites (offscreen path, direct path,
+  each portrait scope) draw sprites-below → mapped hulls → sprites-above as three segments.
+  Before the split the whole mapped batch painted after the full sprite pass, so everything
+  above `LAYER_SHIP` — mount art, exhaust light spill, projectile streaks, muzzle/impact
+  FX, the portrait's hardpoint boxes — was buried wherever a mapped hull overlapped it; the
+  bug was latent from the mapped path's introduction and surfaced when the flagship card
+  switched to `layer mapped`.
 - **The `mapped_light` uniform now carries the scene's 16-slot point-light list alongside the
   star**, filled from the same `g_sdl.lights` the sprite pass packs; the mapped fragment shader
   shades each light per-pixel against the hull's normal map (direction rotated into ship-local
@@ -142,7 +151,10 @@ deliberate, because that pass is where the tone map converts HDR back to 8 bits.
 `engine/source/renderer/renderer_backend.cpp`, and the post-chain shaders under
 `assets/shaders/src/bloom_*.frag.hlsl`
 
-**Last verified:** 2026-08-15, working tree on `game` (the mapped-sprite pass consumes the
+**Last verified:** 2026-08-15, working tree on `game` (same day, later: the mapped batch
+gains the layer interleave — `mapped_layer_split` + three-segment draws at all three sites;
+live-verified via the inspector portrait, whose hardpoint boxes render over the mapped hull
+again. Earlier: the mapped-sprite pass consumes the
 scene point-light list: `mapped_light` grows the 16-light arrays + a count in `tuning.z`,
 `draw_mapped_batch` packs `g_sdl.lights` except for portraits, and `mapped_sprite.vert/frag`
 gain the `world_xy` varying + per-pixel normal-mapped accumulation loop — live-verified,
