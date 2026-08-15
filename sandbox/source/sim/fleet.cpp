@@ -2,6 +2,8 @@
 #include "sim/steering.h"   // escort station-keeping and avoid both reuse the shared primitives
 #include "game.h"
 #include "sim/weapon.h"
+#include "sim/galaxy_history.h" // galaxy_history_faction_is_hostile (ROE self-acquisition)
+#include "sim/action_log.h"     // engagement announcements when a ship picks its own fight
 #include <math/math_utils.h>
 using namespace bs_math;
 // =====================================================================================
@@ -12,7 +14,27 @@ static constexpr f32 RTS_MOVE_STOP_SPEED  = 15.0f;   // units/s
 static constexpr f32 RTS_MOVE_FACE_ANGLE  = 0.3f;    // rad; must face target within this to thrust
 static constexpr f32 RTS_ATTACK_RANGE      = 10000.0f; // fallback standoff for an UNARMED hull
 static constexpr f32 RTS_ATTACK_REACH_FRAC = 0.85f;  // close to this fraction of weapon reach
-static constexpr f32 RTS_ATTACK_FACE_ANGLE = 0.25f;  // rad: must face target within this to fire
+// ---- Turret-first gunnery (bear-check gating + arc steering + crab approach) ----------
+// The hull is not a gun sight: turrets aim themselves, and per-shot arc/slew convergence is
+// the validator's job. The hull turns only to unmask an arc or to point the main drive.
+// Margin kept inside an arc edge when steering the hull to unmask a weapon, so the turret
+// converges comfortably inside its stops instead of chattering on the edge.
+static constexpr f32 ROE_ARC_MARGIN = 0.10f;   // rad
+// Max heading offset from the closing vector while the approach burn is lit. Inside this
+// cone the drive still closes at >= cos(0.6) ~ 83% efficiency and the hull may crab to keep
+// a side mount's arc on the target; a plan outside it burns cone-edge and accepts that the
+// weapon unmasks only on arrival.
+static constexpr f32 RTS_BURN_CONE  = 0.60f;   // rad
+// ---- ROE self-acquisition tuning ------------------------------------------------------
+// Acquisition envelope: a ship spots targets for itself out to its longest weapon's reach
+// times this. Above 1 so an AGGRESSIVE ship starts closing before the target is shootable;
+// DEFENSIVE simply tracks until the target enters real reach (it never approaches).
+static constexpr f32 ROE_ACQUIRE_RANGE_MUL = 1.5f;
+// Drop hysteresis: an auto-acquired target is released once it sits this far beyond the
+// acquisition envelope, so a hostile hovering at the edge cannot flicker the engagement.
+static constexpr f32 ROE_DROP_RANGE_MUL    = 1.3f;
+// How long a faction stays an aggressor after last landing a hit on a fleet hull.
+static constexpr f32 ROE_AGGRESSION_S      = 20.0f;
 static constexpr f32 RTS_ATTACK_STOP_DIST  = 120.0f; // keep this distance from target
 static constexpr f32 RTS_ATTACK_MIN_RANGE  = 150.0f; // do not fire closer than this
 // Strafing movement controller: how aggressively the ship corrects its velocity toward the
@@ -193,6 +215,61 @@ void FleetShip::update_move(f32 dt) {
     if (cur_speed > cap) fl->velocity = vec2_scale(fl->velocity, cap / cur_speed);
 }
 // =====================================================================================
+// ROE self-acquisition: the autopilot picks its own fight. Runs before update_attack each
+// tick, only for hulls the player is not hand-flying (update_autopilot's auto_skip). A
+// player designation always wins -- this pass never touches a target that arrived without
+// auto_acquired -- and target death/defection stays update_attack's job (it already clears
+// dead or turned-friendly targets); this pass adds only the envelope drop for auto targets.
+// Firing itself still runs through update_attack's stance gates and the shared validator,
+// so ROE changes WHO gets shot at, never HOW.
+void FleetShip::update_engagement(game_state* s) {
+    Ship* sh = &ship;
+    // The acquisition yardstick is the longest reach aboard -- an unarmed hull never
+    // self-acquires (nothing to fire; approaching would be theatre).
+    f32 best_reach = 0.0f;
+    for (i32 hpi = 0; hpi < sh->hardpoint_count; ++hpi) {
+        f32 r = weapon_effective_reach(sh->mounts[hpi]);
+        if (r > best_reach) best_reach = r;
+    }
+    b8 stance_refuses = (stance == FLEET_STANCE_PASSIVE || stance == FLEET_STANCE_HOLD_FIRE);
+    // Drop a stale AUTO target: ROE tightened, stance turned pacifist, hull disarmed, or the
+    // target left the envelope (with hysteresis). Player-designated targets are never touched.
+    if (has_attack_target && auto_acquired) {
+        b8 drop = (roe == ROE_HOLD) || stance_refuses || (best_reach <= 0.0f) || !attack_target;
+        if (!drop) {
+            Vec2 to_t = hierpos_diff(&attack_target->origin, &sh->origin);
+            drop = vec2_length(to_t) > best_reach * ROE_ACQUIRE_RANGE_MUL * ROE_DROP_RANGE_MUL;
+        }
+        if (drop) clear_attack_target();
+    }
+    if (has_attack_target) return;   // designated, or a still-valid auto target
+    if (roe == ROE_HOLD || stance_refuses || best_reach <= 0.0f) return;
+    // Nearest hostile ship inside the acquisition envelope. Hostility is the per-faction
+    // query the projectile hit path uses -- not a hardcoded faction compare -- and
+    // RETURN_FIRE additionally requires the target's faction to hold a live aggression
+    // entry (someone of theirs recently hit someone of ours).
+    const Fleet& fleet = s->fleet_state.fleet;
+    f32   best_d      = best_reach * ROE_ACQUIRE_RANGE_MUL;
+    Ship* best_target = nullptr;
+    for (i32 ci = 0; ci < s->combat_entity_count; ++ci) {
+        const CombatEntity* ce = &s->combat_entities[ci];
+        if (!ce->active || !ce->ship) continue;
+        if (ce->faction_id == sh->faction_id) continue;
+        if (!galaxy_history_faction_is_hostile(s, ce->faction_id)) continue;
+        if (roe == ROE_RETURN_FIRE && !fleet.is_aggressor(ce->faction_id)) continue;
+        Vec2 to = hierpos_diff(&ce->position, &sh->origin);
+        f32 d = vec2_length(to);
+        if (d < best_d) { best_d = d; best_target = ce->ship; }
+    }
+    if (!best_target) return;
+    has_attack_target = TRUE;
+    attack_target     = best_target;
+    auto_acquired     = TRUE;
+    action_log_push(s, "%s: engaging %s",
+                    sh->vessel_name ? sh->vessel_name : "Ship",
+                    best_target->vessel_name ? best_target->vessel_name : "hostile");
+}
+// =====================================================================================
 void FleetShip::update_attack(game_state* s, f32 dt) {
     if (!has_attack_target) return;
     // PASSIVE refuses the engagement outright rather than holding fire while tracking: a ship
@@ -213,26 +290,6 @@ void FleetShip::update_attack(game_state* s, f32 dt) {
     Vec2 to_target = hierpos_diff(&target->origin, &sh->origin);
     f32 dist  = vec2_length(to_target);
     f32 speed = vec2_length(fl->velocity);
-    // Rotate nose toward the target. Heading convention: ship angle 0 => nose +Y.
-    f32 desired_angle = atan2f(-to_target.x, to_target.y);
-    f32 angle_diff = normalize_angle(desired_angle - sh->angle);
-    f32 max_rot = m.max_turn * dt;
-    // Angular ARRIVE, same as update_move's cruise turn: ease onto the target bearing over
-    // the last few degrees rather than snapping to a dead stop the tick the error fits in
-    // one step. The alignment gates below keep reading the full angle_diff, and the taper
-    // zone (~4 degrees on a cruiser) is well inside RTS_ATTACK_FACE_ANGLE (~14), so firing
-    // starts before the ease-out even begins -- this is purely a visual-smoothness change.
-    f32 slew = fminf(m.max_turn, sqrtf(2.0f * m.turn_accel * fabsf(angle_diff)));
-    sh->angle += clampf(angle_diff, -slew * dt, slew * dt);
-    fl->angular_velocity = 0.0f;
-    // Thruster telemetry: this controller turns by writing the pose directly, so the
-    // commanded turn is the applied rotation as a fraction of this tick's cap.
-    if (max_rot > 0.0f)
-        fl->turn_cmd += clampf(clampf(angle_diff, -slew * dt, slew * dt) / max_rot, -1.0f, 1.0f);
-    // Turret tracking moved BELOW, to the engaging mount only -- see the note after `w` is
-    // resolved. It used to slew EVERY mounted turret onto the target here, which now fights the
-    // player: game_update aims the fire selection at the cursor earlier in the same frame, and
-    // update_autopilot runs after it, so this loop overwrote the player's aim every frame.
     // Engagement geometry is driven by the WEAPONS THIS SHIP ACTUALLY CARRIES, not by a fixed
     // distance. `fire_reach` is the reach of the weapon that bears on the target (it decides
     // whether a shot can arrive at all); `approach_reach` is the longest reach aboard (it decides
@@ -268,6 +325,86 @@ void FleetShip::update_attack(game_state* s, f32 dt) {
         }
     }
     if (approach_reach <= 0.0f) approach_reach = RTS_ATTACK_RANGE;   // unarmed: legacy standoff
+    // ---- The hull turns ONLY when turning buys something ---------------------------------
+    // Turrets aim themselves; the hull is not a gun sight. Rotation is commanded in exactly
+    // two cases: the ship must BURN toward the target (main-drive thrust is nose-directed),
+    // or NO mounted weapon's traverse arc covers the target from the current heading -- and
+    // then only by the MINIMAL angle that unmasks the nearest arc (edge minus ROE_ARC_MARGIN),
+    // so a broadside hull presents its flank instead of its bow. The old code steered nose-on
+    // unconditionally and gated every shot on hull alignment, which left a converged side
+    // turret silent while the ship pirouetted.
+    f32 target_bearing = atan2f(-to_target.x, to_target.y); // heading convention: nose = +Y
+    f32 plan_delta = 0.0f;   // minimal hull rotation that lets some weapon bear
+    b8  have_plan  = FALSE;  // any weapon mounted at all (respecting the override)
+    for (i32 hpi = 0; hpi < sh->hardpoint_count; ++hpi) {
+        if (!sh->mounts[hpi]) continue;
+        if (sh->weapon_override >= 0 && hpi != sh->weapon_override) continue;
+        const HardpointDef& hd = sh->hardpoints[hpi];
+        f32 delta;
+        if (hd.arc >= 2.0f * BS_PI - 1.0e-3f) {
+            delta = 0.0f;                                    // full-circle turret: always bears
+        } else {
+            f32 inner = fmaxf(hd.arc * 0.5f - ROE_ARC_MARGIN, 0.0f);
+            f32 err   = normalize_angle(target_bearing - hd.facing - sh->angle);
+            delta = (fabsf(err) <= inner) ? 0.0f : err - (err > 0.0f ? inner : -inner);
+        }
+        if (!have_plan || fabsf(delta) < fabsf(plan_delta)) plan_delta = delta;
+        have_plan = TRUE;
+        if (plan_delta == 0.0f) break;                       // cannot beat "already bearing"
+    }
+    // Approach need (AGGRESSIVE, no move order, outside the standoff): decided here because
+    // the heading choice depends on it. Close to a comfortable margin inside the longest
+    // weapon's reach and hold there -- a ship with 4,000,000 units of missile reach should
+    // engage from range, not fly to knife-fighting distance the way the old fixed
+    // 10,000-unit standoff forced it to.
+    f32 desired_dist = approach_reach * RTS_ATTACK_REACH_FRAC;
+    f32 min_standoff = RTS_ATTACK_STOP_DIST + target_r + ship_r;
+    if (desired_dist < min_standoff) desired_dist = min_standoff;
+    f32 brake_dist = (speed > 0.0f) ? (speed * speed) / (2.0f * m.decel) : 0.0f;
+    // An AGGRESSIVE ship that picked its OWN fight leaves its station to fight it -- the
+    // stance's documented meaning. Without this, a standing move order pins the hull in
+    // place while it tracks a target it never closes on: formation slots are the systematic
+    // case (the separation post-pass can hold a ship NEAR its slot but outside update_move's
+    // 60-unit arrival deadband forever, so the order never self-clears). Player-DESIGNATED
+    // attack+move keeps the deliberate strafe-while-firing coexistence -- only auto-acquired
+    // hunts override the station.
+    if (auto_acquired && has_move_target && stance == FLEET_STANCE_AGGRESSIVE &&
+        dist > desired_dist + brake_dist) {
+        clear_move_target();
+        action_log_push(s, "%s: breaking station to engage",
+                        sh->vessel_name ? sh->vessel_name : "Ship");
+    }
+    b8 need_approach = (!has_move_target && stance == FLEET_STANCE_AGGRESSIVE &&
+                        dist > desired_dist + brake_dist);
+    f32 desired_heading;
+    if (need_approach) {
+        // Crab approach: hold the arc plan when it fits inside the burn cone around the
+        // closing vector, else burn at the cone edge nearest it. The drive still closes at
+        // >= cos(RTS_BURN_CONE) efficiency and a side mount stays unmasked the whole way.
+        f32 plan_off = have_plan
+            ? normalize_angle(sh->angle + plan_delta - target_bearing) : 0.0f;
+        desired_heading = target_bearing + clampf(plan_off, -RTS_BURN_CONE, RTS_BURN_CONE);
+    } else if (have_plan) {
+        // In range (or holding station): unmask the nearest arc and stop -- ZERO rotation
+        // when a weapon already bears from the current heading.
+        desired_heading = sh->angle + plan_delta;
+    } else {
+        desired_heading = target_bearing;   // no weapons mounted: legacy nose-on tracking
+    }
+    f32 angle_diff = normalize_angle(desired_heading - sh->angle);
+    f32 max_rot = m.max_turn * dt;
+    if (fabsf(angle_diff) > 1.0e-4f) {
+        // Angular ARRIVE, same as update_move's cruise turn: ease onto the goal heading over
+        // the last few degrees rather than snapping to a dead stop the tick the error fits
+        // in one step.
+        f32 slew = fminf(m.max_turn, sqrtf(2.0f * m.turn_accel * fabsf(angle_diff)));
+        f32 step = clampf(angle_diff, -slew * dt, slew * dt);
+        sh->angle += step;
+        // Thruster telemetry: this controller turns by writing the pose directly, so the
+        // commanded turn is the applied rotation as a fraction of this tick's cap.
+        if (max_rot > 0.0f) fl->turn_cmd += clampf(step / max_rot, -1.0f, 1.0f);
+    }
+    fl->angular_velocity = 0.0f;
     // Only approach the target if we have no separate move order. When both orders are set,
     // movement is handled by update_move and we just track/fire here.
     //
@@ -277,19 +414,31 @@ void FleetShip::update_attack(game_state* s, f32 dt) {
     // shoot what comes" expressible without a second order type, and it is why a screening ship
     // set defensive stops wandering off the thing it was screening.
     if (!has_move_target && stance == FLEET_STANCE_AGGRESSIVE) {
+        // The burn gate compares against the PLANNED heading, not the target bearing -- the
+        // plan may be crabbed up to RTS_BURN_CONE off the closing vector, and the old nose-on
+        // gate would never open for a crab.
         if (fabsf(angle_diff) < RTS_MOVE_FACE_ANGLE) {
             Vec2 heading = vec2_rotate(Vec2{ 0.0f, 1.0f }, sh->angle);
-            f32 brake_dist = (speed > 0.0f) ? (speed * speed) / (2.0f * m.decel) : 0.0f;
-            // Close to a comfortable margin inside the longest weapon's reach and hold there --
-            // a ship with 4,000,000 units of missile reach should engage from range, not fly to
-            // knife-fighting distance the way the old fixed 10,000-unit standoff forced it to.
-            f32 desired_dist = approach_reach * RTS_ATTACK_REACH_FRAC;
-            f32 min_standoff = RTS_ATTACK_STOP_DIST + target_r + ship_r;
-            if (desired_dist < min_standoff) desired_dist = min_standoff;
             // Only close distance when too far; never actively back away from the target.
             if (dist > desired_dist + brake_dist) {
                 fl->velocity = vec2_add(fl->velocity, vec2_scale(heading, m.accel * dt));
                 fl->thrust_cmd.y += 1.0f;   // telemetry: main engines, full burn
+                // Cross-track damping: a crabbed burn builds velocity perpendicular to the
+                // target line; bleed it at cruise-trim strength so the approach stays a
+                // line, not a spiral. Reads as course-holding side jets, which it is.
+                if (dist > 0.0001f) {
+                    Vec2 tdir = vec2_scale(to_target, 1.0f / dist);
+                    Vec2 perp = Vec2{ -tdir.y, tdir.x };
+                    f32 lat  = vec2_dot(fl->velocity, perp);
+                    f32 trim = m.accel * RTS_CRUISE_TRIM_FRAC * dt;
+                    f32 corr = clampf(-lat, -trim, trim);
+                    fl->velocity = vec2_add(fl->velocity, vec2_scale(perp, corr));
+                    if (m.accel * dt > 0.0f) {
+                        Vec2 corr_local = vec2_rotate(perp, -sh->angle);
+                        fl->thrust_cmd = vec2_add(fl->thrust_cmd,
+                            vec2_scale(corr_local, corr / (m.accel * dt)));
+                    }
+                }
             } else if (speed > 0.0f) {
                 fl->velocity = vec2_add(fl->velocity, vec2_scale(fl->velocity, -m.decel * dt / speed));
                 // Telemetry: a velocity-opposing brake decomposes onto whichever local
@@ -303,9 +452,12 @@ void FleetShip::update_attack(game_state* s, f32 dt) {
                 vec2_scale(vec2_rotate(fl->velocity, -sh->angle), -0.5f / speed));
         }
     }
-    // Fire when facing the target, outside minimum range, and within each weapon's OWN reach --
-    // so a long-legged launcher engages at its full authored range instead of being capped by a
-    // hardcoded constant.
+    // Fire when outside minimum range and within each weapon's OWN reach -- so a long-legged
+    // launcher engages at its full authored range instead of being capped by a hardcoded
+    // constant. The old HULL-alignment gate is gone: per-mount bearing is the real "aligned",
+    // and the shared validator already enforces every mount's traverse arc AND barrel slew
+    // convergence (WEAPON_FIRE_NO_BEARING / WEAPON_FIRE_SLEWING), so a converged side turret
+    // fires regardless of where the nose points.
     //
     // EVERY autopilot-driven ship fires EVERYTHING under an attack order -- missiles and
     // ballistics alike. The player-vs-autopilot arbitration happens one level up: the hull the
@@ -321,9 +473,9 @@ void FleetShip::update_attack(game_state* s, f32 dt) {
     // station -- and stops only at the trigger. That is deliberately a different thing from
     // PASSIVE: this ship is shadowing a target and ready, it is just not authorised to shoot.
     b8 fire_authorized = (stance != FLEET_STANCE_HOLD_FIRE);
-    b8 aligned = (fabsf(angle_diff) < RTS_ATTACK_FACE_ANGLE) && (dist >= RTS_ATTACK_MIN_RANGE);
+    b8 range_ok = (dist >= RTS_ATTACK_MIN_RANGE);
     b8 guided = (w && w->wkind == WEAPON_KIND_MISSILE && fire_authorized);
-    if (w && guided && aligned && dist <= fire_reach) {
+    if (w && guided && range_ok && dist <= fire_reach) {
         {
             // Each shot leaves from its own hardpoint, honoring the slot's traverse arc.
             {
@@ -383,7 +535,7 @@ void FleetShip::update_attack(game_state* s, f32 dt) {
             // Deliberately OUTSIDE the fire gates: turrets keep tracking under HOLD_FIRE and
             // while the nose is still swinging onto the target.
             ship_turret_aim_at(sh, hpi, aim);
-            if (!fire_authorized || !aligned) continue;
+            if (!fire_authorized || !range_ok) continue;
             bw->owner_faction_id = sh->faction_id;   // stamp attacker faction for hit attribution
             // One shared validator + committed spend + one shared spawner: the exact per-weapon
             // path the player's trigger loop walks (game.cpp), never a parallel spawn path.
@@ -404,6 +556,7 @@ void FleetShip::clear_move_target() {
 void FleetShip::clear_attack_target() {
     has_attack_target = FALSE;
     attack_target = nullptr;
+    auto_acquired = FALSE;
 }
 void FleetShip::clear_escort_target() {
     has_escort_target = FALSE;
@@ -470,8 +623,13 @@ void FleetShip::update_avoid(f32 dt) {
 // =====================================================================================
 // Fleet
 // =====================================================================================
-Fleet::Fleet() : m_count(0), m_spawned(0), m_piloted_idx(0) {}
-void Fleet::init() { m_count = 0; m_spawned = 0; m_piloted_idx = 0; }
+Fleet::Fleet() : m_count(0), m_spawned(0), m_piloted_idx(0) {
+    for (i32 i = 0; i < AGGRESSOR_MAX; ++i) { m_aggressor_id[i] = 0; m_aggressor_timer[i] = 0.0f; }
+}
+void Fleet::init() {
+    m_count = 0; m_spawned = 0; m_piloted_idx = 0;
+    for (i32 i = 0; i < AGGRESSOR_MAX; ++i) { m_aggressor_id[i] = 0; m_aggressor_timer[i] = 0.0f; }
+}
 void Fleet::set_count(i32 n) {
     if (n < 1) n = 1;
     if (n > m_spawned) n = m_spawned;
@@ -511,6 +669,11 @@ FleetShip& Fleet::add() {
     // AGGRESSIVE is the default because it is the pre-stance behaviour: engage and close. Any
     // other default would silently change how every existing escort fights.
     fs.stance = FLEET_STANCE_AGGRESSIVE;
+    // WEAPONS FREE is the default deliberately: a warship that watches its fleet get shot
+    // without responding is the bug this field exists to fix. ROE_HOLD reproduces the old
+    // designation-only behaviour for players who want full manual control.
+    fs.roe = ROE_WEAPONS_FREE;
+    fs.auto_acquired = FALSE;
     fs.has_escort_target = FALSE;
     fs.escort_target     = nullptr;
     fs.has_avoid_target  = FALSE;
@@ -623,6 +786,7 @@ void Fleet::order_attack(Ship* target) {
         if (!m_ships[i].selected) continue;
         m_ships[i].has_attack_target = TRUE;
         m_ships[i].attack_target = target;
+        m_ships[i].auto_acquired = FALSE;   // a designation outranks the ROE pass
     }
 }
 // =====================================================================================
@@ -669,6 +833,34 @@ void Fleet::set_selected_stance(u8 stance) {
     if (stance > FLEET_STANCE_HOLD_FIRE) return;   // unknown value: leave the fleet alone
     for (i32 i = 0; i < m_count; ++i)
         if (m_ships[i].selected) m_ships[i].stance = stance;
+}
+void Fleet::set_selected_roe(u8 roe) {
+    if (roe > ROE_HOLD) return;   // unknown value: leave the fleet alone
+    for (i32 i = 0; i < m_count; ++i)
+        if (m_ships[i].selected) m_ships[i].roe = roe;
+}
+// ---- Return-fire aggression memory ----------------------------------------------------
+void Fleet::note_aggression(i16 faction_id) {
+    // Refresh an existing live entry first.
+    for (i32 i = 0; i < AGGRESSOR_MAX; ++i)
+        if (m_aggressor_timer[i] > 0.0f && m_aggressor_id[i] == faction_id) {
+            m_aggressor_timer[i] = ROE_AGGRESSION_S;
+            return;
+        }
+    // New entry: take the first free slot, else evict the one closest to expiry.
+    i32 slot = 0;
+    f32 lowest = m_aggressor_timer[0];
+    for (i32 i = 0; i < AGGRESSOR_MAX; ++i) {
+        if (m_aggressor_timer[i] <= 0.0f) { slot = i; break; }
+        if (m_aggressor_timer[i] < lowest) { lowest = m_aggressor_timer[i]; slot = i; }
+    }
+    m_aggressor_id[slot]    = faction_id;
+    m_aggressor_timer[slot] = ROE_AGGRESSION_S;
+}
+b8 Fleet::is_aggressor(i16 faction_id) const {
+    for (i32 i = 0; i < AGGRESSOR_MAX; ++i)
+        if (m_aggressor_timer[i] > 0.0f && m_aggressor_id[i] == faction_id) return TRUE;
+    return FALSE;
 }
 void Fleet::order_escort(Ship* target) {
     if (!target) return;
@@ -733,8 +925,13 @@ static void separation_adjust(FleetShip* fs, Vec2 to_other, f32 dist, f32 min_se
     }
 }
 void Fleet::update_autopilot(game_state* s, f32 dt, i32 auto_skip) {
+    // Return-fire grievances decay here: one owner for the timers, ticked once per frame.
+    for (i32 i = 0; i < AGGRESSOR_MAX; ++i)
+        if (m_aggressor_timer[i] > 0.0f) m_aggressor_timer[i] -= dt;
     for (i32 i = 0; i < m_count; ++i) {
         if (i == auto_skip) continue;
+        // ROE self-acquisition first, so a fight it picks this tick is fought this tick.
+        m_ships[i].update_engagement(s);
         if (m_ships[i].has_attack_target) m_ships[i].update_attack(s, dt);
         if (m_ships[i].has_move_target)     m_ships[i].update_move(dt);
         // Position orders are mutually exclusive by construction (each order_* clears the

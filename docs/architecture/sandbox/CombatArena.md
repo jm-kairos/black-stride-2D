@@ -48,6 +48,10 @@ GameStateModel; engine `math/math_utils.h`, `math/bs_hierpos.h`, `defines.h`.
   `s->flak_tuning.burst_radius` as the effect size, so the airburst is drawn at the radius that
   actually did damage rather than at the 3-unit shell's own radius; it is the only place in the
   game that shows the player how far the screen reaches.
+- **The hull-hit site feeds FleetControl's return-fire memory.** A hostile round landing on a
+  `FACTION_PLAYER` entity calls `Fleet::note_aggression(p->faction_id)` before retiring, which
+  is what authorises `ROE_RETURN_FIRE` ships to self-acquire that faction. Faction-level
+  rather than `Ship*` so a despawned shooter can never dangle.
 - **Detection is a fleet-wide union computed by max** — a contact's confidence is the strongest
   single reading over all friendly ships, so overlapping coverage widens the picture without
   double-counting (`sensor_system.h`).
@@ -116,7 +120,9 @@ configurations from one code path. A new detection rule belongs in `sensor_readi
 **Source paths:** `sandbox/source/sim/combat_arena.{cpp,h}`,
 `sandbox/source/sim/point_defense.{cpp,h}`, `sandbox/source/sim/sensor_system.{cpp,h}`
 
-**Last verified:** 2026-08-12, working tree on `game` (`point_defense_update` gains the
+**Last verified:** 2026-08-15, working tree on `game` (the fleet-hull hit branch notes the
+attacker faction on the Fleet for ROE return-fire — see FleetControl). Previously 2026-08-12
+(`point_defense_update` gains the
 mount gate — PD became fleet-pool equipment, see ShipCombatModel — and the missile-hit
 attribution in `combat_arena.cpp` reads an unmounted PD as "PD holding". Previously 2026-08-09:
 the four projectile-destruction sites across this subsystem and `point_defense.cpp` retire

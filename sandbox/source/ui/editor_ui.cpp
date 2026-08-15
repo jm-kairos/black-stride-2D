@@ -108,6 +108,27 @@ void build_editor_panel(game_state* s) {
                             ? "Multiple ship command ENABLED"
                             : "Single ship command (flagship only)");
         }
+        // ---- RULES OF ENGAGEMENT ---------------------------------------------------------------
+        // Fire-acquisition autonomy for the SELECTED ships (fleet-wide when none selected would
+        // be surprising, so it deliberately requires a selection, like the stance chips). The
+        // combo shows the first selected ship's current ROE; changing it applies to the whole
+        // selection through the same one-setter pattern as set_selected_stance.
+        {
+            static const char* ROE_NAMES[] = { "Weapons free", "Return fire", "Hold (designate only)" };
+            Fleet& fleet = s->fleet_state.fleet;
+            i32 sel = fleet.first_selected();
+            if (sel >= 0) {
+                i32 roe_ui = (i32)fleet.at(sel).roe;
+                if (bs_ui_combo("ROE (selected)", &roe_ui, "Weapons free\0Return fire\0Hold (designate only)\0") &&
+                    roe_ui >= 0 && roe_ui <= (i32)ROE_HOLD) {
+                    fleet.set_selected_roe((u8)roe_ui);
+                    action_log_push(s, "ROE: %s (%d ship%s)", ROE_NAMES[roe_ui],
+                                    fleet.selected_count(), fleet.selected_count() == 1 ? "" : "s");
+                }
+            } else {
+                bs_ui_text("ROE: select ships to set rules of engagement.");
+            }
+        }
         // ---- DISCOVERIES ---------------------------------------------------------------------
         bool draw_sensor_on = s->editor.draw_discovery_sensor_range ? true : false;
         bs_ui_checkbox("Draw discovery sensor range", &draw_sensor_on);

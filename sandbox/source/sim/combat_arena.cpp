@@ -393,6 +393,12 @@ void combat_arena_update_projectiles(game_state* s, f32 sim_dt) {
                     // General Ship AI: NPC agents take damage; the projectile's faction id
                     // attributes the kill (player kills raid the civ, NPC kills don't).
                     if (ce->is_npc) ai_ship_damage(s, ce->npc_index, p->dmg, p->faction_id);
+                    // Return-fire attribution: a hostile round landing on a FLEET hull marks
+                    // its faction as an aggressor (decaying entry on the Fleet), which is what
+                    // ROE_RETURN_FIRE ships are authorised to self-acquire against. Faction-
+                    // level rather than Ship* so a despawned shooter can never dangle.
+                    if (ce->faction_id == FACTION_PLAYER && p->faction_id != FACTION_PLAYER)
+                        s->fleet_state.fleet.note_aggression(p->faction_id);
                     // Attributed missile-hit feedback (Phase E): when a missile lands on a
                     // player fleet ship, say WHY the defenses missed it -- read from the hit
                     // ship's own PD state at impact time. Disabled/unmounted reads as holding.

@@ -77,6 +77,19 @@ enum FleetStance : u8 {
     FLEET_STANCE_PASSIVE,        // never engage; movement orders only
     FLEET_STANCE_HOLD_FIRE,      // manoeuvre normally, weapons tight (shadow a target, don't shoot)
 };
+// Rules of engagement: whether the autopilot may ACQUIRE targets on its own, with no player
+// designation. Orthogonal to FleetStance the same way stance is orthogonal to orders: ROE
+// decides WHETHER a ship picks its own fight, stance decides HOW it fights one (close in, hold
+// station, refuse). A player attack order always overrides -- the acquisition pass never
+// touches a designated target, and an auto-acquired one is dropped the moment it leaves the
+// envelope, dies, or the ROE tightens. PASSIVE and HOLD_FIRE stances never self-acquire
+// regardless of ROE (the first refuses to fight, the second is not authorised to shoot, and a
+// ship shadowing a target nobody designated would read as acting on its own authority).
+enum EngageRoe : u8 {
+    ROE_WEAPONS_FREE = 0, // self-acquire any hostile inside the acquisition envelope
+    ROE_RETURN_FIRE,      // self-acquire only factions that recently HIT a fleet hull
+    ROE_HOLD,             // never self-acquire; player-designated targets only (legacy behaviour)
+};
 
 // One player ship: pose + dynamics + selection + per-ship order state.
 // Move and attack targets are independent: a ship can strafe toward a destination while its
@@ -91,6 +104,8 @@ struct FleetShip {
     b8            jump_capable;      // TRUE when this ship can perform FTL jumps
     f32           jump_radius;       // world-space FTL jump range (units)
     u8            stance;            // FleetStance; honoured by update_attack
+    u8            roe;               // EngageRoe; autonomy of target ACQUISITION (update_engagement)
+    b8            auto_acquired;     // attack_target came from the ROE pass, not a player order
     // ---- Standing orders ---------------------------------------------------------------
     // Distinct from move_target because their destination is not a POINT -- it tracks another
     // hull every frame. A move order to where the escortee currently is would be stale the
@@ -107,6 +122,11 @@ struct FleetShip {
     void simulate(f32 dt, b8 turn_commanded);
     // Autopilot a Move order: strafe/thrust toward move_target.
     void update_move(f32 dt);
+    // ROE self-acquisition: pick a fight when the rules of engagement allow it and no player
+    // designation exists. Runs before update_attack; sets attack_target with auto_acquired so
+    // the player's own designations are never disturbed. Also drops a stale auto target
+    // (out of envelope, ROE tightened, ship disarmed).
+    void update_engagement(game_state* s);
     // Autopilot an Attack order: rotate nose toward attack_target and fire when aligned --
     // missiles AND ballistics, through the shared validated fire path. If no move target is
     // set, this also approaches the target to maintain engagement range. The hull the player
@@ -168,6 +188,16 @@ public:
     // Apply a FleetStance to every selected ship. Stance is orthogonal to orders -- it survives
     // one and constrains the next -- so this deliberately does not touch order state.
     void set_selected_stance(u8 stance);
+    // Apply an EngageRoe to every selected ship. Same orthogonality contract as stance.
+    void set_selected_roe(u8 roe);
+    // ---- Return-fire aggression memory ------------------------------------------------
+    // Factions that recently HIT a fleet hull, each with a decaying timer. Faction-level
+    // rather than Ship* so a despawning NPC shooter can never dangle; ROE_RETURN_FIRE ships
+    // self-acquire only against factions with a live entry. note_aggression is called from
+    // the projectile hit path (sim/combat_arena.cpp); the timers tick in update_autopilot.
+    static const i32 AGGRESSOR_MAX = 4;
+    void note_aggression(i16 faction_id);
+    b8   is_aggressor(i16 faction_id) const;
     // Selected ships escort `target` (a friendly hull) at station-keeping range.
     void order_escort(Ship* target);
     // Selected ships break off and keep away from `target`.
@@ -201,4 +231,6 @@ private:
     i32       m_count;
     i32       m_spawned;   // high-water mark of ships ever added (escort data survives truncation)
     i32       m_piloted_idx;
+    i16       m_aggressor_id[AGGRESSOR_MAX];      // factions with live return-fire grievances
+    f32       m_aggressor_timer[AGGRESSOR_MAX];   // seconds remaining per entry (<= 0 = free slot)
 };

@@ -59,6 +59,28 @@ InWorldOverlays, FrameOrchestrator, GameStateModel.
   relative-velocity solve (`sim/ai_ship.cpp`), so fleet gunners shoot like the NPCs do.
   Missiles keep their original absolute-velocity lead. Both branches gate on
   `stance != FLEET_STANCE_HOLD_FIRE`.
+- **ROE is orthogonal to BOTH stance and orders: it decides whether a ship picks its own
+  fight.** `update_engagement` runs before `update_attack` for every autopilot-driven hull and
+  self-acquires the nearest hostile ship inside the acquisition envelope (longest reach aboard
+  × 1.5, drop hysteresis × 1.3) — `ROE_WEAPONS_FREE` (the default: a warship that watches its
+  fleet get shot without responding was the bug), `ROE_RETURN_FIRE` (only factions with a live
+  aggression entry — see the Fleet's decaying aggressor table, fed by CombatArena's hit path),
+  `ROE_HOLD` (the legacy designation-only behaviour). A player designation always outranks the
+  pass (`auto_acquired` marks ROE targets; designations never carry it), an unarmed hull never
+  self-acquires, and PASSIVE/HOLD_FIRE stances never self-acquire regardless of ROE. Firing
+  still runs through `update_attack`'s gates unchanged — ROE changes WHO gets shot at, never
+  HOW. Hostility is `galaxy_history_faction_is_hostile`, not a hardcoded faction compare.
+  Set from the editor panel's "ROE (selected)" combo via `set_selected_roe` (the
+  `set_selected_stance` pattern); each self-acquisition logs "X: engaging Y".
+- **An auto-acquired hunt overrides a standing move order (AGGRESSIVE only).** When an
+  AGGRESSIVE ship's SELF-acquired target sits beyond the approach standoff while a move order
+  is live, `update_attack` clears the move ("X: breaking station to engage" in the log) so the
+  chase can run. Without this a stale move order pinned the hull in place forever — the
+  systematic case is a formation slot the separation post-pass never lets a ship close to
+  within `update_move`'s 60-unit arrival deadband, so the order never self-clears and
+  `need_approach` (which requires `!has_move_target`) stays false while the ship tracks a
+  target it never closes on. Player-DESIGNATED attack+move keeps the deliberate
+  strafe-while-firing coexistence — only ROE-acquired hunts break station.
 - **Stance is orthogonal to orders: it survives one and constrains the next.** The distinction
   that carries the design is AUTONOMY, not aggression — Aggressive and Defensive both fight and
   differ only in whether the ship will leave its station to do it, which is what lets "hold here
@@ -141,6 +163,17 @@ InWorldOverlays, FrameOrchestrator, GameStateModel.
   agents fire through `sim/ai_ship.cpp` and the static enemy through `sim/combat_arena.cpp`.
   Their shots still lead. So the enemy out-shoots an unskilled player and loses to a skilled one,
   which is the intended shape — and no player-vs-NPC branch was needed to get it.
+- **The hull turns only when turning buys something — turrets aim themselves.** `update_attack`
+  computes the minimal hull rotation that unmasks a weapon (per-hardpoint authored
+  `facing`/`arc`, edge minus `ROE_ARC_MARGIN`): ZERO when any mount already bears from the
+  current heading, the nearest arc edge otherwise — so a broadside hull presents its flank,
+  never its bow. During an AGGRESSIVE approach the plan is clamped into `RTS_BURN_CONE`
+  (0.6 rad) around the closing vector: the ship CRABS to keep a side mount unmasked while the
+  main drive still closes at >= cos(0.6) efficiency, with cross-track damping at cruise-trim
+  strength so the approach stays a line. The old nose-alignment fire gate
+  (`RTS_ATTACK_FACE_ANGLE`) is REMOVED: per-mount bearing + the validator's slew convergence
+  are the real alignment, so a converged side turret fires regardless of where the nose
+  points. Only the minimum-range check remains global.
 - **The engaging mount tracks the TARGET; firing ballistic mounts track their own LEAD point.**
   `update_attack` aims `whp` (the bearing weapon) at the hull, and the ballistic broadside aims
   each mount it intends to fire at its own lead solution instead — not the hull, because the
@@ -200,7 +233,20 @@ characteristics without touching this code.
 **Source paths:** `sandbox/source/sim/fleet.{cpp,h}`, `sandbox/source/sim/ship_control.{cpp,h}`,
 `sandbox/source/sim/steering.{cpp,h}`
 
-**Last verified:** 2026-08-15, working tree on `game` (same day, latest: every linear speed
+**Last verified:** 2026-08-15, working tree on `game` (same day, latest: the beyond-reach chase
+— instrumented live run with the debug strike ring moved to 40-48k: a parked flagship
+self-acquired at 41k (beyond its 36k gauss reach), engaged the approach (`appr=1`), spun up
+and closed 41k -> 34k -> 31k into the standoff, kill confirmed; the hunt-overrides-move guard
+added the same session shares that validated distance condition. Earlier: turret-first gunnery —
+the unconditional nose-on rotation and the hull-alignment fire gate are replaced by minimal
+arc-unmask steering + the cone-clamped crab approach; observed live in a player session: the
+flagship with port+starboard cannons under WEAPONS FREE autonomously killed a dozen pirate
+hulls in sequence, one "engaging" acquisition per kill. Same day, earlier: ROE self-acquisition —
+`EngageRoe` + `update_engagement` + the Fleet's decaying aggressor table; live-verified: a
+flagship with a freshly mounted gauss, given only a MOVE order toward the raider, self-acquired
+("Iron Meridian: engaging Pirate Raider" in the action log), flipped its roster row to ATTACK,
+broke toward the target and drained capacitor firing, while the four unarmed escorts correctly
+stayed passive. RETURN_FIRE and HOLD verified at code level only. Same day, earlier: every linear speed
 cap routes through `ship_speed_cap` — the selected speed-limit gear from the hull's card —
 live-verified: gear 5 (4000 u/s) took a move order past 1787 u/s and still braked to a
 clean arrival, gear default reproduced the old 240 cap. Same day, earlier: move orders become
