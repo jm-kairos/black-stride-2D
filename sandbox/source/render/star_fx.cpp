@@ -7,6 +7,7 @@
 #include <renderer/renderer.h>
 #include <renderer/bs_ui.h>
 #include <cstdio>
+#include <cstring> // memcmp (save-on-change in build_ui)
 // ---- Texture generation ---------------------------------------------------------------
 static bs_texture make_radial_texture(u32 size, f32 (*falloff_fn)(f32 t))
 {
@@ -43,10 +44,19 @@ void StarFxSystem::init()
     streak_pulse_speed  = 0.0f;
     streak_length_mul    = 1.0f;
     streak_intensity_mul = 1.0f;
-    star_3d_mode       = FALSE;
+    star_3d_mode       = TRUE;  // 3D procedural sphere is the default star geometry
     star_rotation_speed = 5.0f;
     star_body_scale    = 8.0f;
     planet_rotation_speed = 0.15f;
+    // God rays + mapped-hull backlight (overridden from disk below if a "g" line exists).
+    godray_intensity     = 0.55f;
+    godray_density       = 0.9f;
+    godray_decay         = 0.965f;
+    godray_exposure      = 1.25f;
+    godray_halo          = 2.5f;
+    godray_transmission  = 0.35f;
+    backlit_transmission = 0.55f;
+    backlit_rim          = 0.85f;
     // Per-type planet appearance: start from built-in defaults, then override from disk if present.
     show_planet_editor    = FALSE;
     planet_editor_sel_type = 0;
@@ -292,6 +302,24 @@ void StarFxSystem::build_ui()
         bs_ui_slider_float("Rotation speed",   &streak_rotation_speed, 0.0f, 90.0f);
         bs_ui_slider_float("Pulse speed",      &streak_pulse_speed,    0.0f, 5.0f);
     }
+    // Save-on-change: StarFxSystem::shutdown() has no caller (the engine boundary has no
+    // game-shutdown callback), so a shutdown-time save never runs. Persist the moment a
+    // persisted tunable moves instead — a slider drag rewrites the small cfg per tick.
+    f32 g_before[8] = { godray_intensity, godray_density, godray_decay, godray_exposure,
+                        godray_halo, godray_transmission, backlit_transmission, backlit_rim };
+    bs_ui_text_colored(SP[0], SP[1], SP[2], SP[3], "Sun Shafts (God Rays)");
+    bs_ui_slider_float("Shaft intensity",   &godray_intensity,     0.0f, 3.0f);
+    bs_ui_slider_float("Shaft density",     &godray_density,       0.1f, 1.0f);
+    bs_ui_slider_float("Shaft decay",       &godray_decay,         0.85f, 1.0f);
+    bs_ui_slider_float("Shaft exposure",    &godray_exposure,      0.0f, 4.0f);
+    bs_ui_slider_float("Source halo",       &godray_halo,          0.5f, 8.0f);
+    bs_ui_slider_float("Hull leak",         &godray_transmission,  0.0f, 1.0f);
+    bs_ui_text_colored(SP[0], SP[1], SP[2], SP[3], "Hull Backlight");
+    bs_ui_slider_float("Backlit glow",      &backlit_transmission, 0.0f, 3.0f);
+    bs_ui_slider_float("Backlit rim",       &backlit_rim,          0.0f, 3.0f);
+    f32 g_after[8] = { godray_intensity, godray_density, godray_decay, godray_exposure,
+                       godray_halo, godray_transmission, backlit_transmission, backlit_rim };
+    if (memcmp(g_before, g_after, sizeof(g_before)) != 0) planet_params_save();
     bs_ui_text_colored(SP[0], SP[1], SP[2], SP[3], "Star Rendering");
     bool mode_3d = star_3d_mode ? true : false;
     bs_ui_checkbox("3D sphere mode", &mode_3d);
@@ -354,6 +382,10 @@ b8 StarFxSystem::planet_params_save() const
                 i, p.size_mul, p.min_px, p.rotation_speed, p.halo_scale, p.cloud_amount,
                 p.surface_color.r, p.surface_color.g, p.surface_color.b);
     }
+    // God rays + hull backlight ("g" line; older loaders skip it — sscanf %d rejects 'g').
+    fprintf(f, "g %.4f %.4f %.4f %.4f %.4f %.4f %.4f %.4f\n",
+            godray_intensity, godray_density, godray_decay, godray_exposure,
+            godray_halo, godray_transmission, backlit_transmission, backlit_rim);
     fclose(f);
     return TRUE;
 }
@@ -365,6 +397,18 @@ b8 StarFxSystem::planet_params_load()
     char line[256];
     while (fgets(line, sizeof(line), f)) {
         if (line[0] == '#' || line[0] == '\n' || line[0] == '\r') continue;
+        if (line[0] == 'g') {
+            // God rays + hull backlight. Tolerate short lines from older files: only the
+            // values actually parsed overwrite their defaults.
+            float v[8];
+            i32 n = sscanf(line + 1, "%f %f %f %f %f %f %f %f",
+                           &v[0], &v[1], &v[2], &v[3], &v[4], &v[5], &v[6], &v[7]);
+            f32* dst[8] = { &godray_intensity, &godray_density, &godray_decay,
+                            &godray_exposure, &godray_halo, &godray_transmission,
+                            &backlit_transmission, &backlit_rim };
+            for (i32 i = 0; i < n && i < 8; ++i) *dst[i] = v[i];
+            continue;
+        }
         i32 idx = -1;
         float sm, mp, rs, hs, ca, r, g, b;
         if (sscanf(line, "%d %f %f %f %f %f %f %f %f",

@@ -49,6 +49,12 @@ FrameOrchestrator, GameStateModel.
   through their own uniform block instead.
 - `renderer_set_draw_alpha` must be restored to 1.0 — `mapped_system_layer` does so at the end,
   deliberately being the last background layer.
+- **The god-ray (volumetric sun shaft) submission lives here, next to the streak source** —
+  `mapped_system_layer.cpp` fills `bs_godray_params` from the drawn star's parallaxed screen
+  position, hero-floor-sized radius, colour and sensor fade, weighted by `view_arena_w` so the
+  deep-map look keeps its existing volumetric star light. Occluder band is `LAYER_SHIP`; the
+  engine's mapped batch always occludes with depth-map transmission. Submitting from the star
+  draw site (not `frame_lighting`) is what keeps the shafts pixel-aligned with the drawn star.
 
 **Extension points:** **A new layer** is a struct with the four duck-typed fields and a
 `draw(cam, fb_w, fb_h, dt, elapsed_time, blur)` method, allocated in `GlobalBackground::init`,
@@ -89,4 +95,7 @@ is the template for a sprite-based one. New shader tunables are fields on
 `sandbox/source/render/mapped_system_layer.{cpp,h}`,
 `sandbox/source/render/parallax_background.{cpp,h}`
 
-**Last verified:** 2026-08-07, commit `812680c`
+**Last verified:** 2026-08-15, working tree on `game` (adds the god-ray submission in
+`mapped_system_layer.cpp` beside `renderer_set_streak_source`; live-verified — the flagship
+parked at the sun casts a hull-shaped shadow wedge away from it while light streams past the
+bow and stern). Previously 2026-08-07, commit `812680c`

@@ -403,6 +403,15 @@ void renderer_draw_nebula(const bs_nebula_params* params)
     state.backend.draw_nebula(&state.backend, params);
 }
 
+void renderer_draw_godrays(const bs_godray_params* params)
+{
+    if (!state.initialized || !state.frame_active || !params || !state.backend.draw_godrays)
+    {
+        return;
+    }
+    state.backend.draw_godrays(&state.backend, params);
+}
+
 void renderer_set_lights(const bs_light2d* lights, u32 count, bs_color ambient, u32 unlit_layer)
 {
     if (!state.initialized || !state.backend.set_lights)

@@ -133,6 +133,8 @@ typedef struct mapped_light
     f32 light_dir[4];  // xyz = normalized world-space light direction, w = intensity
     f32 ambient[4];    // rgb = ambient color, a = unused
     f32 tuning[4];     // x = normal strength, y = depth parallax scale, z = point light count
+    f32 star_color[4]; // rgb = star light colour for the backlit term
+    f32 backlit[4];    // x = transmission strength, y = rim strength (zeroed for portraits)
     f32 pos_radius[BS_BACKEND_MAX_LIGHTS][4]; // xy = world pos, z = radius, w = intensity
     f32 color[BS_BACKEND_MAX_LIGHTS][4];      // rgb = color, w = per-light enabled
 } mapped_light;
@@ -340,6 +342,18 @@ typedef struct sdlgpu_state
     // Procedural nebula/dust cloud layer state.
     bs_nebula_params         nebula_params;
     b8                       nebula_set;
+
+    // Volumetric sun-shaft (god-ray) post pass. No dedicated targets: bloom_a/b are free
+    // until the bloom extract, so the pass borrows them as scratch (same trick as the frost
+    // fill) — occlusion (sun disc darkened by hull silhouettes) -> bloom_a, radial march ->
+    // bloom_b, additive upscale -> scene_rt, all BEFORE bloom extract reclaims them.
+    SDL_GPUGraphicsPipeline* pipeline_godray_source;     // sun disc + halo (fullscreen overwrite)
+    SDL_GPUGraphicsPipeline* pipeline_godray_sil;        // sprite silhouettes (alpha, sprite layout)
+    SDL_GPUGraphicsPipeline* pipeline_godray_sil_mapped; // mapped hull silhouettes (alpha, mapped layout)
+    SDL_GPUGraphicsPipeline* pipeline_godray_blur;       // radial march toward the sun
+    SDL_GPUGraphicsPipeline* pipeline_godray_composite;  // additive upscale into scene_rt
+    bs_godray_params         godray_params;
+    b8                       godray_set;
 
     // Colour format shared by EVERY offscreen target and by every pipeline that renders into
     // one. Decided once at init by a device capability probe (RGBA16F, else RGBA8). Targets and
@@ -746,6 +760,74 @@ static b8 create_mapped_pipeline_for_format(SDL_GPUShader* vs, SDL_GPUShader* fs
         return FALSE;
     }
     return TRUE;
+}
+
+// God-ray silhouette pipeline: re-draws already-uploaded sprite (or mapped) vertices with a
+// tiny alpha-only fragment shader into the occlusion buffer. Vertex layout mirrors the
+// corresponding batch pipeline above; blend is standard alpha so silhouettes darken the sun.
+static SDL_GPUGraphicsPipeline* create_godray_silhouette_pipeline(
+    SDL_GPUShader* vs, SDL_GPUShader* fs,
+    SDL_GPUTextureFormat color_fmt, b8 mapped_layout)
+{
+    SDL_GPUVertexBufferDescription vbuf_desc;
+    SDL_zero(vbuf_desc);
+    vbuf_desc.slot       = 0;
+    vbuf_desc.pitch      = mapped_layout ? sizeof(mapped_vertex) : sizeof(sprite_vertex);
+    vbuf_desc.input_rate = SDL_GPU_VERTEXINPUTRATE_VERTEX;
+
+    SDL_GPUVertexAttribute attrs[4];
+    SDL_zero(attrs);
+    if (mapped_layout)
+    {
+        attrs[0].location = 0; attrs[0].format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT2;
+        attrs[0].offset   = offsetof(mapped_vertex, x);
+        attrs[1].location = 1; attrs[1].format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT2;
+        attrs[1].offset   = offsetof(mapped_vertex, u);
+        attrs[2].location = 2; attrs[2].format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3;
+        attrs[2].offset   = offsetof(mapped_vertex, wx);
+        attrs[3].location = 3; attrs[3].format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT;
+        attrs[3].offset   = offsetof(mapped_vertex, angle);
+    }
+    else
+    {
+        attrs[0].location = 0; attrs[0].format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT2;
+        attrs[0].offset   = offsetof(sprite_vertex, x);
+        attrs[1].location = 1; attrs[1].format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT2;
+        attrs[1].offset   = offsetof(sprite_vertex, u);
+        attrs[2].location = 2; attrs[2].format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4;
+        attrs[2].offset   = offsetof(sprite_vertex, r);
+        attrs[3].location = 3; attrs[3].format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4;
+        attrs[3].offset   = offsetof(sprite_vertex, cr);
+    }
+
+    SDL_GPUColorTargetBlendState blend;
+    fill_blend_state(BLEND_ALPHA, &blend);
+
+    SDL_GPUColorTargetDescription color_target;
+    SDL_zero(color_target);
+    color_target.format      = color_fmt;
+    color_target.blend_state = blend;
+
+    SDL_GPUGraphicsPipelineCreateInfo info;
+    SDL_zero(info);
+    info.vertex_shader   = vs;
+    info.fragment_shader = fs;
+    info.primitive_type  = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST;
+
+    info.vertex_input_state.vertex_buffer_descriptions = &vbuf_desc;
+    info.vertex_input_state.num_vertex_buffers         = 1;
+    info.vertex_input_state.vertex_attributes          = attrs;
+    info.vertex_input_state.num_vertex_attributes      = 4;
+
+    info.rasterizer_state.fill_mode  = SDL_GPU_FILLMODE_FILL;
+    info.rasterizer_state.cull_mode  = SDL_GPU_CULLMODE_NONE;
+    info.rasterizer_state.front_face = SDL_GPU_FRONTFACE_COUNTER_CLOCKWISE;
+
+    info.target_info.color_target_descriptions = &color_target;
+    info.target_info.num_color_targets         = 1;
+    info.target_info.has_depth_stencil_target  = false;
+
+    return SDL_CreateGPUGraphicsPipeline(g_sdl.device, &info);
 }
 
 // Build the persistent batch buffers and the 1x1 white texture. The index buffer is filled once
@@ -1287,6 +1369,62 @@ static b8 create_postprocess_pipelines(void)
     SDL_ReleaseGPUShader(g_sdl.device, fs_heat_map);
     if (!g_sdl.pipeline_heat_map_halfres) { BS_LOG_FATAL("create_postprocess_pipelines: heat_map halfres pipeline failed"); SDL_ReleaseGPUShader(g_sdl.device, vs); return FALSE; }
 
+    // God-ray pass pipelines. Source/blur/composite are fullscreen posts into offscreen-format
+    // targets; the two silhouette pipelines re-use the sprite/mapped vertex shaders so they can
+    // re-draw the already-uploaded batch vertices with an alpha-only silhouette fragment.
+    SDL_GPUShader* fs_godray_source = load_shader(g_sdl.device, "godray_source", "frag",
+                                                   SDL_GPU_SHADERSTAGE_FRAGMENT, 0, 1);
+    if (!fs_godray_source) { SDL_ReleaseGPUShader(g_sdl.device, vs); return FALSE; }
+    g_sdl.pipeline_godray_source = create_postprocess_pipeline(vs, fs_godray_source, offscreen_fmt);
+    SDL_ReleaseGPUShader(g_sdl.device, fs_godray_source);
+    if (!g_sdl.pipeline_godray_source) { BS_LOG_FATAL("create_postprocess_pipelines: godray_source failed"); SDL_ReleaseGPUShader(g_sdl.device, vs); return FALSE; }
+
+    SDL_GPUShader* fs_godray_blur = load_shader(g_sdl.device, "godray_blur", "frag",
+                                                 SDL_GPU_SHADERSTAGE_FRAGMENT, 1, 1);
+    if (!fs_godray_blur) { SDL_ReleaseGPUShader(g_sdl.device, vs); return FALSE; }
+    g_sdl.pipeline_godray_blur = create_postprocess_pipeline(vs, fs_godray_blur, offscreen_fmt);
+    SDL_ReleaseGPUShader(g_sdl.device, fs_godray_blur);
+    if (!g_sdl.pipeline_godray_blur) { BS_LOG_FATAL("create_postprocess_pipelines: godray_blur failed"); SDL_ReleaseGPUShader(g_sdl.device, vs); return FALSE; }
+
+    SDL_GPUShader* fs_godray_composite = load_shader(g_sdl.device, "godray_composite", "frag",
+                                                      SDL_GPU_SHADERSTAGE_FRAGMENT, 1, 0);
+    if (!fs_godray_composite) { SDL_ReleaseGPUShader(g_sdl.device, vs); return FALSE; }
+    g_sdl.pipeline_godray_composite = create_additive_postprocess_pipeline(vs, fs_godray_composite, offscreen_fmt);
+    SDL_ReleaseGPUShader(g_sdl.device, fs_godray_composite);
+    if (!g_sdl.pipeline_godray_composite) { BS_LOG_FATAL("create_postprocess_pipelines: godray_composite failed"); SDL_ReleaseGPUShader(g_sdl.device, vs); return FALSE; }
+
+    SDL_GPUShader* vs_sprite_sil = load_shader(g_sdl.device, "sprite", "vert",
+                                                SDL_GPU_SHADERSTAGE_VERTEX, 0, 1);
+    SDL_GPUShader* fs_sprite_sil = load_shader(g_sdl.device, "godray_silhouette", "frag",
+                                                SDL_GPU_SHADERSTAGE_FRAGMENT, 1, 0);
+    if (!vs_sprite_sil || !fs_sprite_sil)
+    {
+        if (vs_sprite_sil) SDL_ReleaseGPUShader(g_sdl.device, vs_sprite_sil);
+        if (fs_sprite_sil) SDL_ReleaseGPUShader(g_sdl.device, fs_sprite_sil);
+        SDL_ReleaseGPUShader(g_sdl.device, vs);
+        return FALSE;
+    }
+    g_sdl.pipeline_godray_sil = create_godray_silhouette_pipeline(vs_sprite_sil, fs_sprite_sil, offscreen_fmt, FALSE);
+    SDL_ReleaseGPUShader(g_sdl.device, vs_sprite_sil);
+    SDL_ReleaseGPUShader(g_sdl.device, fs_sprite_sil);
+    if (!g_sdl.pipeline_godray_sil) { BS_LOG_FATAL("create_postprocess_pipelines: godray_sil failed: %s", SDL_GetError()); SDL_ReleaseGPUShader(g_sdl.device, vs); return FALSE; }
+
+    SDL_GPUShader* vs_mapped_sil = load_shader(g_sdl.device, "mapped_sprite", "vert",
+                                                SDL_GPU_SHADERSTAGE_VERTEX, 0, 1);
+    SDL_GPUShader* fs_mapped_sil = load_shader(g_sdl.device, "godray_mapped_silhouette", "frag",
+                                                SDL_GPU_SHADERSTAGE_FRAGMENT, 2, 1);
+    if (!vs_mapped_sil || !fs_mapped_sil)
+    {
+        if (vs_mapped_sil) SDL_ReleaseGPUShader(g_sdl.device, vs_mapped_sil);
+        if (fs_mapped_sil) SDL_ReleaseGPUShader(g_sdl.device, fs_mapped_sil);
+        SDL_ReleaseGPUShader(g_sdl.device, vs);
+        return FALSE;
+    }
+    g_sdl.pipeline_godray_sil_mapped = create_godray_silhouette_pipeline(vs_mapped_sil, fs_mapped_sil, offscreen_fmt, TRUE);
+    SDL_ReleaseGPUShader(g_sdl.device, vs_mapped_sil);
+    SDL_ReleaseGPUShader(g_sdl.device, fs_mapped_sil);
+    if (!g_sdl.pipeline_godray_sil_mapped) { BS_LOG_FATAL("create_postprocess_pipelines: godray_sil_mapped failed: %s", SDL_GetError()); SDL_ReleaseGPUShader(g_sdl.device, vs); return FALSE; }
+
     SDL_ReleaseGPUShader(g_sdl.device, vs);
     return TRUE;
 }
@@ -1600,6 +1738,11 @@ void sdlgpu_backend_shutdown(struct renderer_backend* backend)
     if (g_sdl.pipeline_planetsurface_swapchain) SDL_ReleaseGPUGraphicsPipeline(g_sdl.device, g_sdl.pipeline_planetsurface_swapchain);
     if (g_sdl.pipeline_composite) SDL_ReleaseGPUGraphicsPipeline(g_sdl.device, g_sdl.pipeline_composite);
     if (g_sdl.pipeline_heat_map_halfres) SDL_ReleaseGPUGraphicsPipeline(g_sdl.device, g_sdl.pipeline_heat_map_halfres);
+    if (g_sdl.pipeline_godray_source)     SDL_ReleaseGPUGraphicsPipeline(g_sdl.device, g_sdl.pipeline_godray_source);
+    if (g_sdl.pipeline_godray_sil)        SDL_ReleaseGPUGraphicsPipeline(g_sdl.device, g_sdl.pipeline_godray_sil);
+    if (g_sdl.pipeline_godray_sil_mapped) SDL_ReleaseGPUGraphicsPipeline(g_sdl.device, g_sdl.pipeline_godray_sil_mapped);
+    if (g_sdl.pipeline_godray_blur)       SDL_ReleaseGPUGraphicsPipeline(g_sdl.device, g_sdl.pipeline_godray_blur);
+    if (g_sdl.pipeline_godray_composite)  SDL_ReleaseGPUGraphicsPipeline(g_sdl.device, g_sdl.pipeline_godray_composite);
     if (g_sdl.pipeline_mapped) SDL_ReleaseGPUGraphicsPipeline(g_sdl.device, g_sdl.pipeline_mapped);
     if (g_sdl.pipeline_mapped_offscreen) SDL_ReleaseGPUGraphicsPipeline(g_sdl.device, g_sdl.pipeline_mapped_offscreen);
 
@@ -1682,6 +1825,7 @@ b8 sdlgpu_backend_begin_frame(struct renderer_backend* backend, f32 dt)
     g_sdl.planetsurface_queue_count = 0; // reset planet surface queue
     g_sdl.heat_map_set          = FALSE; // reset heat map; game must re-submit each frame
     g_sdl.nebula_set            = FALSE; // reset nebula layer; game must re-submit each frame
+    g_sdl.godray_set            = FALSE; // reset god rays; game must re-submit each frame
     g_sdl.streak_source_set     = FALSE; // source must be resubmitted each frame
 
     // Begin the ImGui frame here, AFTER a command buffer is secured, so the game can build
@@ -2105,6 +2249,14 @@ void sdlgpu_backend_draw_nebula(struct renderer_backend* backend, const bs_nebul
     if (!params) return;
     g_sdl.nebula_params = *params;
     g_sdl.nebula_set    = TRUE;
+}
+
+void sdlgpu_backend_draw_godrays(struct renderer_backend* backend, const bs_godray_params* params)
+{
+    (void)backend;
+    if (!params) return;
+    g_sdl.godray_params = *params;
+    g_sdl.godray_set    = TRUE;
 }
 
 void sdlgpu_backend_draw_sprite(struct renderer_backend* backend, const bs_sprite* sprite)
@@ -2696,10 +2848,19 @@ b8 sdlgpu_backend_end_frame(struct renderer_backend* backend, f32 dt)
 
         // Scene point lights (thruster burns, muzzle flashes, editor lights) shade the hull
         // maps per-pixel. The portrait pass (vp_override != NULL) deliberately stays
-        // point-light-free: it renders the inspected hull in a neutral studio look, same as
-        // draw_sprite_batch's fullbright flag.
+        // point-light-free AND backlit-free (star_color/backlit stay zeroed from SDL_zero):
+        // it renders the inspected hull in a neutral studio look, same as draw_sprite_batch's
+        // fullbright flag.
         if (!vp_override)
         {
+            // Backlit sun term (god-ray companion): star colour and strengths from the batch's
+            // first sprite (all ships share one star this frame, same convention as light_dir).
+            lit.star_color[0] = first.light_color.r;
+            lit.star_color[1] = first.light_color.g;
+            lit.star_color[2] = first.light_color.b;
+            lit.star_color[3] = 1.0f;
+            lit.backlit[0]    = first.backlit_transmission;
+            lit.backlit[1]    = first.backlit_rim;
             lit.tuning[2] = (f32)g_sdl.light_count;
             for (u32 li = 0; li < g_sdl.light_count; ++li)
             {
@@ -2994,6 +3155,11 @@ b8 sdlgpu_backend_end_frame(struct renderer_backend* backend, f32 dt)
     b8 use_offscreen = g_sdl.scene_rt && g_sdl.bloom_a && g_sdl.bloom_b;
     b8 need_bloom    = g_sdl.bloom_enabled;
     b8 need_streak   = g_sdl.streak_enabled && aux_count > 0;
+    // God rays render into scene_rt via the bloom scratch targets, so they exist only on the
+    // offscreen path (on the RGBA8 fallback they force it, same as the frost below).
+    b8 need_godray   = g_sdl.godray_set && g_sdl.godray_params.intensity > 0.0f &&
+                       g_sdl.pipeline_godray_source && g_sdl.pipeline_godray_blur &&
+                       g_sdl.pipeline_godray_composite;
     // The frosted-glass UI backdrop samples a blurred copy of scene_rt, which is only populated on the
     // offscreen path. Force that path whenever the UI frost is active so the effect works even with
     // bloom/streak disabled (the composite handles zero bloom/streak intensity, same as the streak path).
@@ -3005,7 +3171,7 @@ b8 sdlgpu_backend_end_frame(struct renderer_backend* backend, f32 dt)
     // the UI frost happened to be active. The composite is also the only place the tone map
     // runs, so skipping it would ship raw HDR values into an 8-bit swapchain and blow out
     // every bright pixel. Cost: one extra fullscreen pass per frame even with bloom off.
-    if (use_offscreen && (g_sdl.hdr_enabled || need_bloom || need_streak || need_frost))
+    if (use_offscreen && (g_sdl.hdr_enabled || need_bloom || need_streak || need_frost || need_godray))
     {
         // ---- PASS 1: game-world sprites -> scene_rt -------------------------------------------
         SDL_GPUColorTargetInfo scene_target;
@@ -3116,6 +3282,164 @@ b8 sdlgpu_backend_end_frame(struct renderer_backend* backend, f32 dt)
         draw_calls += draw_sprite_batch(TRUE, g_sdl.batch, g_sdl.batch_count, aux_count, msplit, bloom_split, NULL, FALSE);
         SDL_EndGPURenderPass(g_sdl.pass);
         g_sdl.pass = NULL;
+
+        // ---- GODRAY PASSES: occlusion -> radial march -> additive composite -----------------
+        // bloom_a/b are free until the bloom extract below, so the pass borrows them as scratch
+        // (same trick as the frost fill). Runs BEFORE the extract so hot shafts feed bloom and
+        // go through the tone map like any other scene content.
+        if (need_godray)
+        {
+            const bs_godray_params& gp = g_sdl.godray_params;
+
+            // Occlusion buffer (half-res bloom_a): the sun disc + halo written fullscreen, then
+            // darkened by the hull silhouettes. The silhouette draws re-use this frame's already
+            // uploaded batch vertices with the scene camera, so occluders match the drawn scene
+            // exactly (the half-res target just downsamples the same NDC content).
+            SDL_GPUColorTargetInfo occ_target;
+            SDL_zero(occ_target);
+            occ_target.texture  = g_sdl.bloom_a;
+            occ_target.load_op  = SDL_GPU_LOADOP_DONT_CARE; // source pass writes every pixel
+            occ_target.store_op = SDL_GPU_STOREOP_STORE;
+            g_sdl.pass = SDL_BeginGPURenderPass(g_sdl.cmd, &occ_target, 1, NULL);
+
+            SDL_BindGPUGraphicsPipeline(g_sdl.pass, g_sdl.pipeline_godray_source);
+            float su[12];
+            su[0] = gp.screen_pos.x;         su[1] = gp.screen_pos.y;
+            su[2] = gp.sun_radius;           su[3] = gp.halo_scale;
+            su[4] = gp.color.r;              su[5] = gp.color.g;
+            su[6] = gp.color.b;              su[7] = 1.0f;
+            su[8] = (f32)g_sdl.swap_width;   su[9] = (f32)g_sdl.swap_height;
+            su[10] = 0.0f;                   su[11] = 0.0f;
+            SDL_PushGPUFragmentUniformData(g_sdl.cmd, 0, su, sizeof(su));
+            SDL_DrawGPUPrimitives(g_sdl.pass, 3, 1, 0, 0);
+
+            Mat4 view_proj = camera2d_view_proj(&g_sdl.camera, (u16)g_sdl.swap_width, (u16)g_sdl.swap_height);
+
+            // Regular-batch occluders: the sorted batch is layer-major, so the authored band is
+            // one contiguous range within the bloom region. Additive runs are skipped — glows
+            // are light, not matter.
+            u32 occ_start = bloom_split;
+            for (u32 i = 0; i < bloom_split; ++i)
+            {
+                u32 layer = (g_sdl.batch[i].sort_key >> 20) & 0xFFFu;
+                if (layer >= gp.occluder_layer_min) { occ_start = i; break; }
+            }
+            u32 occ_end = occ_start;
+            for (u32 i = occ_start; i < bloom_split; ++i)
+            {
+                u32 layer = (g_sdl.batch[i].sort_key >> 20) & 0xFFFu;
+                if (layer > gp.occluder_layer_max) break;
+                occ_end = i + 1;
+            }
+            if (occ_end > occ_start && g_sdl.pipeline_godray_sil)
+            {
+                SDL_BindGPUGraphicsPipeline(g_sdl.pass, g_sdl.pipeline_godray_sil);
+                SDL_PushGPUVertexUniformData(g_sdl.cmd, 0, &view_proj, sizeof(Mat4));
+                SDL_GPUBufferBinding vbind; SDL_zero(vbind);
+                vbind.buffer = g_sdl.vbuffer;
+                SDL_BindGPUVertexBuffers(g_sdl.pass, 0, &vbind, 1);
+                SDL_GPUBufferBinding ibind; SDL_zero(ibind);
+                ibind.buffer = g_sdl.ibuffer;
+                SDL_BindGPUIndexBuffer(g_sdl.pass, &ibind, SDL_GPU_INDEXELEMENTSIZE_16BIT);
+
+                u32 run_start = occ_start;
+                while (run_start < occ_end)
+                {
+                    u32        run_texid = g_sdl.batch[run_start].sort_key & 0x3FFFFu;
+                    EBlendMode run_blend = g_sdl.batch[run_start].sprite.blend;
+                    u32 run_end = run_start + 1;
+                    while (run_end < occ_end &&
+                           (g_sdl.batch[run_end].sort_key & 0x3FFFFu) == run_texid &&
+                           g_sdl.batch[run_end].sprite.blend == run_blend)
+                        ++run_end;
+                    if (run_blend != BLEND_ADDITIVE)
+                    {
+                        gpu_texture* slot = &g_sdl.textures[run_texid - 1u];
+                        SDL_GPUTexture* tex = (slot->in_use && slot->tex) ? slot->tex
+                            : g_sdl.textures[(g_sdl.white_texture.id & 0x3FFFFu) - 1u].tex;
+                        SDL_GPUTextureSamplerBinding sil_tsb;
+                        sil_tsb.texture = tex; sil_tsb.sampler = g_sdl.sampler;
+                        SDL_BindGPUFragmentSamplers(g_sdl.pass, 0, &sil_tsb, 1);
+                        SDL_DrawGPUIndexedPrimitives(g_sdl.pass, (run_end - run_start) * 6u, 1,
+                                                     (aux_count + run_start) * 6u, 0, 0);
+                        ++draw_calls;
+                    }
+                    run_start = run_end;
+                }
+            }
+
+            // Mapped hulls always occlude, with the depth map deciding how much thin structure
+            // leaks. Main mapped region only (vbase 0); portraits never reach this pass.
+            if (g_sdl.mapped_batch_count > 0 && g_sdl.pipeline_godray_sil_mapped)
+            {
+                SDL_BindGPUGraphicsPipeline(g_sdl.pass, g_sdl.pipeline_godray_sil_mapped);
+                SDL_PushGPUVertexUniformData(g_sdl.cmd, 0, &view_proj, sizeof(Mat4));
+                float mu[4] = { gp.transmission, 0.0f, 0.0f, 0.0f };
+                SDL_PushGPUFragmentUniformData(g_sdl.cmd, 0, mu, sizeof(mu));
+                SDL_GPUBufferBinding vbind; SDL_zero(vbind);
+                vbind.buffer = g_sdl.mapped_vbuffer;
+                SDL_BindGPUVertexBuffers(g_sdl.pass, 0, &vbind, 1);
+                SDL_GPUBufferBinding ibind; SDL_zero(ibind);
+                ibind.buffer = g_sdl.mapped_ibuffer;
+                SDL_BindGPUIndexBuffer(g_sdl.pass, &ibind, SDL_GPU_INDEXELEMENTSIZE_16BIT);
+                SDL_GPUTexture* white_tex = g_sdl.textures[(g_sdl.white_texture.id & 0x3FFFFu) - 1u].tex;
+                for (u32 i = 0; i < g_sdl.mapped_batch_count; ++i)
+                {
+                    const bs_mapped_sprite& ms = g_sdl.mapped_batch[i];
+                    gpu_texture* dslot = pool_resolve_texture(ms.diffuse_map);
+                    gpu_texture* hslot = pool_resolve_texture(ms.depth_map);
+                    SDL_GPUTextureSamplerBinding sil_tsb[2];
+                    SDL_zero(sil_tsb);
+                    sil_tsb[0].texture = (dslot && dslot->tex) ? dslot->tex : white_tex;
+                    sil_tsb[0].sampler = g_sdl.sampler;
+                    sil_tsb[1].texture = (hslot && hslot->tex) ? hslot->tex : white_tex;
+                    sil_tsb[1].sampler = g_sdl.sampler;
+                    SDL_BindGPUFragmentSamplers(g_sdl.pass, 0, sil_tsb, 2);
+                    SDL_DrawGPUIndexedPrimitives(g_sdl.pass, 6, 1, i * 6u, 0, 0);
+                    ++draw_calls;
+                }
+            }
+            SDL_EndGPURenderPass(g_sdl.pass);
+            g_sdl.pass = NULL;
+
+            // Radial march bloom_a -> bloom_b, smearing surviving sun light away from the sun.
+            SDL_GPUColorTargetInfo blur_target;
+            SDL_zero(blur_target);
+            blur_target.texture  = g_sdl.bloom_b;
+            blur_target.load_op  = SDL_GPU_LOADOP_DONT_CARE;
+            blur_target.store_op = SDL_GPU_STOREOP_STORE;
+            g_sdl.pass = SDL_BeginGPURenderPass(g_sdl.cmd, &blur_target, 1, NULL);
+            SDL_BindGPUGraphicsPipeline(g_sdl.pass, g_sdl.pipeline_godray_blur);
+            SDL_GPUTextureSamplerBinding godray_tsb;
+            SDL_zero(godray_tsb);
+            godray_tsb.texture = g_sdl.bloom_a;
+            godray_tsb.sampler = g_sdl.sampler_linear;
+            SDL_BindGPUFragmentSamplers(g_sdl.pass, 0, &godray_tsb, 1);
+            float bu[8];
+            bu[0] = gp.screen_pos.x / (f32)g_sdl.swap_width;
+            bu[1] = gp.screen_pos.y / (f32)g_sdl.swap_height;
+            bu[2] = gp.density;   bu[3] = gp.decay;
+            bu[4] = gp.exposure;  bu[5] = gp.intensity;
+            bu[6] = 0.0f;         bu[7] = 0.0f;
+            SDL_PushGPUFragmentUniformData(g_sdl.cmd, 0, bu, sizeof(bu));
+            SDL_DrawGPUPrimitives(g_sdl.pass, 3, 1, 0, 0);
+            SDL_EndGPURenderPass(g_sdl.pass);
+            g_sdl.pass = NULL;
+
+            // Additive upscale bloom_b -> scene_rt.
+            SDL_GPUColorTargetInfo add_target;
+            SDL_zero(add_target);
+            add_target.texture  = g_sdl.scene_rt;
+            add_target.load_op  = SDL_GPU_LOADOP_LOAD;
+            add_target.store_op = SDL_GPU_STOREOP_STORE;
+            g_sdl.pass = SDL_BeginGPURenderPass(g_sdl.cmd, &add_target, 1, NULL);
+            SDL_BindGPUGraphicsPipeline(g_sdl.pass, g_sdl.pipeline_godray_composite);
+            godray_tsb.texture = g_sdl.bloom_b;
+            SDL_BindGPUFragmentSamplers(g_sdl.pass, 0, &godray_tsb, 1);
+            SDL_DrawGPUPrimitives(g_sdl.pass, 3, 1, 0, 0);
+            SDL_EndGPURenderPass(g_sdl.pass);
+            g_sdl.pass = NULL;
+        }
 
         // ---- PASS 1b: aux sprites -> aux_bloom_a (clear black, additive) --------------------
         if (aux_count > 0)

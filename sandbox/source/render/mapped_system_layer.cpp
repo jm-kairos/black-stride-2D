@@ -3,6 +3,7 @@
 // Explicit peer module includes (no longer via the game.h cascade).
 #include "core/view_transform.h"    // view transforms
 #include "sim/celestial_parallax.h" // celestial_center_render
+#include "core/render_layers.h"     // god-ray occluder band (LAYER_SHIP)
 #include "render/star_fx.h"
 #include <math/bs_hierpos.h>
 #include <renderer/camera2d.h>
@@ -162,6 +163,31 @@ void MappedSystemLayer::draw(const Camera2D& cam, u16 fb_w, u16 fb_h,
         star_fx->draw_star(ss, star_world, star_screen, scaled_r, screen_radius, vis * occ_w,
                            gs->galaxy.galaxy_map_time, id, fb_w, fb_h, total_scale, aux_world_pos);
         renderer_set_aux_bloom_mode(FALSE);
+
+        // ---- Volumetric sun shafts (god rays) ------------------------------------------
+        // Submitted HERE, next to the streak source, so the shafts share the drawn star's
+        // exact parallaxed screen position, hero-floor sizing and sensor fade. The engine
+        // re-draws this frame's hull sprites (LAYER_SHIP band) plus the mapped hulls as
+        // silhouettes into an occlusion buffer, so the fleet blocks the sun and thin
+        // superstructure leaks it through the depth map. Faded by arena weight like the
+        // rest of this layer: the deep-map look keeps its existing volumetric star light.
+        {
+            f32 sun_px = screen_radius * (star_fx->star_3d_mode ? star_fx->star_body_scale : 1.0f);
+            bs_godray_params gr{};
+            gr.screen_pos         = star_screen;
+            gr.sun_radius         = fmaxf(sun_px, 8.0f);
+            gr.halo_scale         = star_fx->godray_halo;
+            gr.color              = ss.star.color;
+            gr.intensity          = star_fx->godray_intensity * vis * arena_a;
+            gr.density            = star_fx->godray_density;
+            gr.decay              = star_fx->godray_decay;
+            gr.exposure           = star_fx->godray_exposure;
+            gr.occluder_layer_min = LAYER_SHIP;
+            gr.occluder_layer_max = LAYER_SHIP;
+            gr.transmission       = star_fx->godray_transmission;
+            if (gr.intensity > 0.003f)
+                renderer_draw_godrays(&gr);
+        }
     }
     // ---- Planets: true world positions ----
     // Editor-gated (celestial_draw_planets) alongside the map renderer's planet pass.

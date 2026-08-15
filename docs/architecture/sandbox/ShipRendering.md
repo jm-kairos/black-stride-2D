@@ -130,7 +130,13 @@ with it. A new *procedural* mount art kind still follows `draw_turret` /
 **Source paths:** `sandbox/source/render/ship_scene.{cpp,h}`,
 `sandbox/source/render/ship_render.{cpp,h}`
 
-**Last verified:** 2026-08-15, working tree on `game` (same day, latest: the portrait well grows
+**Last verified:** 2026-08-15, working tree on `game` (same day, latest: `draw_ship_visual_ex`
+gains a `light_color` parameter — the current system's star colour via `frame_star_color`,
+filled into `bs_mapped_sprite::light_color` for the engine's backlit-sun hull term (thin
+structure transmits, steep slopes rim-glow when backlit — the hull-side companion to the
+god-ray pass); portrait/thumbnail callers pass white, inert because the engine zeroes the
+backlit strengths on the portrait path. Live-verified: stern masts glow warm against the sun,
+portrait unchanged. Earlier: the portrait well grows
 to the WHOLE middle zone — `ship_portrait_rect` now returns a generally NON-square x/y/w/h (the
 zone minus margin, no longer a centred square), the square 1024² target shows through it as an
 RML image decorator with `cover` fit (crops the central band via texcoords; an oversized `<img>`

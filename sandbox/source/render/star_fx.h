@@ -43,6 +43,17 @@ struct StarFxSystem {
     b8  show_planet_editor;    // toggled by the "Planet Properties..." button in the editor panel
     i32 planet_editor_sel_type; // planet type currently shown in the editor window
     b8  planet_use_genome_colors; // ON: per-planet genome palette; OFF: flat per-type editor colour (debug)
+    // ---- Volumetric sun shafts (god rays) + mapped-hull backlight ------------------------
+    // Consumed by mapped_system_layer's bs_godray_params submission and by ship_scene's
+    // bs_mapped_sprite fill (backlit_*). Persisted in planet_editor.cfg (the "g" line).
+    f32 godray_intensity;     // overall shaft brightness (0 disables the pass)
+    f32 godray_density;       // ray-march reach: fraction of the pixel->sun distance (0..1]
+    f32 godray_decay;         // per-tap energy falloff (0.9..1.0)
+    f32 godray_exposure;      // final gain applied after the march
+    f32 godray_halo;          // source halo reach in disc radii (softens shaft roots)
+    f32 godray_transmission;  // hull depth-map leak in the occluder (0 = alpha-only block)
+    f32 backlit_transmission; // mapped-hull backlit: thin-structure glow strength
+    f32 backlit_rim;          // mapped-hull backlit: steep-slope rim strength
     // Real-time GPU procedural star-surface tunables (3D mode uses the star_surface shader)
     f32 surf_noise_scale;      // granulation cell frequency
     f32 surf_flow_speed;       // convection animation speed

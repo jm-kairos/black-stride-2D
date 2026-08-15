@@ -34,6 +34,7 @@ b8 renderer_backend_create(ERendererBackend type, renderer_backend* out_backend)
             out_backend->draw_planetsurface = sdlgpu_backend_draw_planetsurface;
             out_backend->draw_heat_map = sdlgpu_backend_draw_heat_map;
             out_backend->draw_nebula = sdlgpu_backend_draw_nebula;
+            out_backend->draw_godrays = sdlgpu_backend_draw_godrays;
             out_backend->set_lights = sdlgpu_backend_set_lights;
             out_backend->set_glow_params = sdlgpu_backend_set_glow_params;
             out_backend->set_bloom_enabled = sdlgpu_backend_set_bloom_enabled;
@@ -77,6 +78,7 @@ void renderer_backend_destroy(renderer_backend* backend)
     backend->draw_planetsurface = 0;
     backend->draw_heat_map = 0;
     backend->draw_nebula = 0;
+    backend->draw_godrays = 0;
     backend->set_lights = 0;
     backend->set_glow_params = 0;
     backend->set_bloom_enabled = 0;

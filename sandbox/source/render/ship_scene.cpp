@@ -92,8 +92,18 @@ static b8 arsenal_drag_fits(const Ship& fs, const Ship& pool, i32 kind, i32 src,
     }
 }
 
-static void draw_ship_visual_ex(const Ship* ship, f32 alpha, bs_math::Vec3 light_dir,
-                                bs_color tint, EBlendMode blend, bs_color custom) {
+// Star light colour for the mapped-hull backlit term: the current system's star, or a warm
+// white fallback when no system is resolved. The engine zeroes the backlit strengths on the
+// portrait path, so portrait callers can pass anything.
+static bs_color frame_star_color(const game_state* s) {
+    if (s->galaxy.current_system >= 0 && s->galaxy.current_system < s->galaxy.system_count)
+        return s->galaxy.systems[s->galaxy.current_system].star.color;
+    return bs_color{ 1.0f, 0.95f, 0.85f, 1.0f };
+}
+
+static void draw_ship_visual_ex(const game_state* s, const Ship* ship, f32 alpha,
+                                bs_math::Vec3 light_dir, bs_color tint, EBlendMode blend,
+                                bs_color custom) {
     if (!ship || alpha <= 0.001f) return;
     for (i32 i = 0; i < ship->visual.layer_count; ++i) {
         const VisualLayer& vl = ship->visual.layers[i];
@@ -131,15 +141,21 @@ static void draw_ship_visual_ex(const Ship* ship, f32 alpha, bs_math::Vec3 light
             mp.normal_map   = vl.normal_map;
             mp.depth_map    = vl.depth_map;
             mp.position_map = vl.position_map;
-            mp.light_dir = light_dir;
+            mp.light_dir   = light_dir;
+            // Backlit-sun inputs (scene-global): star colour + editor strengths. Inert on the
+            // portrait path — the engine zeroes the backlit term there (studio look).
+            mp.light_color          = frame_star_color(s);
+            mp.backlit_transmission = s->render.star_fx.backlit_transmission;
+            mp.backlit_rim          = s->render.star_fx.backlit_rim;
             mp.layer    = LAYER_SHIP + vl.z;
             renderer_draw_mapped_sprite(&mp);
         }
     }
 }
 
-static inline void draw_ship_visual(const Ship* ship, f32 alpha, bs_math::Vec3 light_dir) {
-    draw_ship_visual_ex(ship, alpha, light_dir,
+static inline void draw_ship_visual(const game_state* s, const Ship* ship, f32 alpha,
+                                    bs_math::Vec3 light_dir) {
+    draw_ship_visual_ex(s, ship, alpha, light_dir,
                         bs_color{ 1.0f, 1.0f, 1.0f, 1.0f }, BLEND_ALPHA,
                         bs_color{ 1.0f, 0.0f, 0.0f, 0.0f });
 }
@@ -165,7 +181,7 @@ static void draw_enemy_ship_sensor(game_state* s) {
     }
     // Real sprite, visible inside the sensor range.
     if (vis > 0.001f) {
-        draw_ship_visual(enemy, vis, light_dir);
+        draw_ship_visual(s, enemy, vis, light_dir);
         draw_ship_mounts(enemy, s->elapsed_time, vis);
     }
     // Interference effect is rendered by the dedicated subsystem.
@@ -481,7 +497,7 @@ void draw_ship_scene(game_state* s) {
             light_dir = bs_math::Vec3{ d.x, d.y, 0.2f };
         }
 
-        draw_ship_visual(ship, 1.0f, light_dir);
+        draw_ship_visual(s, ship, 1.0f, light_dir);
         draw_ship_mounts(ship, s->elapsed_time, 1.0f);
         draw_engine_exhaust(ship, &fs.flight, s->render.exhaust_plume_texture,
                             s->render.exhaust_core_texture,
@@ -508,7 +524,7 @@ void draw_ship_scene(game_state* s) {
         f32 sd = vec2_length(to_star);
         bs_math::Vec3 ld = fleet_light_dir;
         if (sd > 0.001f) { bs_math::Vec2 d = vec2_scale(to_star, 1.0f / sd); ld = bs_math::Vec3{ d.x, d.y, 0.2f }; }
-        draw_ship_visual_ex(&n.ship, 1.0f, ld, tint, BLEND_ALPHA, bs_color{ 1.0f, 0.0f, 0.0f, 0.0f });
+        draw_ship_visual_ex(s, &n.ship, 1.0f, ld, tint, BLEND_ALPHA, bs_color{ 1.0f, 0.0f, 0.0f, 0.0f });
         draw_engine_exhaust(&n.ship, &n.flight, s->render.exhaust_plume_texture,
                             s->render.exhaust_core_texture,
                             s->render.exhaust_texture, &s->render.exhaust_glow,
@@ -621,7 +637,7 @@ void ship_portrait_submit(game_state* s) {
     renderer_portrait_begin(pcam);
     // Fixed studio key light for the normal-mapped hull layers, independent of the star.
     bs_math::Vec3 studio_light = bs_math::Vec3{ -0.38f, -0.45f, 0.81f };
-    draw_ship_visual_ex(ship, 1.0f, studio_light,
+    draw_ship_visual_ex(s, ship, 1.0f, studio_light,
                         bs_color{ 1.0f, 1.0f, 1.0f, 1.0f }, BLEND_ALPHA,
                         bs_color{ 1.0f, 0.0f, 0.0f, 0.0f });
     draw_ship_mounts(ship, s->elapsed_time, 1.0f);
@@ -647,7 +663,7 @@ void ship_portrait_submit(game_state* s) {
     for (i32 i = 0; i < s->fleet_state.fleet.count() && i < 8; ++i) {
         Ship* member = &s->fleet_state.fleet.at(i).ship;
         renderer_thumb_begin(i, portrait_fit_camera(member, THUMB_PX));
-        draw_ship_visual_ex(member, 1.0f, studio_light,
+        draw_ship_visual_ex(s, member, 1.0f, studio_light,
                             bs_color{ 1.0f, 1.0f, 1.0f, 1.0f }, BLEND_ALPHA,
                             bs_color{ 1.0f, 0.0f, 0.0f, 0.0f });
         draw_ship_mounts(member, s->elapsed_time, 1.0f);

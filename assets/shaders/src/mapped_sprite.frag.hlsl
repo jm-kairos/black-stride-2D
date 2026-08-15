@@ -15,6 +15,8 @@ cbuffer LightUBO : register(b0, space3)
     float4 light_dir;  // xyz = star direction, w = intensity
     float4 ambient;
     float4 tuning;     // x = normal strength, y = depth parallax scale, z = point light count
+    float4 star_color; // rgb = star light colour for the backlit term
+    float4 backlit;    // x = transmission strength, y = rim strength (both 0 for portraits)
     float4 light_pos_radius[BS_MAX_LIGHTS]; // xy = world position, z = radius, w = intensity
     float4 light_color[BS_MAX_LIGHTS];      // rgb = light color, w = per-light enabled (0 = off)
 };
@@ -92,7 +94,19 @@ float4 main(PSInput input) : SV_Target0
         acc += light_color[i].rgb * (direct * light_pos_radius[i].w * ndl);
     }
 
-    float3 lit = diffuse.rgb * acc;
+    // Backlit sun (god-ray companion): when the star shines from behind this fragment's
+    // surface, LOW thin structure transmits a warm glow — the same height-field thinness the
+    // god-ray occluder leaks light through — and steep slopes catch a rim wrap, so masts and
+    // greebles light up against the shafts while tall hull blocks stay dark. Strengths are
+    // zeroed by the backend for the portrait pass (studio look).
+    float backlight = saturate(-dot(n, L));
+    float height01  = saturate((depth - 0.25) / 0.5); // extractor compresses to 0.25..0.75
+    float thin      = 1.0 - height01;
+    float slope     = saturate(length(normal.xy));
+    float3 backlit_glow = star_color.rgb * backlight *
+                          (backlit.x * thin * thin + backlit.y * slope * slope);
+
+    float3 lit = diffuse.rgb * acc + backlit_glow;
 
     return float4(lit, diffuse.a);
 }

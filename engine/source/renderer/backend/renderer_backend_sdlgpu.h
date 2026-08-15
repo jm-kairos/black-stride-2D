@@ -35,6 +35,7 @@ void       sdlgpu_backend_draw_starsurface(struct renderer_backend* backend, con
 void       sdlgpu_backend_draw_planetsurface(struct renderer_backend* backend, const bs_planetsurface_params* params);
 void       sdlgpu_backend_draw_heat_map(struct renderer_backend* backend, const bs_heat_map_params* params);
 void       sdlgpu_backend_draw_nebula(struct renderer_backend* backend, const bs_nebula_params* params);
+void       sdlgpu_backend_draw_godrays(struct renderer_backend* backend, const bs_godray_params* params);
 
 // 2D point lights: stored backend-side, packed and pushed as a fragment uniform per draw-run in
 // end_frame. `ambient` is the scene-global floor; `unlit_layer` is the sprite-layer threshold at/

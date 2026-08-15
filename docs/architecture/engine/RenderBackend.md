@@ -135,11 +135,16 @@ deliberate, because that pass is where the tone map converts HDR back to 8 bits.
   star**, filled from the same `g_sdl.lights` the sprite pass packs; the mapped fragment shader
   shades each light per-pixel against the hull's normal map (direction rotated into ship-local
   space like the star, same quadratic radius falloff as `sprite.frag.hlsl`, no volumetric
-  term). The layout MUST stay in sync across three sites: `mapped_light` here, `LightUBO` in
+  term). It also carries `star_color` + `backlit` strengths for the backlit-sun term
+  (transmission through height-field-thin structure + rim wrap on steep slopes when the star
+  opposes the normal — the hull-side companion to the god-ray pass; colour AND strengths from
+  `mapped_batch[0]` (`light_color`, `backlit_transmission`, `backlit_rim` — editor-tuned
+  sandbox-side in CelestialFx). The layout MUST
+  stay in sync across three sites: `mapped_light` here, `LightUBO` in
   `mapped_sprite.frag.hlsl`, and `preview_light_t` in `tools/map_extractor/preview.cpp` (the
-  tool loads the same compiled blobs). The portrait pass (`vp_override != NULL`) deliberately
-  keeps its point-light count at zero — studio look, matching `draw_sprite_batch`'s fullbright
-  flag. Per-pixel light distance needs the fragment's true world position, so the mapped
+  tool loads the same compiled blobs — rebuild it with the shader). The portrait pass
+  (`vp_override != NULL`) deliberately keeps its point-light count at zero AND its backlit
+  strengths at zero — studio look, matching `draw_sprite_batch`'s fullbright flag. Per-pixel light distance needs the fragment's true world position, so the mapped
   vertex shader forwards the raw corner position as a `world_xy` varying (the `world_pos`
   attribute is the sprite CENTER, same for all four corners).
 - `stb_image_impl.cpp` is a build artifact, not a module: it declares nothing, has no includers,
@@ -151,7 +156,23 @@ deliberate, because that pass is where the tone map converts HDR back to 8 bits.
 `engine/source/renderer/renderer_backend.cpp`, and the post-chain shaders under
 `assets/shaders/src/bloom_*.frag.hlsl`
 
-**Last verified:** 2026-08-15, working tree on `game` (same day, later: the mapped batch
+- **The god-ray pass borrows the bloom ping-pong as scratch.** Occlusion (sun disc + hull
+  silhouettes) renders into `bloom_a` at half res, the radial march into `bloom_b`, and an
+  additive upscale into `scene_rt` — all placed between the scene pass and `bloom_extract`,
+  which is what makes the borrow safe and lets hot shafts feed bloom and the tone map. The
+  silhouette pipelines re-draw the frame's already-uploaded sprite/mapped vertex streams with
+  alpha-only fragments (`godray_silhouette`, `godray_mapped_silhouette` — the latter reads
+  diffuse + depth so thin structure transmits); additive sprite runs are skipped as occluders.
+  Godrays force the offscreen path on the RGBA8 fallback, like the UI frost.
+
+**Last verified:** 2026-08-15, working tree on `game` (same day, latest: `mapped_light` grows
+`star_color` + `backlit` for the backlit-sun hull term, zeroed on the portrait path;
+three-site layout sync updated, `map_extractor` rebuilt; live-verified — thin stern masts glow
+warm against the sun while the portrait stays studio-neutral. Earlier: the god-ray pass —
+`bs_godray_params` store + `draw_godrays` vtable entry (35 entries now, both hand-maintained
+lists updated), five pipelines in `create_postprocess_pipelines`, and the
+occlusion → radial-march → additive-composite sequence before bloom extract; live-verified,
+a hull parked at the sun casts a screen-space shadow wedge. Same day, earlier: the mapped batch
 gains the layer interleave — `mapped_layer_split` + three-segment draws at all three sites;
 live-verified via the inspector portrait, whose hardpoint boxes render over the mapped hull
 again. Earlier: the mapped-sprite pass consumes the

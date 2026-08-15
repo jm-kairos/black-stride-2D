@@ -85,6 +85,10 @@ typedef struct renderer_backend
     // Parameters are stored and rendered during end_frame.
     void (*draw_nebula)(struct renderer_backend* backend, const bs_nebula_params* params);
 
+    // Draw volumetric sun shafts (god rays) as a post pass over the HDR scene.
+    // Parameters are stored and rendered during end_frame.
+    void (*draw_godrays)(struct renderer_backend* backend, const bs_godray_params* params);
+
     // Store the editable list of 2D point lights (+ scene-global ambient and the unlit-layer
     // threshold) used by the sprite fragment shader. The backend copies them and pushes the packed
     // block as a fragment uniform per draw-run in end_frame. Lights beyond the backend cap are

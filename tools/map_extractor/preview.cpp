@@ -46,6 +46,8 @@ typedef struct preview_light
     float light_dir[4];  // xyz = direction, w = intensity
     float ambient[4];
     float tuning[4];     // x = normal strength, y = parallax scale, z = point light count
+    float star_color[4]; // rgb = star colour for the backlit term (zeroed: studio look)
+    float backlit[4];    // x = transmission strength, y = rim strength (zeroed: studio look)
     float pos_radius[PREVIEW_MAX_LIGHTS][4];
     float color[PREVIEW_MAX_LIGHTS][4];
 } preview_light_t;

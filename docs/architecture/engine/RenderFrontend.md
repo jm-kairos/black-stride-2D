@@ -98,5 +98,8 @@ RenderBackend.
 `engine/source/renderer/renderer_types.h`, `engine/source/renderer/renderer_backend.h`,
 `engine/source/renderer/camera2d.{cpp,h}`
 
-**Last verified:** 2026-08-12, working tree on `game` (adds the ship-portrait offscreen scopes:
+**Last verified:** 2026-08-15, working tree on `game` (adds `renderer_draw_godrays` +
+`bs_godray_params` — the volumetric sun-shaft post pass, re-submitted per frame like the other
+effect queues; vtable 34 → 35. Same day: `bs_mapped_sprite` gains `light_color`, the star
+colour driving the mapped shader's backlit-sun term). Previously 2026-08-12 (adds the ship-portrait offscreen scopes:
 `renderer_portrait_begin`/`_thumb_begin`/`_end`, vtable 31 → 34)

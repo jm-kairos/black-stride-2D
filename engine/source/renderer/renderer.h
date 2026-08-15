@@ -127,6 +127,11 @@ bs__api__ void renderer_draw_heat_map(const bs_heat_map_params* params);
 // The backend stores the parameters and renders them as a fullscreen alpha-blended overlay during end_frame.
 bs__api__ void renderer_draw_nebula(const bs_nebula_params* params);
 
+// Draw volumetric sun shafts (god rays): hull silhouettes radially blurred away from the sun
+// and added into the HDR scene before bloom. The backend stores one set of parameters and
+// renders during end_frame; cleared each begin_frame, so re-submit every frame.
+bs__api__ void renderer_draw_godrays(const bs_godray_params* params);
+
 // Set the movable 2D point lights applied per-pixel by the sprite shader. The renderer copies the
 // list; re-submit each frame (or whenever it changes). `count == 0` renders the scene fullbright
 // (lighting is opt-in). `ambient` is the scene-global floor added before accumulating lights;

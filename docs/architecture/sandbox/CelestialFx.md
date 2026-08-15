@@ -37,7 +37,11 @@ Used from outside by 3 subsystems.
   50.
 - **`draw_star` is a dispatcher on `star_3d_mode`**, and the two paths take different parameters
   and produce different geometry — so the toggle changes far more than appearance (it also
-  changes how Backdrop computes the min-screen-radius floor and the cull extent).
+  changes how Backdrop computes the min-screen-radius floor and the cull extent). **The 3D
+  sphere is the DEFAULT as of 2026-08-15** (`init()` sets it TRUE); unlike the classic path it
+  has no glow-quad cap and no hero-minimum pinning, so at fleet-spawn zoom the photosphere can
+  fill the whole backdrop — `star_body_scale` (the "Sphere radius" slider) is the size knob.
+  The toggle itself is NOT persisted; the default is the effective value every launch.
 - All four draw methods are `const`, so the object is logically immutable during rendering
   despite driving all of it.
 
@@ -51,12 +55,18 @@ to `bin/planet_editor.cfg` on shutdown and read back on init — the load path m
 older file.
 
 **Known limitations / tech debt:**
-- **It reads and writes a config file at runtime.** `planet_params_load()` runs during `init`
-  and `planet_params_save()` during `shutdown`, persisting to `bin/planet_editor.cfg`. This is
-  the only sandbox module with editor state that survives a restart, and it is why
-  `#define _CRT_SECURE_NO_WARNINGS` sits at the top of the file. *Inferred:* the load path's
-  tolerance for version skew is not documented; I have not verified what happens with a stale or
-  truncated file.
+- **`StarFxSystem::shutdown()` has no caller** (verified 2026-08-15: `init()` is called from
+  `game.cpp`, `shutdown()` from nowhere — the engine boundary has no game-shutdown callback,
+  only init/update/render/on_resize). Consequences: the shutdown-time `planet_params_save()`
+  never runs (planet params persist only via the Planet Editor's explicit "Save to disk"
+  button), and the three radial textures leak at exit (harmless — process teardown). The
+  god-ray/backlight tunables sidestep this with save-on-change in `build_ui`: any slider
+  movement rewrites the cfg immediately.
+- **It reads and writes a config file at runtime.** `planet_params_load()` runs during `init`,
+  persisting to `planet_editor.cfg` in the working directory. This is the only sandbox module
+  with editor state that survives a restart, and it is why `#define _CRT_SECURE_NO_WARNINGS`
+  sits at the top of the file. The god-ray line ("g" prefix) tolerates short/missing lines
+  (defaults hold) and is skipped by older loaders.
 - **A render module owns a substantial editor UI.** `build_ui` and `build_planet_editor` build
   ImGui panels directly through `bs_ui.h` — the same concern-mixing as `sim/galaxy_history.cpp`
   and `core/profiler.cpp`.
@@ -75,4 +85,11 @@ older file.
 
 **Source paths:** `sandbox/source/render/star_fx.{cpp,h}`
 
-**Last verified:** 2026-08-07, commit `812680c`
+**Last verified:** 2026-08-15, working tree on `game` (same day, later: `star_3d_mode` defaults
+TRUE — the 3D procedural sphere is the default star geometry, live-verified from spawn; the
+god-ray sun disc tracks the sphere's `star_body_scale` sizing. Earlier: adds the god-ray +
+hull-backlight tunables: eight `godray_*`/`backlit_*` fields with "Sun Shafts (God Rays)" / "Hull Backlight"
+sliders in `build_ui`, persisted save-on-change to the cfg's "g" line — consumed by Backdrop's
+god-ray submission and ShipRendering's mapped-sprite fill; live-verified, a slider drag
+rewrites the cfg the same frame and the values load back on restart). Previously 2026-08-07,
+commit `812680c`

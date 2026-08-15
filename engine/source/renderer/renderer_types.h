@@ -75,6 +75,9 @@ typedef struct bs_mapped_sprite
     bs_texture    depth_map;     // depth/height map
     bs_texture    position_map;  // position map
     bs_math::Vec3 light_dir;     // normalized directional light direction in world space
+    bs_color      light_color;   // star light colour for the backlit term (rgb; alpha unused)
+    f32           backlit_transmission; // backlit-sun thin-structure glow strength (0 = off)
+    f32           backlit_rim;          // backlit-sun steep-slope rim strength (0 = off)
     u32           layer;         // draw sort key
 } bs_mapped_sprite;
 
@@ -360,4 +363,24 @@ typedef struct bs_nebula_params
     bs_math::Vec2 cam_cell;   // camera-center HierPos2 cell index (exact integers as f32)
     bs_math::Vec2 cam_local;  // camera-center local offset within its cell (world units)
 } bs_nebula_params;
+
+// Parameters for the volumetric sun-shaft (god-ray) post pass. Passed to renderer_draw_godrays;
+// the backend stores one set per frame (cleared in begin_frame — re-submit each frame, like the
+// heat map and nebula). The pass renders the sun plus the hull silhouettes into an occlusion
+// buffer, radially blurs it away from the sun, and additively composites the shafts into the
+// HDR scene before bloom — so hot shafts also feed bloom and the tone map.
+typedef struct bs_godray_params
+{
+    bs_math::Vec2 screen_pos;         // sun centre in screen pixels (top-left origin)
+    f32           sun_radius;         // bright-source disc radius in screen pixels
+    f32           halo_scale;         // source halo reach in disc radii (softens shaft roots)
+    bs_color      color;              // shaft tint (usually the star colour)
+    f32           intensity;          // overall shaft brightness (0 disables the pass)
+    f32           density;            // ray-march reach: fraction of the pixel->sun distance sampled (0..1]
+    f32           decay;              // per-tap energy falloff (0.9..1.0)
+    f32           exposure;           // final gain applied after the march
+    u32           occluder_layer_min; // sprite-batch layer band that blocks the light (inclusive)
+    u32           occluder_layer_max; // (mapped hulls always occlude, independent of this band)
+    f32           transmission;       // 0 = hulls block by alpha only; 1 = low/thin structure leaks light
+} bs_godray_params;
 

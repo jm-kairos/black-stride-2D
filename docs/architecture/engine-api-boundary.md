@@ -45,9 +45,9 @@ could not verify directly is marked as such.
   `BSIMPORT`. The flag is inert.
 - The block carries one comment: `// TODO: Explain this further.` (`defines.h:85`).
 
-**Export surface: 156 `bs__api__` functions across 14 headers, plus 4 `bs__api__`-annotated
+**Export surface: 157 `bs__api__` functions across 14 headers, plus 4 `bs__api__`-annotated
 structs** (`renderer_portrait_begin`/`_thumb_begin`/`_portrait_end` joined `renderer.h`
-2026-08-12). Per-header counts (`grep -c bs__api__`, before those additions):
+2026-08-12; `renderer_draw_godrays` + the by-pointer `bs_godray_params` joined 2026-08-15). Per-header counts (`grep -c bs__api__`, before those additions):
 
 | header | decls | header | decls |
 |---|--:|---|--:|
