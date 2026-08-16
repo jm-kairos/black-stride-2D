@@ -13,6 +13,32 @@ static f32 flak_wrap_pi(f32 a) {
     return a;
 }
 
+// Closed-form intercept: smallest t > 0 with |rel_pos + rel_vel*t| = shell_speed*t -- the
+// time at which a shell fired NOW meets the ordnance; -1 when no such time exists (the
+// ordnance outruns every firing solution from here). This replaces the two-pass fixed-point
+// iterate (aim = pos + vel*tof) the broadside uses: that iterate is a contraction only
+// while the target is SLOWER than the shell, which holds for hulls but never for flak -- a
+// 0.6x shell (6k u/s on the autocannon) engaging a full-speed missile (10k u/s) sits at
+// ratio 1.67, where the iterate DIVERGES. For a head-on missile two passes land pointing
+// 180 degrees AWAY from the threat, can_aim rejected the reversed aim, and the screen
+// silently sat out exactly the attacks it exists to stop.
+static f32 flak_intercept_time(Vec2 rel_pos, Vec2 rel_vel, f32 shell_speed) {
+    f32 a = vec2_dot(rel_vel, rel_vel) - shell_speed * shell_speed;
+    f32 b = 2.0f * vec2_dot(rel_pos, rel_vel);
+    f32 c = vec2_dot(rel_pos, rel_pos);
+    if (fabsf(a) < 1.0e-3f)                        // equal speeds: quadratic degenerates
+        return (b < -1.0e-6f) ? (-c / b) : -1.0f;  // catchable only while closing
+    f32 disc = b * b - 4.0f * a * c;
+    if (disc < 0.0f) return -1.0f;
+    f32 sq = sqrtf(disc);
+    f32 t0 = (-b - sq) / (2.0f * a);
+    f32 t1 = (-b + sq) / (2.0f * a);
+    f32 t  = 1.0e30f;
+    if (t0 > 0.0f) t = t0;
+    if (t1 > 0.0f && t1 < t) t = t1;
+    return (t < 1.0e30f) ? t : -1.0f;
+}
+
 // Only ordnance this close to landing is worth a shell: impact time to the most-threatened
 // fleet hull, seconds. Beyond it a threat is watched, not shot -- flak shells are cheap but
 // the capacitor is not.
@@ -72,6 +98,7 @@ void flak_screen_update(game_state* s, f32 dt) {
             if (cursor_owned_hull && ship_hardpoint_in_selection(&sh, hpi)) continue;
             f32 reach = weapon_flak_reach(w);
             if (reach <= 0.0f) continue;
+            const f32 shell_speed = w->projectile_speed() * FLAK_SPEED_MUL;
             // This mount's natural axis: its authored rest facing, in world heading terms.
             // Side discipline keys off it, not off the (much wider) traverse arc.
             const f32 mount_axis = sh.angle + sh.hardpoints[hpi].facing;
@@ -94,6 +121,12 @@ void flak_screen_update(game_state* s, f32 dt) {
                 f32 bearing  = atan2f(-to_p.x, to_p.y);   // heading convention: nose = +Y
                 f32 off_axis = fabsf(flak_wrap_pi(bearing - mount_axis));
                 if (off_axis > FLAK_FIT_HALF) continue;
+                // Physical catch gate: the shell must be able to MEET this ordnance inside
+                // its lifetime. Raw distance is not enough -- a crossing missile at 1.67x
+                // shell speed can sit well inside reach yet be uncatchable, and locking one
+                // wastes the mount while a killable threat goes unengaged.
+                f32 t_int = flak_intercept_time(to_p, vec2_sub(p.velocity, selfv), shell_speed);
+                if (t_int < 0.0f || t_int > FLAK_LIFETIME_S) continue;
                 // Impact time to the most-threatened fleet hull: distance over closing
                 // speed toward it; receding/tangential ordnance never scores.
                 f32 tti = 1.0e30f;
@@ -141,21 +174,19 @@ void flak_screen_update(game_state* s, f32 dt) {
                 continue;
             }
 
-            // Two-pass intercept lead at the FLAK shell's own (reduced) speed. The shell
-            // inherits this hull's velocity, so the solve runs on relative velocity -- the
-            // same solver shape as the broadside and the NPC gunner.
+            // Exact intercept lead at the FLAK shell's own (reduced) speed. The shell
+            // inherits this hull's velocity, so the solve runs on relative velocity. NOT
+            // the broadside's two-pass iterate: that diverges against ordnance faster than
+            // the shell (see flak_intercept_time), which flak targets always are.
             const Projectile& p = s->projectiles.pool[best];
             HierPos2 fire_origin = ship_hardpoint_fire_origin(&sh, hpi);
             Vec2 to_p = hierpos_diff(&p.position, &fire_origin, BS_HIERPOS_CELL_SIZE);
             Vec2 rvel = vec2_sub(p.velocity, selfv);
-            f32  shell_speed = w->projectile_speed() * FLAK_SPEED_MUL;
-            Vec2 aim = to_p;
-            if (shell_speed > 1.0f) {
-                for (i32 it = 0; it < 2; ++it) {
-                    f32 tof = vec2_length(aim) / shell_speed;
-                    aim = vec2_add(to_p, vec2_scale(rvel, tof));
-                }
-            }
+            // Re-solve from the MOUNT (the gate above solved from the hull origin); the
+            // offset can shave a marginal solution, so a failure here just releases the mount.
+            f32  t_hit = flak_intercept_time(to_p, rvel, shell_speed);
+            if (t_hit < 0.0f) continue;
+            Vec2 aim = vec2_add(to_p, vec2_scale(rvel, t_hit));
             if (!ship_hardpoint_can_aim(&sh, hpi, aim)) continue;
 
             // Defense preempts offense from here: the claim makes update_attack yield this

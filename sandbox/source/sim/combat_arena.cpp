@@ -251,6 +251,24 @@ void combat_arena_sync_entities(game_state* s, f32 sim_dt) {
     }
 }
 
+// Squared closest approach between two projectiles over the frame just integrated: the
+// minimum of |rel_prev + u*(rel_now - rel_prev)| for u in [0,1], where rel_prev backs the
+// post-move offset out by the relative velocity. Point-sampling positions once per tick is
+// not enough for the flak fuse -- a 6k u/s shell meeting a 10k u/s missile head-on closes
+// ~270 units in a 60 Hz tick (800 at the 0.05 s hitch clamp), half again the entire
+// 180-unit fuse window, so a perfectly aimed shell tunneled straight through its target
+// and the screen looked broken at exactly the geometry it exists for.
+static f32 flak_swept_dist2(Vec2 rel_now, Vec2 rel_vel, f32 sim_dt) {
+    Vec2 seg  = vec2_scale(rel_vel, sim_dt);       // rel_now - rel_prev
+    Vec2 prev = vec2_sub(rel_now, seg);
+    f32  len2 = seg.x * seg.x + seg.y * seg.y;
+    f32  u    = (len2 > 1.0e-6f)
+              ? clampf(-(prev.x * seg.x + prev.y * seg.y) / len2, 0.0f, 1.0f)
+              : 0.0f;
+    Vec2 c = vec2_add(prev, vec2_scale(seg, u));
+    return c.x * c.x + c.y * c.y;
+}
+
 void combat_arena_update_projectiles(game_state* s, f32 sim_dt) {
     // ---- Missile guidance (fire-and-seek) -------------------------------------------------
     // Steer every live PROJ_MISSILE toward the nearest hostile combat entity inside its
@@ -330,24 +348,30 @@ void combat_arena_update_projectiles(game_state* s, f32 sim_dt) {
         for (i32 fi = 0; fi < MAX_PROJECTILES; ++fi) {
             Projectile* fp = &s->projectiles.pool[fi];
             if (!fp->active || fp->kind != PROJ_FLAK) continue;
-            // Fuse scan: any hostile ordnance close enough?
+            // Fuse scan: any hostile ordnance close enough? Swept over the frame's relative
+            // motion (flak_swept_dist2), not point-sampled, so fast closers cannot tunnel
+            // through the fuse window between two ticks.
             b8 trigger = FALSE;
             for (i32 pi = 0; pi < MAX_PROJECTILES; ++pi) {
                 const Projectile* p = &s->projectiles.pool[pi];
                 if (!p->active || pi == fi) continue;
                 if (p->faction_id == fp->faction_id) continue;
-                Vec2 d = hierpos_diff(&p->position, &fp->position, BS_HIERPOS_CELL_SIZE);
-                if (d.x * d.x + d.y * d.y <= fuse * fuse) { trigger = TRUE; break; }
+                Vec2 d  = hierpos_diff(&p->position, &fp->position, BS_HIERPOS_CELL_SIZE);
+                Vec2 rv = vec2_sub(p->velocity, fp->velocity);
+                if (flak_swept_dist2(d, rv, sim_dt) <= fuse * fuse) { trigger = TRUE; break; }
             }
             if (!trigger) continue;
-            // Burst: falloff damage to every hostile projectile in radius.
+            // Burst: falloff damage to every hostile projectile in radius. Distance is the
+            // same swept closest approach the fuse used -- the post-move sample can sit a
+            // full tick's travel past the true pass-by point, which lotteried the falloff.
             i32 kills = 0;
             for (i32 pi = 0; pi < MAX_PROJECTILES; ++pi) {
                 Projectile* p = &s->projectiles.pool[pi];
                 if (!p->active || pi == fi) continue;
                 if (p->faction_id == fp->faction_id) continue;
                 Vec2 dv = hierpos_diff(&p->position, &fp->position, BS_HIERPOS_CELL_SIZE);
-                f32 d = sqrtf(dv.x * dv.x + dv.y * dv.y);
+                Vec2 rv = vec2_sub(p->velocity, fp->velocity);
+                f32 d = sqrtf(flak_swept_dist2(dv, rv, sim_dt));
                 if (d > burst) continue;
                 p->hp -= s->flak_tuning.burst_damage * (1.0f - d / burst);
                 if (p->hp <= 0.0f) {
