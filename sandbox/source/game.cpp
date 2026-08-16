@@ -487,11 +487,16 @@ b8 game_init(Game* game_inst) {
 
         fs.ship.weapon_stash[2]     = weapon_instantiate(weapon_registry_find(&s->weapon_registry, "autocannon_mk1"), fs.ship.faction);
 
-        // Guided-missile launcher (Phase A): starts stashed like the cannons; mount and
-        // fire-group it from the Arsenal inspector.
+        // Guided-missile launchers (Phase A): start stashed like the cannons; mount and
+        // fire-group them from the Arsenal inspector. THREE racks, so a fleet missile-volley
+        // skill has a real multi-tube ripple to fire (spread them across hulls or stack one).
         fs.ship.weapon_stash[3]     = weapon_instantiate(weapon_registry_find(&s->weapon_registry, "harpoon_rack"),   fs.ship.faction);
 
-        fs.ship.weapon_stash_count  = 4;
+        fs.ship.weapon_stash[4]     = weapon_instantiate(weapon_registry_find(&s->weapon_registry, "harpoon_rack"),   fs.ship.faction);
+
+        fs.ship.weapon_stash[5]     = weapon_instantiate(weapon_registry_find(&s->weapon_registry, "harpoon_rack"),   fs.ship.faction);
+
+        fs.ship.weapon_stash_count  = 6;
 
         // The fleet owns ONE point-defense device, stocked in the fleet-wide pool like the
         // cannons above (mount it onto any hull's defense hardpoint from the inspector).

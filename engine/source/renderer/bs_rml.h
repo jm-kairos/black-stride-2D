@@ -95,7 +95,7 @@ bs__api__ void bs_rml_set_sharpen(f32 amount);
 
 #define BS_RML_LOG_MAX     12   // most recent action-log lines carried in a snapshot
 #define BS_RML_DISC_MAX    64   // most recent discovery lines carried in a snapshot
-#define BS_RML_BAY_MAX     12   // flagship-inspector Modules bay tiles (6 x 2 grid, socket-padded)
+#define BS_RML_BAY_MAX     18   // flagship-inspector Modules bay tiles (6 x 3 grid, socket-padded)
 #define BS_RML_GROUP_MAX   5    // fleet-ship HUD fire-group rows (SHIP_WEAPON_GROUPS game-side)
 #define BS_RML_GM_COLS     8    // fire-group matrix: max weapon columns (mounted weapons)
 #define BS_RML_ROSTER_MAX  8    // fleet roster rows (FLEET_MAX_SHIPS game-side)
