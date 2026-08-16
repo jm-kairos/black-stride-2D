@@ -3,16 +3,16 @@
 #include "sim/skill_def.h"
 #include "sim/weapon.h"
 #include "sim/action_log.h"
+#include <core/logger.h>
 #include <math/math_utils.h>
 
 using namespace bs_math;
 
-// How long the ripple waits on a mount still training onto the target before giving up on
-// it. SLEWING is the only fire state worth waiting for -- it resolves by itself in under a
-// traverse -- but an autopilot attack order on a DIFFERENT target re-asserts its engaging
-// mount's aim after ours each frame and can hold a barrel off-axis forever; the timeout
-// bounds that contention to one skipped tube instead of a stalled volley.
-static constexpr f32 SKILL_SLEW_TIMEOUT_S = 1.5f;
+// Hard bound on a whole volley's lifetime. Pending tubes retry through their transient
+// fire states (reload, slew, arc, capacitor) until this expires -- long enough for two
+// full harpoon reload cycles plus traverse, short enough that a tube whose arc the
+// geometry never unmasks cannot hold the volley (and its mount claims) open forever.
+static constexpr f32 SKILL_VOLLEY_TIMEOUT_S = 10.0f;
 
 // HUD denial flash duration (failed cast / on-cooldown press).
 static constexpr f32 SKILL_DENY_FLASH_S = 0.35f;
@@ -59,12 +59,17 @@ i32 skill_system_collect_tubes(game_state* s, const SkillDef* def,
         for (i32 hp = 0; hp < sh.hardpoint_count; ++hp) {
             Weapon* w = sh.mounts[hp];
             if (!w || w->wkind != WEAPON_KIND_MISSILE) continue;
-            if (w->disabled || !w->ready()) continue;
+            // Deliberately NOT gated on ready(): a tube the autopilot just emptied still
+            // counts -- the volley rides its remaining reload. Gating on it made the
+            // badge sit at zero for the whole fight under MISSILE_FREE (the autopilot
+            // respends each tube the frame it comes off cooldown).
+            if (w->disabled) continue;
             if (sh.flak_screen_claimed[hp]) continue;   // defense preempts offense
             if (out) {
                 if (n >= cap) return n;
                 out[n].fleet_idx = (i8)i;
                 out[n].hp_index  = (i8)hp;
+                out[n].state     = SKILL_ENTRY_PENDING;
             }
             ++n;
         }
@@ -98,11 +103,11 @@ void skill_system_hotkey(game_state* s, i32 slot) {
         return;
     }
     if (sl.def->targeting == SKILL_TARGET_ENTITY) {
-        // Arm only when at least one tube could fire -- an unarmable cast is a deny NOW,
-        // not a targeting mode that can only whiff.
+        // Arm only when at least one tube exists to commit -- an unarmable cast is a deny
+        // NOW, not a targeting mode that can only whiff.
         if (skill_system_collect_tubes(s, sl.def, nullptr, 0) == 0) {
             skill_deny(s, slot);
-            action_log_push(s, "%s: no missile tube ready.", sl.def->name);
+            action_log_push(s, "%s: no missile launcher mounted.", sl.def->name);
             return;
         }
         s->skills.targeting_active = TRUE;
@@ -126,7 +131,7 @@ void skill_system_cast_entity(game_state* s, Ship* target) {
     v.count = skill_system_collect_tubes(s, sl.def, v.entries, SKILL_VOLLEY_MAX);
     if (v.count == 0) {
         skill_deny(s, slot);
-        action_log_push(s, "%s: no missile tube ready.", sl.def->name);
+        action_log_push(s, "%s: no missile launcher mounted.", sl.def->name);
         return;
     }
     v.active  = TRUE;
@@ -134,13 +139,27 @@ void skill_system_cast_entity(game_state* s, Ship* target) {
     v.target  = target;
     v.stagger = sl.def->stagger;
     // launch_timer starts at 0: the first launch fires on the next skill tick.
+    BS_LOG_INFO("skill_volley: cast '%s' at '%s', %d tube(s) committed.", sl.def->id,
+                target->vessel_name ? target->vessel_name : "contact", v.count);
 }
 
 // End the volley. `target_lost` distinguishes the abort log from the completion log; the
-// committed cooldown (if any) is kept either way -- ordnance already flew.
+// committed cooldown (if any) is kept either way -- ordnance already flew. Releases every
+// surviving mount claim NOW rather than leaning on next tick's clear, so update_autopilot
+// never sees a claim from a volley that no longer exists.
 static void skill_volley_finish(game_state* s, b8 target_lost) {
     SkillVolley& v = s->skills.volley;
     const SkillDef* def = s->skills.slots[v.slot].def;
+    Fleet& fleet = s->fleet_state.fleet;
+    i32 abandoned = 0;
+    for (i32 i = 0; i < v.count; ++i) {
+        SkillVolleyEntry& e = v.entries[i];
+        if (e.state != SKILL_ENTRY_PENDING) continue;
+        ++abandoned;
+        if (e.fleet_idx >= 0 && e.fleet_idx < fleet.count() &&
+            e.hp_index >= 0 && e.hp_index < fleet.at(e.fleet_idx).ship.hardpoint_count)
+            fleet.at(e.fleet_idx).ship.skill_claimed[e.hp_index] = FALSE;
+    }
     if (v.fired == 0) {
         skill_deny(s, v.slot);
         action_log_push(s, "%s: no launcher could fire.", def ? def->name : "Skill");
@@ -150,6 +169,9 @@ static void skill_volley_finish(game_state* s, b8 target_lost) {
         action_log_push(s, "%s: %d missile%s away.", def ? def->name : "Skill",
                         v.fired, v.fired == 1 ? "" : "s");
     }
+    BS_LOG_INFO("skill_volley: finished after %.2fs -- %d fired, %d abandoned, %d invalidated%s.",
+                v.age, v.fired, abandoned, v.count - v.fired - abandoned,
+                target_lost ? " (target lost)" : "");
     v.active = FALSE;
 }
 
@@ -159,47 +181,65 @@ void skill_system_update(game_state* s, f32 sim_dt) {
         if (s->skills.slots[k].cooldown > 0.0f) s->skills.slots[k].cooldown -= sim_dt;
     if (s->skills.denied_timer > 0.0f) s->skills.denied_timer -= sim_dt;
 
+    Fleet& fleet = s->fleet_state.fleet;
+    // Claims are per-tick, the flak-screen contract: cleared here every tick and
+    // re-asserted below for the entries still pending, so a claim can never outlive the
+    // volley (or survive an abort) no matter how it ended. This tick runs BEFORE
+    // update_autopilot, so the claims are in place when update_attack reads them.
+    for (i32 i = 0; i < fleet.count(); ++i)
+        for (i32 hp = 0; hp < SHIP_MAX_HARDPOINTS; ++hp)
+            fleet.at(i).ship.skill_claimed[hp] = FALSE;
+
     SkillVolley& v = s->skills.volley;
     if (!v.active) return;
-    // Target death = abort. The remaining ripple has nothing to aim at; missiles already
+    // Target death = abort. The remaining volley has nothing to aim at; missiles already
     // in flight keep seeking on their own.
     CombatEntity* ce = skill_find_combat_entity(s, v.target);
     if (!ce) { skill_volley_finish(s, TRUE); return; }
-    Fleet& fleet = s->fleet_state.fleet;
+    v.age += sim_dt;
     v.launch_timer -= sim_dt;
-    while (v.active && v.next < v.count) {
-        SkillVolleyEntry e = v.entries[v.next];
-        // Re-validate the participant: the active window can shrink and loadouts mutate
-        // mid-ripple. A stale entry skips in one frame; only real launches pay the beat.
-        if (e.fleet_idx < 0 || e.fleet_idx >= fleet.count()) { ++v.next; v.slew_wait = 0.0f; continue; }
+    // One pass over the committed tubes: every PENDING entry is re-validated, claimed and
+    // kept training on the target; when a stagger beat is due, the first entry the shared
+    // validator clears fires and consumes the beat. Transient states (reload, slew, arc,
+    // range, capacitor) just stay pending -- they resolve on their own and the volley
+    // timeout bounds the total wait.
+    i32 pending = 0;
+    for (i32 i = 0; i < v.count; ++i) {
+        SkillVolleyEntry& e = v.entries[i];
+        if (e.state != SKILL_ENTRY_PENDING) continue;
+        // Permanent invalidations only: participant left the active fleet window, or the
+        // tube was unmounted / replaced mid-volley (the attack_target convention).
+        if (e.fleet_idx < 0 || e.fleet_idx >= fleet.count()) { e.state = SKILL_ENTRY_SKIPPED; continue; }
         FleetShip& fs = fleet.at(e.fleet_idx);
         Ship* sh = &fs.ship;
         Weapon* w = (e.hp_index >= 0 && e.hp_index < sh->hardpoint_count) ? sh->mounts[e.hp_index] : nullptr;
-        if (!w || w->wkind != WEAPON_KIND_MISSILE || sh->flak_screen_claimed[e.hp_index]) {
-            ++v.next; v.slew_wait = 0.0f; continue;
-        }
+        if (!w || w->wkind != WEAPON_KIND_MISSILE) { e.state = SKILL_ENTRY_SKIPPED; continue; }
+        ++pending;
+        sh->skill_claimed[e.hp_index] = TRUE;   // the standing attack order yields this mount
         HierPos2 fire_origin = ship_hardpoint_fire_origin(sh, e.hp_index);
         Vec2 to_target = hierpos_diff(&v.target->origin, &fire_origin);
         f32  dist      = vec2_length(to_target);
-        // Keep the barrel training while this entry is due or waiting on its beat.
+        // EVERY pending tube trains while it waits, so slews converge in parallel and the
+        // beat is spent on launching, not traversing.
         ship_turret_aim_at(sh, e.hp_index, to_target);
-        if (v.launch_timer > 0.0f) break;   // stagger: the current entry is not due yet
+        if (v.launch_timer > 0.0f) continue;   // beat not due: keep training
         WeaponFireState st = ship_weapon_fire_state(sh, e.hp_index, to_target, dist);
-        if (st == WEAPON_FIRE_SLEWING) {
-            v.slew_wait += sim_dt;
-            if (v.slew_wait < SKILL_SLEW_TIMEOUT_S) break;
-            ++v.next; v.slew_wait = 0.0f; continue;   // never converged: skip the tube
-        }
-        if (st != WEAPON_FIRE_READY) { ++v.next; v.slew_wait = 0.0f; continue; }   // reload/arc/range/cap/dead
-        if (!ship_try_spend_cap(sh, w->cap_cost())) { ++v.next; v.slew_wait = 0.0f; continue; }
+        if (st != WEAPON_FIRE_READY) continue;             // transient: retry next beat
+        if (!ship_try_spend_cap(sh, w->cap_cost())) continue;
         Vec2 aim_dir = weapon_lead_dir(fire_origin, v.target->origin, ce->velocity,
                                        w->projectile_speed(), to_target, dist);
         w->owner_faction_id = sh->faction_id;   // stamp attacker faction for hit attribution
         ship_hardpoint_fire(sh, e.hp_index, aim_dir, fs.flight.velocity, &s->projectiles);
+        e.state = SKILL_ENTRY_FIRED;
+        sh->skill_claimed[e.hp_index] = FALSE;  // released: the reload belongs to the autopilot again
+        --pending;
+        BS_LOG_INFO("skill_volley: launch %d/%d from '%s' hp%d at t+%.2fs.",
+                    v.fired + 1, v.count, sh->vessel_name ? sh->vessel_name : "ship",
+                    e.hp_index, v.age);
         if (++v.fired == 1)   // >= 1 missile flew: the fleet cooldown starts NOW, not at cast
             s->skills.slots[v.slot].cooldown = s->skills.slots[v.slot].def->cooldown;
-        ++v.next; v.slew_wait = 0.0f;
-        v.launch_timer = v.stagger;   // ripple: the next tube waits its beat
+        v.launch_timer = v.stagger;   // one launch per beat: the rest wait their turn
     }
-    if (v.active && v.next >= v.count) skill_volley_finish(s, FALSE);
+    if (pending == 0)                        { skill_volley_finish(s, FALSE); return; }
+    if (v.age >= SKILL_VOLLEY_TIMEOUT_S)     { skill_volley_finish(s, FALSE); }
 }

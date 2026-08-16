@@ -551,6 +551,14 @@ struct Ship {
     // threat (the ping-pong that starved the original screen).
     b8            flak_screen_claimed[SHIP_MAX_HARDPOINTS];
 
+    // Per-tick SKILL claims by an executing fleet-skill volley (sim/skill_system.cpp): same
+    // shape and same contract as the flak claims above -- cleared and re-asserted every
+    // skill tick while a volley entry is pending on the mount, and update_attack yields a
+    // claimed mount exactly like a flak-claimed one. An explicit cast preempts the standing
+    // attack order for the tubes it committed, which is what stops the autopilot's aim
+    // re-assertion from holding a volley tube off the player's designated target forever.
+    b8            skill_claimed[SHIP_MAX_HARDPOINTS];
+
 };
 
 // ---- Hardpoint / mount queries ---------------------------------------------------------

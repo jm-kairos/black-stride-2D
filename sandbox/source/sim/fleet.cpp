@@ -339,9 +339,12 @@ void FleetShip::update_attack(game_state* s, f32 dt) {
     // later, and the turret ping-ponged between the two goals without ever converging inside
     // the validator's slew gate. A screen CLAIM (any mount defending against ordnance this
     // tick, AP included) yields the same way -- defense preempts offense for the mount.
+    // A SKILL claim (a fleet-skill volley pending on the mount, sim/skill_system.cpp) yields
+    // identically: an explicit cast outranks the standing order for the tubes it committed,
+    // or this aim re-assertion would hold a volley tube off the player's target forever.
     if (whp >= 0 && ((sh->mounts[whp]->wkind == WEAPON_KIND_BALLISTIC &&
                       static_cast<BallisticWeapon*>(sh->mounts[whp])->fire_mode == MODE_FLAK) ||
-                     sh->flak_screen_claimed[whp])) whp = -1;
+                     sh->flak_screen_claimed[whp] || sh->skill_claimed[whp])) whp = -1;
     Weapon* w = (whp >= 0) ? sh->mounts[whp] : nullptr;
     // ONLY the engaging mount tracks the designated target. Every other turret is left alone so
     // the weapons in the player's fire selection keep following the cursor (game_update sets that

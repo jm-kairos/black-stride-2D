@@ -9,12 +9,22 @@
 // LMB on a hostile casts, ESC / X / RMB / re-press / empty-space LMB cancels.
 //
 // v1 effect: MISSILE_VOLLEY ("Alpha Strike") -- every participating ship ripples its
-// ready missile tubes at the designated hull, one launch per stagger beat. The volley
-// does NOT cheat: every launch runs the canonical ship_weapon_fire_state ->
-// ship_try_spend_cap -> ship_hardpoint_fire chain, skips flak-claimed mounts, and waits
-// only for WEAPON_FIRE_SLEWING (bounded) -- any other non-READY state skips the tube.
-// It also never reads missile_policy / roe / stance / cap_fire_floor: an explicit cast
-// is player intent, the same contract as the manual trigger.
+// missile tubes at the designated hull, one launch per stagger beat. The volley is
+// RELOAD-TOLERANT: a cast commits every mounted tube, and each entry launches when its
+// own reload/slew/capacitor allows, so the button stays live mid-fight even while the
+// autopilot has been cycling the same launchers (a tube mid-reload rides its remaining
+// seconds instead of being dropped). While an entry is pending its mount carries a SKILL
+// CLAIM (Ship::skill_claimed, the flak-claim contract): update_attack yields the mount,
+// so a standing attack order on a DIFFERENT target cannot hold the barrel off the
+// player's designated one. The whole volley is bounded by a timeout -- stragglers that
+// never validate (permanently masked arc, target out of reach) are abandoned, not waited
+// on forever.
+//
+// The volley still does NOT cheat: every launch runs the canonical
+// ship_weapon_fire_state -> ship_try_spend_cap -> ship_hardpoint_fire chain -- nothing
+// fires faster than its reload or without capacitor. And it never reads missile_policy /
+// roe / stance / cap_fire_floor: an explicit cast is player intent, the same contract as
+// the manual trigger.
 //
 // Call-order contract (game.cpp): tick AFTER the weapon-cooldown/capacitor block (a tube
 // that just came off reload this frame is castable this frame), BEFORE rts_controls
@@ -31,13 +41,24 @@ struct Ship;
 #define SKILL_SLOT_MAX   9     // number row 1..9, detached camera
 #define SKILL_VOLLEY_MAX 128   // FLEET_MAX_SHIPS (8) x SHIP_MAX_HARDPOINTS (16)
 
-// One queued launch: indices, not pointers. FleetShip storage is pointer-stable (the
+// Lifecycle of one committed tube. PENDING entries are claimed + trained every tick and
+// retried every stagger beat until they fire, permanently invalidate (mount gone), or the
+// volley times out -- transient states (RELOADING / SLEWING / NO_BEARING / OUT_OF_RANGE /
+// STARVED) all resolve by themselves, so none of them is grounds for dropping a tube.
+enum SkillEntryState : u8 {
+    SKILL_ENTRY_PENDING = 0,
+    SKILL_ENTRY_FIRED   = 1,
+    SKILL_ENTRY_SKIPPED = 2,   // participant left the fleet / tube unmounted mid-volley
+};
+
+// One committed launch: indices, not pointers. FleetShip storage is pointer-stable (the
 // fleet is a fixed array) but the ACTIVE count can shrink (Fleet::set_count) and loadouts
-// mutate mid-ripple, so both halves are re-validated at launch time -- the attack_target
+// mutate mid-volley, so both halves are re-validated every tick -- the attack_target
 // convention.
 struct SkillVolleyEntry {
     i8 fleet_idx;
     i8 hp_index;
+    u8 state;      // SkillEntryState
 };
 
 struct SkillVolley {
@@ -45,9 +66,8 @@ struct SkillVolley {
     i8    slot;           // hotbar slot that cast this (cooldown commit target)
     Ship* target;         // validated against s->combat_entities EVERY tick; vanish = abort
     f32   stagger;        // seconds between launches (from the def at cast time)
-    f32   launch_timer;   // counts down to the next launch attempt
-    f32   slew_wait;      // seconds the CURRENT entry has sat in WEAPON_FIRE_SLEWING
-    i32   next;           // cursor into entries[]
+    f32   launch_timer;   // counts down to the next launch beat
+    f32   age;            // seconds since cast; the volley timeout abandons stragglers
     i32   count;
     i32   fired;          // launches that actually spawned; cooldown commits at 0 -> 1
     SkillVolleyEntry entries[SKILL_VOLLEY_MAX];
@@ -91,9 +111,11 @@ void skill_system_cast_entity(game_state* s, Ship* target);
 
 // THE participant query: castable tubes among the participants (selected ships, whole
 // fleet when nothing is selected; a `scope fleet` card forces fleet-wide). A castable
-// tube is a mounted missile launcher that is operational, off reload and not claimed by
-// the flak screen this tick. The cast enqueues EXACTLY what this returns and the HUD
-// badge counts the same call -- what you see is what fires. `out` may be nullptr
-// (count-only, for the badge).
+// tube is a MOUNTED, operational missile launcher -- reload state deliberately does not
+// matter (the volley rides each tube's remaining reload), so the badge cannot flicker to
+// zero just because the autopilot is cycling the launchers. The cast commits EXACTLY
+// what this returns and the HUD badge counts the same call -- the number on the button
+// is the number of missiles a cast will put in space over the ripple. `out` may be
+// nullptr (count-only, for the badge).
 i32 skill_system_collect_tubes(game_state* s, const SkillDef* def,
                                SkillVolleyEntry* out, i32 cap);

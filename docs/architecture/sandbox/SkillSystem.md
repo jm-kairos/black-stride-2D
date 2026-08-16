@@ -27,16 +27,25 @@ volley (cast click) → fire chain (ripple tick), with the HUD reading slots + v
 
 **Key invariants:**
 - **Tick order contract (game.cpp):** `skill_system_update` runs AFTER the weapon-cooldown /
-  capacitor block (a tube coming off reload this frame is castable this frame) and BEFORE
-  `rts_controls.update` and `update_autopilot`. The autopilot's attack orders re-assert an
-  engaging mount's aim after ours each frame and win it; a mount held off-axis that way sits in
-  `WEAPON_FIRE_SLEWING` until the ripple's 1.5 s slew timeout skips it. Bounded contention by
-  design — a flak-style per-tick "skill claim" on the mount is the escalation path if it ever
-  bothers players.
-- **The volley never cheats.** Per tube: `flak_screen_claimed` yields (defense preempts
-  offense), then the shared validator, then the capacitor commit, then the shared spawner.
-  Only `SLEWING` is waited on; `RELOADING / NO_BEARING / OUT_OF_RANGE / STARVED / DISABLED`
-  skip the tube in one frame. No new `WeaponFireState` exists for skills.
+  capacitor block and BEFORE `rts_controls.update` and `update_autopilot` — so the skill
+  claims it asserts this tick are in place when `update_attack` reads them, and a cast made
+  this frame executes against current cooldown state.
+- **An executing volley CLAIMS its mounts** (`Ship::skill_claimed`, the flak-claim contract:
+  cleared and re-asserted every skill tick while the entry is pending, released the moment it
+  fires or the volley ends). `update_attack` yields a claimed mount — no aim assertion, no
+  autopilot fire — so a standing attack order on a different target cannot hold a volley tube
+  off the player's designated one. An explicit cast outranks the standing order for exactly
+  the tubes it committed, and only for the volley's lifetime.
+- **The volley is reload-tolerant and bounded.** A cast commits every mounted, operational
+  missile tube (reload state deliberately ignored — under `MISSILE_FREE` the autopilot
+  respends each tube the frame it readies, which used to pin the badge at zero all fight).
+  Pending entries train on the target every tick and retry each stagger beat; transient
+  states (`RELOADING / SLEWING / NO_BEARING / OUT_OF_RANGE / STARVED`) simply stay pending,
+  permanent ones (participant gone, tube unmounted) skip, and `SKILL_VOLLEY_TIMEOUT_S` (10 s)
+  abandons stragglers so claims can never be held open forever.
+- **The volley never cheats.** Every launch runs the shared validator, then the capacitor
+  commit, then the shared spawner — nothing fires faster than its reload or without power.
+  No new `WeaponFireState` exists for skills.
 - **Doctrine is not consulted.** The cast path never reads `missile_policy` / `roe` / `stance`
   / `cap_fire_floor` — an explicit cast is player intent, the manual-trigger contract. (The
   flak claim still wins: that is a survival invariant, not doctrine.)
@@ -47,9 +56,9 @@ volley (cast click) → fire chain (ripple tick), with the HUD reading slots + v
   a frame later); participants are stored as `(fleet_idx, hp_index)` INDICES and re-validated
   at launch time, because the fleet's active count can shrink (`Fleet::set_count`) and
   loadouts mutate mid-ripple.
-- **"What you see is what fires":** the HUD badge and the cast enqueue the SAME query
-  (`skill_system_collect_tubes`), so the button's tube count is exactly the volley a click
-  would launch.
+- **"What you see is what fires":** the HUD badge and the cast run the SAME query
+  (`skill_system_collect_tubes`), so the number on the button is the number of missiles a
+  cast will put in space over the ripple (not the instantaneous loaded count).
 - **The number row is mode-split** on `camera_state.free_camera_active` (+ `!recentering`):
   detached = skill hotbar 1–9, attached = fire groups 1–5. This deliberately re-takes the
   detached row that the fire groups had claimed (see the retired note in `rts_controls.cpp`);
@@ -82,6 +91,9 @@ two armed modes are mutually exclusive.
 - **Missiles are fire-and-seek** (ShipCombatModel): the lead-solved aim biases seeker
   acquisition toward the clicked hull, but the skill cannot *guarantee* the clicked target
   takes every hit — identical to the autopilot's launches. Not a bug.
+- The piloted hull's manual cursor-traverse can still contest a volley tube's aim while
+  ATTACHED (manual aim asserts before the skill tick each frame and wins) — rare, since
+  casting is detached-only; the tube retries until the timeout either way.
 - The fourth `sscanf` parser (`skill_def.cpp`) re-duplicates the rstrip/quoted-string helpers
   per the standing decision recorded in ShipCombatModel.md.
 - One volley in flight fleet-wide (`SkillSystemState::volley` is a single slot); a second cast
