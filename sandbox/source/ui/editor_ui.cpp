@@ -22,6 +22,7 @@ using namespace bs_math;
 static void hardpoint_accepts_string(u32 mask, char* buf, i32 cap) {
     static const struct { u32 bit; const char* name; } KINDS[] = {
         { MODULE_TYPE_WEAPON,  "weapon"  },
+        { MODULE_TYPE_MISSILE, "missile" },
         { MODULE_TYPE_DEFENSE, "defense" },
         { MODULE_TYPE_SENSOR,  "sensor"  },
         { MODULE_TYPE_ENGINE,  "engine"  },
@@ -29,7 +30,7 @@ static void hardpoint_accepts_string(u32 mask, char* buf, i32 cap) {
     };
     i32 n = 0;
     buf[0] = '\0';
-    for (i32 i = 0; i < 5; ++i) {
+    for (i32 i = 0; i < 6; ++i) {
         if (!(mask & KINDS[i].bit)) continue;
         n += snprintf(buf + n, (size_t)(cap - n), "%s%s", (n > 0) ? "|" : "", KINDS[i].name);
         if (n >= cap - 1) break;

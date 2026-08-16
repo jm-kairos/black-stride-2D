@@ -42,13 +42,13 @@ static const bs_color COLLIDER_COLOR = bs_color{ 1.00f, 0.18f, 0.85f, 1.0f };
 static b8 arsenal_drag_fits(const Ship& fs, const Ship& pool, i32 kind, i32 src, i32 dst) {
     const HardpointDef& dhp = fs.hardpoints[dst];
     switch (kind) {
-        // Weapons: slot must take weapons AND be at least the weapon's size (mirror of the
-        // arsenal_drop_on_slot gates).
-        case 0: return hardpoint_accepts(&dhp, MODULE_TYPE_WEAPON)
-                       && src >= 0 && src < fs.hardpoint_count && fs.mounts[src]
+        // Weapons: slot must take this weapon's KIND (hardpoint_takes_weapon: missile-only
+        // cells refuse ballistics) AND be at least its size (mirror of arsenal_drop_on_slot).
+        case 0: return src >= 0 && src < fs.hardpoint_count && fs.mounts[src]
+                       && hardpoint_takes_weapon(&dhp, fs.mounts[src])
                        && fs.mounts[src]->size <= (u8)dhp.size;
-        case 1: return hardpoint_accepts(&dhp, MODULE_TYPE_WEAPON)
-                       && src >= 0 && src < pool.weapon_stash_count && pool.weapon_stash[src]
+        case 1: return src >= 0 && src < pool.weapon_stash_count && pool.weapon_stash[src]
+                       && hardpoint_takes_weapon(&dhp, pool.weapon_stash[src])
                        && pool.weapon_stash[src]->size <= (u8)dhp.size;
         case 2: case 3: return hardpoint_accepts(&dhp, MODULE_TYPE_DEFENSE);
         case 4: return (src >= 0 && src < pool.module_stash_count)

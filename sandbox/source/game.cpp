@@ -647,7 +647,8 @@ b8 game_init(Game* game_inst) {
     // Phase A: mount a guided-missile launcher on the enemy's next free weapon hardpoint so
     // the player faces seekers immediately (fired independently of the bearing-weapon pick in
     // combat_arena_update_enemy). Skipped silently if the hull has no second weapon slot.
-    i32 enemy_ml_hp = ship_first_free_hardpoint(&s->fleet_state.enemy_ship, MODULE_TYPE_WEAPON);
+    i32 enemy_ml_hp = ship_first_free_hardpoint(&s->fleet_state.enemy_ship,
+                                                MODULE_TYPE_WEAPON | MODULE_TYPE_MISSILE);
 
     if (enemy_ml_hp >= 0)
         s->fleet_state.enemy_ship.mounts[enemy_ml_hp] =
@@ -1154,6 +1155,7 @@ static b8 ship_evict_module(Ship& sh, i32 dst) {
 static const char* hardpoint_kind_label(u32 accepts) {
     if ((accepts & MODULE_TYPE_WEAPON) && (accepts & MODULE_TYPE_DEFENSE)) return "weapon/defense";
     if (accepts & MODULE_TYPE_WEAPON)  return "weapon";
+    if (accepts & MODULE_TYPE_MISSILE) return "missile";
     if (accepts & MODULE_TYPE_DEFENSE) return "defense";
     if (accepts & MODULE_TYPE_SENSOR)  return "sensor";
     if (accepts & MODULE_TYPE_ENGINE)  return "engine";
@@ -1184,13 +1186,13 @@ static void arsenal_drop_on_slot(game_state* s, i32 dst) {
     i32 kind = s->pending_weapon_drag_kind;
     if (dst >= 0 && dst < fs.hardpoint_count) {
         const HardpointDef& dhp = fs.hardpoints[dst];
-        b8 dst_takes_weapon  = hardpoint_accepts(&dhp, MODULE_TYPE_WEAPON);
         b8 dst_takes_defense = hardpoint_accepts(&dhp, MODULE_TYPE_DEFENSE);
         if (kind == 1 && src >= 0 && src < pool.weapon_stash_count) {
             // Mount an unmounted offensive weapon onto hardpoint dst; evict any occupant.
-            // Size-gated like modules: a weapon mounts on slots of its own size or LARGER.
+            // KIND-gated per weapon (hardpoint_takes_weapon: missile-only slots refuse
+            // ballistics) and size-gated like modules (own size or LARGER).
             Weapon* mounting = pool.weapon_stash[src];
-            if (!dst_takes_weapon) {
+            if (!hardpoint_takes_weapon(&dhp, mounting)) {
                 action_log_push(s, "'%s' is a %s slot - weapons don't fit.",
                                 dhp.id, hardpoint_kind_label(dhp.accepts));
             } else if (mounting && mounting->size > (u8)dhp.size) {
@@ -1218,15 +1220,18 @@ static void arsenal_drop_on_slot(game_state* s, i32 dst) {
             }
         } else if (kind == 0 && src >= 0 && src < fs.hardpoint_count && src != dst && fs.mounts[src]) {
             // Rearrange a mounted offensive weapon from hardpoint src onto hardpoint dst.
-            if (!dst_takes_weapon) {
+            if (!hardpoint_takes_weapon(&dhp, fs.mounts[src])) {
                 action_log_push(s, "'%s' is a %s slot - weapons don't fit.",
                                 dhp.id, hardpoint_kind_label(dhp.accepts));
             } else if (fs.mounts[src]->size > (u8)dhp.size) {
                 action_log_push(s, "'%s' is too small for the %s (needs %s).",
                                 dhp.id, fs.mounts[src]->name ? fs.mounts[src]->name : "weapon",
                                 hardpoint_size_name((HardpointSize)fs.mounts[src]->size));
-            } else if (fs.mounts[dst] && fs.mounts[dst]->size > (u8)fs.hardpoints[src].size) {
-                action_log_push(s, "Can't swap: '%s' is too small for the %s.",
+            } else if (fs.mounts[dst] && (fs.mounts[dst]->size > (u8)fs.hardpoints[src].size ||
+                       !hardpoint_takes_weapon(&fs.hardpoints[src], fs.mounts[dst]))) {
+                // The displaced occupant must fit the vacated slot BOTH ways -- size AND
+                // kind (a ballistic can't swap back onto a missile-only cell).
+                action_log_push(s, "Can't swap: '%s' can't take the %s.",
                                 fs.hardpoints[src].id,
                                 fs.mounts[dst]->name ? fs.mounts[dst]->name : "occupant");
             } else if (fs.mounts[dst]) {
@@ -1293,9 +1298,10 @@ static void arsenal_drop_on_slot(game_state* s, i32 dst) {
                 action_log_push(s, "'%s' is a %s slot - the point-defense doesn't fit.",
                                 dhp.id, hardpoint_kind_label(dhp.accepts));
             } else if (fs.mounts[dst] &&
-                       !hardpoint_accepts(&fs.hardpoints[src], MODULE_TYPE_WEAPON)) {
-                action_log_push(s, "Can't swap: '%s' doesn't take weapons.",
-                                fs.hardpoints[src].id);
+                       !hardpoint_takes_weapon(&fs.hardpoints[src], fs.mounts[dst])) {
+                action_log_push(s, "Can't swap: '%s' doesn't take the %s.",
+                                fs.hardpoints[src].id,
+                                fs.mounts[dst]->name ? fs.mounts[dst]->name : "occupant");
             } else if (!ship_evict_module(fs, dst)) {
                 action_log_push(s, "Module rack full - can't displace '%s'.",
                                 fs.module_mounts[dst]->name);
@@ -1786,10 +1792,10 @@ static void game_push_hud(game_state* s, f32 dt) {
     // hardpoint) or red (no hardpoint big enough / of the right kind).
     // Any hardpoint of matching kind and sufficient size counts, occupied or not: the player
     // can always evict/swap, so "fits" answers "COULD this ever mount here", not "is a slot free".
-    auto ship_has_weapon_slot = [](const Ship& fs, u8 wsize) -> b8 {
+    auto ship_has_weapon_slot = [](const Ship& fs, const Weapon* w) -> b8 {
         for (i32 h = 0; h < fs.hardpoint_count; ++h)
-            if (hardpoint_accepts(&fs.hardpoints[h], MODULE_TYPE_WEAPON)
-                && (u8)fs.hardpoints[h].size >= wsize) return TRUE;
+            if (hardpoint_takes_weapon(&fs.hardpoints[h], w)
+                && (u8)fs.hardpoints[h].size >= w->size) return TRUE;
         return FALSE;
     };
     auto fill_card_weapon = [s, &ship_has_weapon_slot](bs_rml_bay_line& row, const Ship& fs,
@@ -1801,7 +1807,7 @@ static void game_push_hud(game_state* s, f32 dt) {
         snprintf(row.card_title, sizeof(row.card_title), "%s", name);
         snprintf(row.card_size, sizeof(row.card_size), "SIZE       %s",
                  SIZE_ROW[(w->size < 3) ? w->size : 1]);
-        row.card_size_ok = ship_has_weapon_slot(fs, w->size);
+        row.card_size_ok = ship_has_weapon_slot(fs, w);
         snprintf(row.card_desc, sizeof(row.card_desc), "%s", w->def ? w->def->desc : "");
         if (w->wkind == WEAPON_KIND_MISSILE) {
             const MissileLauncher* ml = (const MissileLauncher*)w;

@@ -236,6 +236,7 @@ void draw_collider_outline(const Ship* ship, bs_color color, f32 thickness) {
 // Colour per accepted module kind (primary bit wins if a slot accepts several).
 static bs_color hardpoint_color(u32 accepts) {
     if (accepts & MODULE_TYPE_WEAPON)  return bs_color{ 1.00f, 0.45f, 0.15f, 1.0f }; // orange
+    if (accepts & MODULE_TYPE_MISSILE) return bs_color{ 1.00f, 0.25f, 0.30f, 1.0f }; // red: missile-only cell
     if (accepts & MODULE_TYPE_DEFENSE) return bs_color{ 0.20f, 0.85f, 1.00f, 1.0f }; // cyan
     if (accepts & MODULE_TYPE_SENSOR)  return bs_color{ 0.30f, 1.00f, 0.40f, 1.0f }; // green
     if (accepts & MODULE_TYPE_ENGINE)  return bs_color{ 1.00f, 0.90f, 0.30f, 1.0f }; // yellow

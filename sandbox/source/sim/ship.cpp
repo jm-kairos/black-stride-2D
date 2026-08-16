@@ -85,6 +85,11 @@ b8 hardpoint_fits_module(const HardpointDef* hp, const ModuleDef* def) {
     if (!(hp->accepts & def->type)) return FALSE;
     return (def->size <= hp->size) ? TRUE : FALSE;
 }
+b8 hardpoint_takes_weapon(const HardpointDef* hp, const Weapon* w) {
+    if (!hp || !w) return FALSE;
+    if (hp->accepts & MODULE_TYPE_WEAPON) return TRUE;
+    return ((hp->accepts & MODULE_TYPE_MISSILE) && w->wkind == WEAPON_KIND_MISSILE) ? TRUE : FALSE;
+}
 void ship_recompute_stats(Ship* ship) {
     if (!ship) return;
     // Effective sensors = hull baseline x the product of every mounted sensor module's

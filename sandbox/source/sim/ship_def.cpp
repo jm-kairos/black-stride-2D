@@ -23,6 +23,7 @@ static u32 parse_module_mask(const char* list, const char* path) {
         char* sep = strchr(tok, '|');
         if (sep) *sep = '\0';
         if      (_stricmp(tok, "weapon")  == 0) mask |= MODULE_TYPE_WEAPON;
+        else if (_stricmp(tok, "missile") == 0) mask |= MODULE_TYPE_MISSILE;
         else if (_stricmp(tok, "defense") == 0) mask |= MODULE_TYPE_DEFENSE;
         else if (_stricmp(tok, "sensor")  == 0) mask |= MODULE_TYPE_SENSOR;
         else if (_stricmp(tok, "engine")  == 0) mask |= MODULE_TYPE_ENGINE;

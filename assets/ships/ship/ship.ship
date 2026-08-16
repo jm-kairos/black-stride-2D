@@ -53,16 +53,16 @@ collider -197 793
 # facing is CCW from the nose; arc is the mount's total traverse.
 hardpoint radar_dome sensor          S    0  643   0 360
 hardpoint bow_gun    weapon          M    0  403   0 180
-# Nose battery: five medium mounts along the forward hull behind the bow gun -- two
+# Nose battery: five MISSILE-ONLY cells along the forward hull behind the bow gun -- two
 # staggered flank pairs (x pinned inside the narrowing nose silhouette: half-width is
-# ~66 at row 270 per the bow lateral thrusters, widening aft) and one spine mount.
-# Flank facings quarter outward so the battery covers the forward hemisphere without
-# masking; the spine mount is a wide-arc dorsal turret.
-hardpoint nose1_gun  weapon          M  -70  343  45 210
-hardpoint nose2_gun  weapon          M   70  343 -45 210
-hardpoint nose3_gun  weapon          M  -95  233  60 210
-hardpoint nose4_gun  weapon          M   95  233 -60 210
-hardpoint nose5_gun  weapon          M    0  128   0 240
+# ~66 at row 270 per the bow lateral thrusters, widening aft) and one spine cell.
+# `missile` accepts refuses ballistics (vertical-launch cells, not turrets); full-circle
+# arcs because a launch cell has no traverse mask -- the seeker does the pointing.
+hardpoint nose1_gun  missile         M  -70  343  45 360
+hardpoint nose2_gun  missile         M   70  343 -45 360
+hardpoint nose3_gun  missile         M  -95  233  60 360
+hardpoint nose4_gun  missile         M   95  233 -60 360
+hardpoint nose5_gun  missile         M    0  128   0 360
 hardpoint port_gun   weapon          M -122 -107  90 210
 hardpoint stbd_gun   weapon          M  122 -107 -90 210
 hardpoint dorsal_pd  defense         S    0   33   0 360

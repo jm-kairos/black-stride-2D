@@ -71,6 +71,10 @@
 #define MODULE_TYPE_SENSOR  (1u << 2)
 #define MODULE_TYPE_ENGINE  (1u << 3)
 #define MODULE_TYPE_UTILITY (1u << 4)
+// MISSILE-exclusive weapon slot: takes missile-kind weapons ONLY (a `weapon` slot already
+// takes every weapon incl. missiles, so this bit is for slots that REFUSE ballistics --
+// vertical launch cells and the like). Never satisfied by ship modules or the PD.
+#define MODULE_TYPE_MISSILE (1u << 5)
 
 enum HardpointSize {
 
@@ -565,6 +569,14 @@ struct Ship {
 
 // TRUE when the hardpoint's accepts-mask includes the given MODULE_TYPE_* kind.
 b8 hardpoint_accepts(const HardpointDef* hp, u32 module_type);
+
+// TRUE when the hardpoint's accepts-mask takes this weapon's KIND: any weapon on a
+// `weapon` slot, and missiles additionally on `missile`-only slots. SINGLE SOURCE OF
+// TRUTH for the kind gate -- the drop code, the drag highlight and the stat-card fit
+// indicator all ask this, so they cannot disagree. Size gates separately at the call
+// sites (a weapon mounts on slots of its own size or larger), matching the existing
+// message split between "wrong kind" and "too small".
+b8 hardpoint_takes_weapon(const HardpointDef* hp, const struct Weapon* w);
 
 // First hardpoint accepting `module_type` with no occupant (no weapon, point-defense, or
 // module mounted), or -1 when none is free. Used for init-time auto-mounting.
