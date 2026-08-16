@@ -5,6 +5,7 @@
 #include "sim/weapon.h"
 #include "sim/fleet.h"
 #include "sim/action_log.h"  // action_log_push (standing-order feedback)
+#include "sim/skill_system.h" // skill targeting mode: cast click + cancel arbitration
 #include <core/input.h>
 #include <math/math_utils.h>
 #include <renderer/renderer.h>
@@ -212,7 +213,7 @@ void RtsControls::update(f32 dt) {
         b8 ui_free = !bs_imgui_wants_mouse() && !bs_rml_wants_mouse();
         b8 rclick  = input_is_button_down(BUTTON_RIGHT) && !input_was_button_down(BUTTON_RIGHT);
         b8 lclick  = input_is_button_down(BUTTON_LEFT)  && !input_was_button_down(BUTTON_LEFT);
-        if (rclick && ui_free && hovered_sid >= 0) {
+        if (rclick && ui_free && hovered_sid >= 0 && !m_state->skills.targeting_active) {
             m_state->station_menu_visible    = true;
             m_state->station_menu_station_id = hovered_sid;
             m_state->station_menu_x          = mx;
@@ -257,7 +258,8 @@ void RtsControls::update(f32 dt) {
         b8 rclick  = input_is_button_down(BUTTON_RIGHT) && !input_was_button_down(BUTTON_RIGHT);
         b8 lclick  = input_is_button_down(BUTTON_LEFT)  && !input_was_button_down(BUTTON_LEFT);
         if (rclick && ui_free && !station_right_consumed && m_hovered_enemy_idx < 0 &&
-            !m_jump_mode && m_hovered_ship_idx >= 0 && !m_state->camera_state.recentering) {
+            !m_jump_mode && !m_state->skills.targeting_active &&
+            m_hovered_ship_idx >= 0 && !m_state->camera_state.recentering) {
             m_state->ship_menu_visible = true;
             m_state->ship_menu_member  = m_hovered_ship_idx;
             m_state->ship_menu_x       = mx;
@@ -273,6 +275,10 @@ void RtsControls::update(f32 dt) {
     b8 detached = (m_state->camera_state.free_camera_active && !m_state->camera_state.recentering);
     // Jump mode is an RTS-only interaction: drop it whenever the camera is attached/piloting.
     if (!detached) m_jump_mode = FALSE;
+    // Skill targeting is RTS-only for the same reason; and the two armed modes are mutually
+    // exclusive -- arming a skill drops jump mode here, arming jump (J below) cancels the skill.
+    if (!detached) skill_system_cancel_targeting(m_state);
+    if (m_state->skills.targeting_active) m_jump_mode = FALSE;
     // ---- Free camera movement (only while detached, not during a recenter glide) ------------
     if (detached) {
         // ---- Free camera movement (WASD + edge pan) -------------------------------------
@@ -327,7 +333,27 @@ void RtsControls::update(f32 dt) {
         // stance chip reports the cursor as UI-owned and never also drags a selection box
         // through the world behind the panel. No per-panel query needed anymore.
         const b8 ui_free_sel = !bs_imgui_wants_mouse() && !bs_rml_wants_mouse();
-        if (detached && ui_free_sel) {
+        // Captured BEFORE the cast below consumes it: the disarm must not let the same
+        // click-edge fall through into the selection block -- a box "click" at a hostile's
+        // position would clear the selection through select_at_point.
+        const b8 skill_targeting = m_state->skills.targeting_active;
+        // ---- Skill entity-targeting click (armed via the number row / HUD hotbar) --------
+        // Owns the left button while armed. LMB on a hostile casts; LMB on empty space
+        // disarms (ESC / X / RMB / re-press cancel elsewhere). The hover index is already
+        // hostile-only, the same surface the RMB attack order clicks.
+        if (detached && ui_free_sel && skill_targeting) {
+            const b8 lclick = input_is_button_down(BUTTON_LEFT) && !input_was_button_down(BUTTON_LEFT);
+            if (lclick) {
+                if (m_hovered_enemy_idx >= 0) {
+                    CombatEntity* ce = &m_state->combat_entities[m_hovered_enemy_idx];
+                    if (ce->active && ce->ship) skill_system_cast_entity(m_state, ce->ship);
+                    else                        skill_system_cancel_targeting(m_state);
+                } else {
+                    skill_system_cancel_targeting(m_state);
+                }
+            }
+            m_box.active = FALSE;   // no selection box while a skill is armed
+        } else if (detached && ui_free_sel) {
             const b8 lmb_down = input_is_button_down(BUTTON_LEFT);
             const b8 lmb_prev = input_was_button_down(BUTTON_LEFT);
             const f32 mxf = (f32)mx, myf = (f32)my;
@@ -363,6 +389,7 @@ void RtsControls::update(f32 dt) {
         // ---- FTL jump mode toggle (J; RTS-only, so it needs the detached camera) ---------
         Fleet& fleet = m_state->fleet_state.fleet;
         if (detached && input_is_key_down(KEY_J) && !input_was_key_down(KEY_J)) {
+            skill_system_cancel_targeting(m_state);   // armed modes are mutually exclusive
             if (fleet.any_selected()) m_jump_mode = !m_jump_mode;
             else                      m_jump_mode = FALSE;
         }
@@ -371,6 +398,12 @@ void RtsControls::update(f32 dt) {
         // ---- Move / attack / jump order input ------------------------------------------
         b8 right_click = input_is_button_down(BUTTON_RIGHT) && !input_was_button_down(BUTTON_RIGHT);
         if (right_click && !station_right_consumed && !ship_right_consumed &&
+            !bs_imgui_wants_mouse() && !bs_rml_wants_mouse() &&
+            m_state->skills.targeting_active) {
+            // RMB while skill-targeting is a PURE cancel: the same click must not also
+            // issue a move/attack order (mirrors the box-selection suppression above).
+            skill_system_cancel_targeting(m_state);
+        } else if (right_click && !station_right_consumed && !ship_right_consumed &&
             !bs_imgui_wants_mouse() && !bs_rml_wants_mouse()) {
             if (m_jump_mode) {
                 // Right-click executes the jump when the destination is within range; an
@@ -418,7 +451,12 @@ void RtsControls::update(f32 dt) {
             }
         }
         // ---- Cancel attack orders --------------------------------------------------------
-        if (input_is_key_down(KEY_X) && !input_was_key_down(KEY_X)) {
+        if (input_is_key_down(KEY_X) && !input_was_key_down(KEY_X) &&
+            m_state->skills.targeting_active) {
+            // X while skill-targeting cancels the TARGETING MODE, and only that: the press
+            // is consumed, the fleet's attack orders survive.
+            skill_system_cancel_targeting(m_state);
+        } else if (input_is_key_down(KEY_X) && !input_was_key_down(KEY_X)) {
             b8 ctrl_held = input_is_key_down(KEY_LCONTROL) || input_is_key_down(KEY_RCONTROL) ||
                            input_is_key_down(KEY_CONTROL);
             if (ctrl_held) {

@@ -24,6 +24,8 @@
 
 #include "sim/skill_def.h"
 
+#include "sim/skill_system.h"
+
 
 
 #include "sim/projectile.h"
@@ -3658,6 +3660,10 @@ struct game_state {
     // ---- Skill def registry (immutable ability cards loaded once from assets/skills) -------------
 
     SkillRegistry    skill_registry;          // shared SkillDef pool; hotbar slots bind entries by pointer
+
+    // ---- Fleet skill system (hotbar slots, targeting mode, pending volley ripple) ----------------
+
+    SkillSystemState skills;                  // ticked by skill_system_update (sim/skill_system.h)
 
 
 

@@ -16,6 +16,7 @@
 
 #include "sim/point_defense.h"
 #include "sim/flak_screen.h"
+#include "sim/skill_system.h"
 
 #include "render/projectile_fx.h" // projectile_fx_render_init (bakes the VFX textures)
 
@@ -430,6 +431,8 @@ b8 game_init(Game* game_inst) {
     // ---- Skill def registry: fleet ability cards; manifest order = hotbar slot order -----
 
     skill_registry_load(&s->skill_registry, "assets/skills/skills.list");
+
+    skill_system_init(s);
 
     s->view.alt_movement_active = FALSE;
 
@@ -3001,7 +3004,11 @@ b8 game_update(Game* game_inst, f32 dt) {
     // never both collapse and quit -- no debounce timer needed. First game-side use of the
     // engine's exported event bus (event_fire).
     if (input_is_key_down(KEY_ESCAPE) && !input_was_key_down(KEY_ESCAPE)) {
-        if (s->show_flagship_inspector) {
+        if (s->skills.targeting_active) {
+            // Skill targeting is the innermost modal layer: the press that disarms it is
+            // consumed, same contract as the inspector below.
+            skill_system_cancel_targeting(s);
+        } else if (s->show_flagship_inspector) {
             s->show_flagship_inspector = false;
         } else {
             event_context quit_ctx = {};
@@ -3497,37 +3504,49 @@ b8 game_update(Game* game_inst, f32 dt) {
             s->world_module_drag   = FALSE;
         }
 
-        // ---- Weapon-group selection (keys 1-5) ---------------------------------------------
-        // Deliberately OUTSIDE the firing gate below so group selection works with the Arsenal
-        // inspector open (assign in the matrix, then test).
-        // Also suppressed by the hardpoint editor and any UI layer capturing the KEYBOARD.
-        // (Group ASSIGNMENT lives in the inspector's Fire groups matrix - "gm:" hud_action.)
-        //
-        // NO LONGER piloting-only. The row used to be suppressed while the free camera was
-        // detached because there it belonged to RTS unit selection -- but that was a binding
-        // collision, not a design decision, and with one hull the RTS number row only ever
-        // re-selected the ship that was already piloted (now retired in rts_controls.cpp).
-        // Fire groups are combat input in BOTH control modes, and the weapon hub they drive was
-        // never mode-gated, so suppressing the row left the hub showing a group the player had
-        // no keyboard way to change while detached.
+        // ---- Number row: SKILLS (detached) / weapon-group selection (attached) -------------
+        // The row is mode-split along the same line as the left button: detached is the
+        // COMMAND mode, so 1-9 drive the fleet skill hotbar (sim/skill_system.cpp); attached
+        // is the GUN, so 1-5 stay the fire-group selector. (The row was briefly mode-free --
+        // see the retired note in rts_controls.cpp -- but skills are a fleet-command concept,
+        // and detached group selection still lives in the HUD's "group:" rows.) During the
+        // recenter glide neither half fires, matching jump mode's detached test.
+        // Suppressed by the hardpoint editor, the ship inspector and any UI layer capturing
+        // the KEYBOARD. (Group ASSIGNMENT lives in the inspector's Fire groups matrix.)
         if (!s->editor.edit_mode_active && !s->show_flagship_inspector &&
             !bs_imgui_wants_keyboard() && !bs_rml_wants_keyboard()) {
 
             ship_groups_sanitize(psh);
 
-            static const keys group_keys[SHIP_WEAPON_GROUPS] =
-                { KEY_NUM1, KEY_NUM2, KEY_NUM3, KEY_NUM4, KEY_NUM5 };
+            if (s->camera_state.free_camera_active && !s->camera_state.recentering) {
 
-            for (i32 g = 0; g < SHIP_WEAPON_GROUPS; ++g) {
+                // Detached / RTS: the number row is the SKILL hotbar (1..9).
+                static const keys skill_keys[SKILL_SLOT_MAX] = {
+                    KEY_NUM1, KEY_NUM2, KEY_NUM3, KEY_NUM4, KEY_NUM5,
+                    KEY_NUM6, KEY_NUM7, KEY_NUM8, KEY_NUM9 };
 
-                if (!input_is_key_down(group_keys[g]) || input_was_key_down(group_keys[g])) continue;
+                for (i32 k = 0; k < SKILL_SLOT_MAX; ++k)
+                    if (input_is_key_down(skill_keys[k]) && !input_was_key_down(skill_keys[k]))
+                        skill_system_hotkey(s, k);
 
-                ship_select_weapon_group(psh, g);
+            } else if (!s->camera_state.free_camera_active) {
 
-                i32 n = ship_group_size(psh, g);
+                // Attached / piloting: fire-group selection (keys 1-5), unchanged.
+                static const keys group_keys[SHIP_WEAPON_GROUPS] =
+                    { KEY_NUM1, KEY_NUM2, KEY_NUM3, KEY_NUM4, KEY_NUM5 };
 
-                if (n > 0) action_log_push(s, "Weapon group %d selected (%d weapon%s).", g + 1, n, n == 1 ? "" : "s");
-                else       action_log_push(s, "Weapon group %d is empty.", g + 1);
+                for (i32 g = 0; g < SHIP_WEAPON_GROUPS; ++g) {
+
+                    if (!input_is_key_down(group_keys[g]) || input_was_key_down(group_keys[g])) continue;
+
+                    ship_select_weapon_group(psh, g);
+
+                    i32 n = ship_group_size(psh, g);
+
+                    if (n > 0) action_log_push(s, "Weapon group %d selected (%d weapon%s).", g + 1, n, n == 1 ? "" : "s");
+                    else       action_log_push(s, "Weapon group %d is empty.", g + 1);
+
+                }
 
             }
 
@@ -3709,6 +3728,15 @@ b8 game_update(Game* game_inst, f32 dt) {
     ship_capacitor_update(&s->fleet_state.enemy_ship, sim_dt);
 
     ship_update_turrets(&s->fleet_state.enemy_ship, sim_dt);
+
+    // ---- Fleet skills: cooldowns + the pending volley ripple (sim/skill_system.cpp) ------
+    // AFTER the weapon-cooldown/capacitor block (a tube that just came off reload this frame
+    // is castable this frame), BEFORE rts_controls (which may CAST this frame) and
+    // update_autopilot (whose attack orders re-assert their engaging mount's aim after ours;
+    // the ripple's slew timeout bounds that contention). sim_dt: skill cooldowns pause and
+    // stretch with the time scale exactly like weapon reloads.
+
+    skill_system_update(s, sim_dt);
 
     // ---- RTS controls update (orders, selection, hover) --------------------------------
 
