@@ -231,11 +231,13 @@ void FleetShip::update_move(f32 dt) {
 // so ROE changes WHO gets shot at, never HOW.
 void FleetShip::update_engagement(game_state* s) {
     Ship* sh = &ship;
-    // The acquisition yardstick is the longest reach aboard -- an unarmed hull never
-    // self-acquires (nothing to fire; approaching would be theatre).
+    // The acquisition yardstick is the longest TACTICAL range aboard -- an unarmed hull never
+    // self-acquires (nothing to fire; approaching would be theatre). weapon_engage_range, not
+    // effective_reach: a missile's flight endurance would put the envelope at megameters and
+    // the ship would pick fights with everything its sensors ever see.
     f32 best_reach = 0.0f;
     for (i32 hpi = 0; hpi < sh->hardpoint_count; ++hpi) {
-        f32 r = weapon_effective_reach(sh->mounts[hpi]);
+        f32 r = weapon_engage_range(sh->mounts[hpi]);
         if (r > best_reach) best_reach = r;
     }
     b8 stance_refuses = (stance == FLEET_STANCE_PASSIVE || stance == FLEET_STANCE_HOLD_FIRE);
@@ -311,10 +313,13 @@ void FleetShip::update_attack(game_state* s, f32 dt) {
     f32 dist  = vec2_length(to_target);
     f32 speed = vec2_length(fl->velocity);
     // Engagement geometry is driven by the WEAPONS THIS SHIP ACTUALLY CARRIES, not by a fixed
-    // distance. `fire_reach` is the reach of the weapon that bears on the target (it decides
-    // whether a shot can arrive at all); `approach_reach` is the longest reach aboard (it decides
-    // how close the ship needs to fly). Both come from weapon_effective_reach, the same function
-    // the HUD range ring uses, so the ring and the ship's behaviour cannot disagree.
+    // distance. `fire_reach` is the FLIGHT reach of the weapon that bears on the target
+    // (weapon_effective_reach: can a shot physically arrive); `approach_reach` is the longest
+    // TACTICAL range aboard (weapon_engage_range, the same function the HUD ring draws: how
+    // close is worth flying). The two split at missiles -- a harpoon's shot can arrive from
+    // 4,000,000 units out but is only worth fighting at its authored engage_range, and feeding
+    // the flight number in here made mounting a launcher read as the ship fleeing the fight
+    // (standoff 3.4M, kite band 1.87M -- every real combat distance was "too close").
     // Weapon choice honours the player's micro-selection override: when one is set, ONLY that
     // mount engages, and the approach distance follows ITS reach rather than the longest reach
     // aboard -- so picking a short cannon makes the ship close in instead of loitering at the
@@ -349,11 +354,11 @@ void FleetShip::update_attack(game_state* s, f32 dt) {
     f32 gun_reach      = 0.0f;   // longest BALLISTIC reach aboard (missile CONSERVE gate)
     if (sh->weapon_override >= 0) {
         Weapon* ow = sh->mounts[sh->weapon_override];
-        approach_reach = weapon_effective_reach(ow);
+        approach_reach = weapon_engage_range(ow);
         if (ow && ow->wkind == WEAPON_KIND_BALLISTIC) gun_reach = approach_reach;
     } else {
         for (i32 hpi = 0; hpi < sh->hardpoint_count; ++hpi) {
-            f32 r = weapon_effective_reach(sh->mounts[hpi]);
+            f32 r = weapon_engage_range(sh->mounts[hpi]);
             if (r > approach_reach) approach_reach = r;
             if (sh->mounts[hpi] && sh->mounts[hpi]->wkind == WEAPON_KIND_BALLISTIC &&
                 r > gun_reach) gun_reach = r;
@@ -673,12 +678,14 @@ void FleetShip::update_avoid(f32 dt) {
     const ShipMotion& m = sh->motion;
     Vec2 to_t = hierpos_diff(&avoid_target->origin, &sh->origin);
     f32  dist = vec2_length(to_t);
-    // Clear range is the THREAT's longest reach, not a fixed number, so avoiding a sniper means
-    // running further than avoiding a knife-fighter -- the same weapon_effective_reach the HUD
-    // ring and the engagement logic use.
+    // Clear range is the THREAT's longest TACTICAL range, not a fixed number, so avoiding a
+    // sniper means running further than avoiding a knife-fighter -- the same
+    // weapon_engage_range the HUD ring and the engagement logic use. Not flight reach: a
+    // missile-armed threat would otherwise demand a 5,000,000-unit run before the order
+    // ever cleared.
     f32 threat = 0.0f;
     for (i32 hpi = 0; hpi < avoid_target->hardpoint_count; ++hpi) {
-        f32 r = weapon_effective_reach(avoid_target->mounts[hpi]);
+        f32 r = weapon_engage_range(avoid_target->mounts[hpi]);
         if (r > threat) threat = r;
     }
     if (threat <= 0.0f) threat = RTS_ATTACK_RANGE;

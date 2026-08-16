@@ -64,6 +64,9 @@ static b8 weapon_def_load(WeaponDef* out, const char* path) {
     out->cap_cost    = 4.0f;
     out->emission    = 0.6f;
     out->proj_hp     = 1.0f;
+    // 0 = unauthored: ballistics resolve to their flight reach, missiles to the clamped
+    // default -- both inside weapon_engage_range, the one place that decision lives.
+    out->engage_range = 0.0f;
     out->price       = 0;
     out->tier        = 1;
     // 0xFF means "not authored". VFX_SHELL is 0, so a zeroed struct is indistinguishable from
@@ -156,6 +159,7 @@ static b8 weapon_def_load(WeaponDef* out, const char* path) {
         if (sscanf(line, "cap_cost %f",    &out->cap_cost)    == 1) continue;
         if (sscanf(line, "emission %f",    &out->emission)    == 1) continue;
         if (sscanf(line, "proj_hp %f",     &out->proj_hp)     == 1) continue;
+        if (sscanf(line, "engage_range %f", &out->engage_range) == 1) continue;
         if (sscanf(line, "price %d",       &out->price)       == 1) continue;
         if (sscanf(line, "tier %d",        &out->tier)        == 1) continue;
     }

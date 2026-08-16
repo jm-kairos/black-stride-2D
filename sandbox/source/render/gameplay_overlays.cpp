@@ -297,11 +297,12 @@ void draw_gameplay_overlays(game_state* s) {
         renderer_draw_circle(render_from_hierpos(s, &s->player_ship().origin), s->player_ship().sensors.layer1_radius, 64, 2.0f, disc_col, LAYER_UI);
     }
 
-    // ---- Selected weapon group: effective reach ring -------------------------------------
-    // Radius is the SHORTEST reach in the active fire group, so the ring marks the distance
-    // inside which EVERY weapon in that group can actually land a shot -- fire from outside it
-    // and the shortest-legged weapon's shells expire before arriving. Reach is data-driven: a
-    // projectile lives proj_life seconds travelling at proj_speed, so it covers their product.
+    // ---- Selected weapon group: engagement range ring ------------------------------------
+    // Radius is the SHORTEST tactical range in the active fire group, so the ring marks the
+    // distance inside which EVERY weapon in that group fights. weapon_engage_range, the same
+    // function the autopilot's approach and acquisition use, so the ring and the ship's
+    // behaviour cannot disagree. For ballistics that is still flight reach (proj_speed x
+    // proj_life); a missile draws its authored engage_range, not its megameter endurance.
     {
         const Ship& psh = s->player_ship();
 
@@ -320,7 +321,7 @@ void draw_gameplay_overlays(game_state* s) {
             // distance inside which everything that fires on the trigger can land a shot.
             if (!ship_hardpoint_in_selection(&psh, h)) continue;
 
-            f32 reach = weapon_effective_reach(w);
+            f32 reach = weapon_engage_range(w);
 
             if (reach <= 0.0f) continue;
 

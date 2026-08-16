@@ -27,6 +27,9 @@
 //   cap_cost    4                    # capacitor per trigger pull (the economy lever)
 //   emission    0.6                  # projectile sensor visibility (stealth lever)
 //   proj_hp     1.0                  # how hard point-defense/flak kill the projectile
+//   engage_range 60000               # missile: tactical range the autopilot fights at
+//                                    # (absent = clamped default; a ballistic never needs it --
+//                                    # its flight reach IS its range. See weapon_engage_range.)
 //   price       400                  # market-forward: credits (unused until markets trade weapons)
 //   tier        1                    # market-forward: tech tier / rarity band
 //
@@ -122,6 +125,7 @@ struct WeaponDef {
     f32           cap_cost;      // capacitor per trigger pull
     f32           emission;      // projectile radiation emission (0..1)
     f32           proj_hp;       // projectile HP vs point-defense/flak
+    f32           engage_range;  // tactical range (0 = unauthored; resolved by weapon_engage_range)
     i32           price;         // market-forward: credits (unused v1)
     i32           tier;          // market-forward: tech tier (unused v1)
     u8            vfx_family;    // VfxFamily: cosmetic only; defaults from `kind` at load

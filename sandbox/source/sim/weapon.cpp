@@ -152,6 +152,14 @@ f32 weapon_flak_reach(const Weapon* w) {
     if (!w || w->wkind != WEAPON_KIND_BALLISTIC) return 0.0f;
     return w->projectile_speed() * FLAK_SPEED_MUL * FLAK_LIFETIME_S;
 }
+f32 weapon_engage_range(const Weapon* w) {
+    if (!w) return 0.0f;
+    if (w->def && w->def->engage_range > 0.0f) return w->def->engage_range;
+    f32 reach = weapon_effective_reach(w);
+    if (w->wkind == WEAPON_KIND_MISSILE && reach > MISSILE_DEFAULT_ENGAGE_RANGE)
+        reach = MISSILE_DEFAULT_ENGAGE_RANGE;
+    return reach;
+}
 bs_math::Vec2 weapon_lead_dir(bs_math::HierPos2 fire_origin, bs_math::HierPos2 target_pos,
                               bs_math::Vec2 target_vel, f32 proj_speed,
                               bs_math::Vec2 to_target, f32 dist) {

@@ -25,7 +25,7 @@ damage (CombatArena), and does not own drawing — `render/ship_visual` here is 
 `ship_select_weapon_override`, `ship_clear_weapon_override`, `ship_hardpoint_in_group`,
 `ship_nth_group_weapon`.
 `sim/weapon.h` — `Weapon`, `BallisticWeapon`, `MissileLauncher`, `WeaponKind`, `FireMode`,
-`weapon_effective_reach`, `Weapon::cooldown_duration_s`. `sim/weapon_def.h` — `WeaponDef`,
+`weapon_effective_reach`, `weapon_engage_range`, `Weapon::cooldown_duration_s`. `sim/weapon_def.h` — `WeaponDef`,
 `WeaponRegistry`, `MuzzlePattern`,
 `WEAPON_MAX_MUZZLES`, `VfxFamily`, `weapon_registry_load`, `weapon_registry_resolve_textures`,
 `weapon_registry_find`, `weapon_instantiate`.
@@ -76,11 +76,16 @@ the subsystem while sitting outside `ship.h`'s seven.)*
 - **A module mounts on slots of its own size or larger.** Encoded in `hardpoint_fits_module`
   (`sim/ship.cpp`) and documented in `sim/module.h` — but re-implemented independently in two
   drag-validation paths (see tech debt).
-- **`weapon_effective_reach` is the single source of truth** for "can this weapon hit at
-  distance d". `sim/weapon.h` says so explicitly, and it holds: the RTS attack order gates
-  firing on it (`sim/fleet.cpp`) and the HUD range ring draws it
-  (`render/gameplay_overlays.cpp`), so what the player sees matches what the ship does. It
-  prefers the authored `.weapon` def over live instance values so editing a data file moves both.
+- **Reach is TWO single sources of truth, one per question.** `weapon_effective_reach` answers
+  "can this weapon hit at distance d" (speed x life): the fire gate in `ship_weapon_fire_state`
+  tests it, so a shot is never released at a distance it cannot cover. `weapon_engage_range`
+  answers "how far away is this weapon worth fighting from": the autopilot's approach distance,
+  the ROE acquisition envelope, avoid-order threat measurement (`sim/fleet.cpp`) and the HUD
+  reach ring (`render/gameplay_overlays.cpp`) all read it, so what the player sees matches what
+  the ship does. Identical for ballistics; a missile authors `engage_range` on its card (else a
+  clamped default), because its flight endurance is megameters — feeding that into engagement
+  geometry made mounting a launcher read as the ship fleeing the fight. Both prefer the
+  authored `.weapon` def over live instance values so editing a data file moves everything.
 - **`ship_weapon_fire_state` is the one per-shot validator**, and all three fire-control
   surfaces go through it: the manual held-trigger loop in `game.cpp`, the autopilot attack order
   in `sim/fleet.cpp`, and the selection hub's per-tile status. It folds operational status,
@@ -121,8 +126,10 @@ the subsystem while sitting outside `ship.h`'s seven.)*
   released, and point defense engages on its own doctrine wherever the fleet's PD device is
   mounted. `WeaponKind` still expresses the guided/unguided distinction at every fire site.
 - **`proj_life` IS the flight time to maximum reach**, because `weapon_effective_reach` is
-  `proj_speed * proj_life`. Tuning engagement distance and tuning shot travel time are therefore
-  the same edit, and the whole ballistic catalog was scaled by a uniform 0.15 (reach 19k–58k,
+  `proj_speed * proj_life`. For a BALLISTIC, tuning engagement distance and tuning shot travel
+  time are therefore the same edit (a missile decouples them: `engage_range` tunes where it
+  fights, `proj_life` how long it flies), and the whole ballistic catalog was scaled by a
+  uniform 0.15 (reach 19k–58k,
   flight 2.1–3.6 s) precisely so every authored balance relationship between the four ballistics
   survived — `trident_mk1` documents itself as a third of `longlance_rail`'s reach, and a
   per-weapon retune would have silently broken that. Compress range by scaling the catalog, not

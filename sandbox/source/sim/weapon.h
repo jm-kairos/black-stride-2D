@@ -144,10 +144,29 @@ struct MissileLauncher : Weapon {
 // ---------------------------------------------------------------------------
 // Effective reach: how far a shot from this weapon can actually travel before it expires
 // (projectile speed x lifetime). SINGLE SOURCE OF TRUTH for "can this weapon hit something at
-// distance d" -- the RTS attack order gates firing on it and the HUD range ring draws it, so what
-// the player sees is exactly what the ship does. Returns 0 for a weapon with no usable stats.
+// distance d" -- the fire gate (ship_weapon_fire_state) tests it, so a shot is never released
+// at a distance it cannot physically cover. Returns 0 for a weapon with no usable stats.
+//
+// NOT the tactical question. For engagement GEOMETRY -- how close to fly, how far to acquire,
+// what ring to draw -- use weapon_engage_range below. The two are the same number for every
+// ballistic; they diverge for missiles, whose speed x life is flight ENDURANCE.
 // ---------------------------------------------------------------------------
 f32 weapon_effective_reach(const Weapon* w);
+
+// Cap applied to an UNAUTHORED missile's tactical range: a card that omits `engage_range` must
+// never leak flight endurance (megameters for a long-life seeker round) into engagement
+// geometry. Authored cards override freely in either direction.
+#define MISSILE_DEFAULT_ENGAGE_RANGE 60000.0f
+
+// Tactical engagement range: how far away this weapon is WORTH FIGHTING from. SINGLE SOURCE OF
+// TRUTH for that question -- the autopilot approaches to a fraction of it, the ROE acquisition
+// envelope scales from it, avoid orders measure a threat by it, and the HUD reach ring draws
+// it, so the ring and the ship's behaviour cannot disagree. Resolution: the card's authored
+// `engage_range` when present; else flight reach, clamped for missiles by the default above
+// (a seeker locks at a fraction of its endurance -- approaching to 85% of 4,000,000 units is
+// how mounting a launcher used to read as the ship fleeing the fight). The fire gate stays on
+// weapon_effective_reach: a launch at a target beyond engage range still flies its full life.
+f32 weapon_engage_range(const Weapon* w);
 
 // Reach of a MODE_FLAK shell from this weapon (proj speed * FLAK_SPEED_MUL *
 // FLAK_LIFETIME_S). 0 for a null or non-ballistic weapon -- the autonomous screen's
