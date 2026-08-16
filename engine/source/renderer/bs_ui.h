@@ -1,6 +1,7 @@
 #pragma once
 
 #include "defines.h"
+#include "renderer_types.h"
 
 // =====================================================================================
 // bs_ui — a tiny immediate-mode widget facade over Dear ImGui. SDL-free AND ImGui-free at the
@@ -31,8 +32,12 @@
 // the anchored edge(s) by the `margin` passed to bs_ui_begin_panel. Display size comes from ImGui
 // (GetIO().DisplaySize), so no framebuffer dimensions are needed at the call site.
 typedef enum BsUiAnchor {
-    BS_UI_ANCHOR_TOP_LEFT  = 0,
-    BS_UI_ANCHOR_TOP_RIGHT = 1,
+    BS_UI_ANCHOR_TOP_LEFT     = 0,
+    BS_UI_ANCHOR_TOP_RIGHT    = 1,
+    BS_UI_ANCHOR_BOTTOM_LEFT  = 2,
+    BS_UI_ANCHOR_BOTTOM_RIGHT = 3,
+    BS_UI_ANCHOR_TOP_CENTER   = 4,
+    BS_UI_ANCHOR_CENTER       = 5,
 } BsUiAnchor;
 
 typedef enum BsUiType {
@@ -50,6 +55,18 @@ bs__api__ b8 bs_ui_begin_panel(const char* title, BsUiAnchor anchor, f32 margin,
 
 // Close the current panel. Pair with every bs_ui_begin_panel call.
 bs__api__ void bs_ui_end_panel(void);
+
+// Begin a free-floating, movable & resizable window with a native title bar and close [X] button.
+// Unlike bs_ui_begin_panel (fixed corner-anchored), this window can be dragged and resized by the
+// user; its position/size default on first use and are then user-controlled. `p_open` (may be
+// NULL) is read/written in place: the caller sets it TRUE to show the window and it is set FALSE
+// when the user clicks the title-bar [X]. Returns TRUE if the window is visible and its body
+// should be built this frame. You MUST call bs_ui_end_window() afterwards regardless of the return
+// value (ImGui's Begin/End pairing rule). `title` doubles as the ImGui window id (unique per window).
+bs__api__ b8 bs_ui_begin_window(const char* title, b8* p_open);
+
+// Close the current free-floating window. Pair with every bs_ui_begin_window call.
+bs__api__ void bs_ui_end_window(void);
 
 // One line of text in the panel's default text color.
 bs__api__ void bs_ui_text(const char* text);
@@ -73,7 +90,49 @@ bs__api__ b8 bs_ui_button_sized(const char* label, f32 width, b8 enabled);
 // Keep the next widget on the same line as the previous one (for horizontal button clusters).
 bs__api__ void bs_ui_same_line(void);
 
+// Set the horizontal cursor position for the next widget (in screen pixels, relative to the
+// current window's content region). Used to align columns inside a panel.
+bs__api__ void bs_ui_set_cursor_pos_x(f32 x);
+
 // A faint horizontal separator rule spanning the panel's content width.
 bs__api__ void bs_ui_separator(void);
 
 bs__api__ void bs_ui_checkbox(const char* label, bool* enabled);
+
+// A horizontal float slider over [min,max]. Returns TRUE on the frame the value changes. `value`
+// is read and written in place. `label` doubles as the ImGui id (suffix "##<n>" to disambiguate
+// repeated rows).
+bs__api__ b8 bs_ui_slider_float(const char* label, f32* value, f32 min, f32 max);
+
+// An RGB color edit swatch (opens a picker on click). Reads/writes `rgb[3]` (0..1). Returns TRUE
+// on the frame the color changes. `label` doubles as the ImGui id.
+bs__api__ b8 bs_ui_color_edit3(const char* label, f32* rgb);
+
+// A combo box / dropdown. `items` is a NULL-separated list of labels (e.g. "A\0B\0C\0").
+// `current` is read/written in place. Returns TRUE on the frame the selection changes.
+bs__api__ b8 bs_ui_combo(const char* label, i32* current, const char* items);
+
+// A screen-space label at the given pixel position with adjustable font scale.
+// `id` is the ImGui window identifier (must be unique per label); `text` is what is rendered.
+// No title bar, no background, no window decorations — just tinted text.
+bs__api__ void bs_ui_label_at(const char* id, f32 screen_x, f32 screen_y, f32 font_scale, bs_color tint, const char* text);
+
+// A row that highlights on hover and persists highlight when `selected` is TRUE.
+// Returns TRUE on the frame it is clicked.
+bs__api__ b8 bs_ui_selectable(const char* label, b8 selected);
+
+// A static colored square (no picker / no drag-drop). `size` is in screen pixels.
+bs__api__ void bs_ui_color_button(f32 r, f32 g, f32 b, f32 a, f32 size);
+
+// Returns TRUE if the mouse cursor is inside the current panel/window.
+bs__api__ b8 bs_ui_is_window_hovered(void);
+
+// Push / pop a global alpha multiplier for all subsequent widgets in the current window.
+// Useful for fading an entire panel together. Must be paired.
+bs__api__ void bs_ui_push_alpha(f32 alpha);
+bs__api__ void bs_ui_pop_alpha(void);
+
+// A translucent sci-fi HUD panel (dark background, no title bar, auto-sized).
+// Use exactly like bs_ui_begin_panel / bs_ui_end_panel but with HUD styling.
+bs__api__ b8 bs_ui_begin_hud_panel(const char* title, BsUiAnchor anchor, f32 margin);
+bs__api__ void bs_ui_end_hud_panel(void);

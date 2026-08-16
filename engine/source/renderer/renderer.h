@@ -53,6 +53,10 @@ bs__api__ bs_texture renderer_load_texture(const char* path);
 // Like renderer_load_texture, create these in the game's init(), not per frame.
 bs__api__ bs_texture renderer_create_texture(const u8* pixels, u32 width, u32 height);
 
+// Re-upload pixels to an existing texture created by renderer_create_texture. Width and height
+// must match the original dimensions. Safe to call with an invalid handle; returns TRUE on success.
+bs__api__ b8 renderer_update_texture(bs_texture texture, const u8* pixels, u32 width, u32 height);
+
 // Release a texture created by renderer_load_texture. Safe to call with an invalid handle.
 bs__api__ void renderer_destroy_texture(bs_texture texture);
 
@@ -66,6 +70,95 @@ bs__api__ void renderer_set_camera(Camera2D camera);
 // flushes the batch (sort -> upload -> draw). Sprites with texture id 0 use the engine's 1x1
 // white texture (solid-color fill via the tint).
 bs__api__ void renderer_draw_sprite(const bs_sprite* sprite);
+
+// Global alpha multiplier applied to every subsequent sprite/line/circle/quad tint until
+// changed or the next frame (reset to 1.0 at begin_frame). Use it to cross-fade whole render
+// passes (e.g. blending the arena and galaxy-map looks). Clamped to [0,1]. Does NOT affect
+// sunbursts/starfields/nebula (those carry their own visibility params).
+bs__api__ void renderer_set_draw_alpha(f32 alpha);
+bs__api__ f32  renderer_get_draw_alpha();
+
+// Append a 4-map mapped sprite to the current frame. Rendered inside the same scene pass as
+// regular sprites so it participates in bloom. MUST be called between begin_frame and end_frame.
+bs__api__ void renderer_draw_mapped_sprite(const bs_mapped_sprite* sprite);
+
+// ---- Ship-portrait offscreen pass ---------------------------------------------------------
+// Between begin and end, every sprite submission (draw_sprite, draw_mapped_sprite, and the
+// line/quad/circle debug primitives built from sprites) is captured into a separate batch and
+// rendered with `camera` into a persistent square offscreen target during end_frame, BEFORE
+// the scene passes -- the scene itself is unaffected. The RmlUi HUD document samples the
+// target through the reserved texture source name "bs:portrait" (an <img> whose src ends with
+// that name). The portrait renders fullbright: scene lights and bloom do not apply. `camera`
+// maps world units to the target's pixels (the target is square; frame accordingly). Must be
+// called between renderer_begin_frame and renderer_end_frame; scopes do not nest, and a second
+// begin in one frame replaces the first portrait. Costs nothing in frames where it is unused.
+bs__api__ void renderer_portrait_begin(Camera2D camera);
+bs__api__ void renderer_portrait_end(void);
+
+// Fleet-thumbnail variant of the portrait scope: identical capture semantics, but the scope
+// renders into 256x256 slot `slot` (0..7) of a persistent thumbnail STRIP the HUD samples via
+// the reserved texture name "bs:thumbs" (256 x 2048; slot N occupies rect "0 N*256 256 256").
+// Close with renderer_portrait_end. Several scopes may run per frame -- typically the main
+// portrait plus one thumbnail per fleet member.
+bs__api__ void renderer_thumb_begin(i32 slot, Camera2D camera);
+
+// Draw a procedural parallax starfield layer using a custom GPU pipeline.
+// `params` carries the per-layer virtual camera, seed, tile size, and density.
+// The backend queues the parameters and renders during end_frame (no render pass
+// is active when this is called from game_render).
+bs__api__ void renderer_draw_starfield(const bs_starfield_params* params);
+
+// Draw a procedural sunburst star using a custom GPU pipeline.
+// `params` carries the screen-space position, radii, colour, and time.
+// The backend queues the parameters and renders during end_frame.
+bs__api__ void renderer_draw_sunburst(const bs_sunburst_params* params);
+
+// Draw a real-time procedural star surface (animated photosphere + corona) using a custom
+// GPU pipeline. The backend queues the parameters and renders during end_frame.
+bs__api__ void renderer_draw_starsurface(const bs_starsurface_params* params);
+// Draw a real-time procedural planet (impostor sphere: star-lit, per-type surface, clouds,
+// atmosphere, rings) using a custom GPU pipeline. Queued and rendered during end_frame.
+bs__api__ void renderer_draw_planetsurface(const bs_planetsurface_params* params);
+// Draw a procedural radiation heat map using a custom GPU pipeline.
+// The backend queues the parameters and renders as a fullscreen alpha-blended overlay during end_frame.
+bs__api__ void renderer_draw_heat_map(const bs_heat_map_params* params);
+
+// Draw a procedural alpha-blended nebula/dust cloud layer using a custom GPU pipeline.
+// The backend stores the parameters and renders them as a fullscreen alpha-blended overlay during end_frame.
+bs__api__ void renderer_draw_nebula(const bs_nebula_params* params);
+
+// Draw volumetric sun shafts (god rays): hull silhouettes radially blurred away from the sun
+// and added into the HDR scene before bloom. The backend stores one set of parameters and
+// renders during end_frame; cleared each begin_frame, so re-submit every frame.
+bs__api__ void renderer_draw_godrays(const bs_godray_params* params);
+
+// Set the movable 2D point lights applied per-pixel by the sprite shader. The renderer copies the
+// list; re-submit each frame (or whenever it changes). `count == 0` renders the scene fullbright
+// (lighting is opt-in). `ambient` is the scene-global floor added before accumulating lights;
+// sprite layers >= `unlit_layer` render fullbright (keep HUD/UI readable). Lights beyond the
+// backend cap are dropped.
+bs__api__ void renderer_set_lights(const bs_light2d* lights, u32 count, bs_color ambient, u32 unlit_layer);
+
+// Set tunable glow parameters for the sprite fragment shader's procedural glow / heat effects.
+// The renderer copies the struct; re-submit each frame or when it changes. Passing NULL
+// resets to defaults. Affects all sprites that use `custom.x > 0` (bullets, thrusters, etc.).
+bs__api__ void renderer_set_glow_params(const bs_glow_params* params);
+
+// Enable or disable the full-scene HDR bloom post-process. When enabled, the renderer renders
+// the scene to an offscreen target, extracts bright pixels, blurs them, and composites back.
+bs__api__ void renderer_set_bloom_enabled(b8 enabled);
+
+// Tune the bloom threshold (luminance above which pixels contribute to bloom) and intensity
+// (multiplier on the blurred bloom when composited back). Both default to reasonable values.
+bs__api__ void renderer_set_bloom_params(f32 threshold, f32 intensity);
+
+// Anamorphic streak post-process (aux-bloom path).
+bs__api__ void renderer_set_streak_enabled(b8 enabled);
+bs__api__ void renderer_set_streak_params(f32 angle, f32 length);
+bs__api__ void renderer_set_streak_intensity(f32 intensity);
+bs__api__ void renderer_set_streak_source(bs_math::Vec2 screen_pos);
+bs__api__ void renderer_set_streak_flare_intensity(f32 intensity);
+bs__api__ void renderer_set_aux_bloom_mode(b8 enabled);
 
 // -------------------------------------------------------------------------------------
 // Phase 4 — debug / vector layer + frame stats.
@@ -104,3 +197,23 @@ bs__api__ void renderer_draw_grid(bs_math::Vec2 min, bs_math::Vec2 max, f32 spac
 
 // Snapshot of the most recently completed frame's draw statistics (see bs_frame_stats).
 bs__api__ bs_frame_stats renderer_get_frame_stats();
+
+// Frame CPU timing (milliseconds), reported by the application loop each frame:
+//   render_ms  = time spent in the game's render(dt)
+//   present_ms = time spent in end_frame (submit + present, includes the VSYNC wait)
+// The game/sandbox can read these to display a CPU-vs-present breakdown.
+bs__api__ void renderer_report_frame_timing(f32 render_ms, f32 present_ms);
+bs__api__ void renderer_get_frame_timing(f32* out_render_ms, f32* out_present_ms);
+
+// Runtime swapchain present mode. FALSE = VSYNC (default, capped to refresh), TRUE = IMMEDIATE
+// (uncapped) for GPU-cost profiling. When IMMEDIATE is active the application loop skips its
+// software frame cap so present_ms reflects GPU submit+execute time. Returns TRUE if the mode
+// was actually applied; FALSE (swapchain unchanged, still VSYNC) if the driver does not support
+// IMMEDIATE or the reconfigure failed — callers must not assume the toggle succeeded.
+bs__api__ b8   renderer_set_present_mode(b8 immediate);
+bs__api__ b8   renderer_is_present_immediate();
+
+// Breakdown of the previous frame's present cost (ms): acquire_ms is the blocking wait for a
+// free swapchain image inside end_frame (VSYNC pacing / swapchain starvation lands here);
+// submit_ms is the command-buffer submit. acquire_ms + submit_ms ≈ present_ms minus record time.
+bs__api__ void renderer_get_present_breakdown(f32* out_acquire_ms, f32* out_submit_ms);

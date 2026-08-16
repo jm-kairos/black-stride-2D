@@ -1,0 +1,28 @@
+# Three-tube swarm pod: one trigger pull ejects the whole cluster for a single
+# capacitor charge (muzzle_pattern salvo multiplies damage per pull by barrel count,
+# so the per-round number is balanced for x3). The cluster fans from three offset
+# tubes, coasts, then ignites together -- built to overwhelm a PD blink that could
+# handle the rounds one at a time.
+id          hydra_rack
+name        "Hydra Swarm Rack"
+kind        missile
+size        M
+icon        ic-missile
+damage      11
+reload      6.5
+proj_speed  11000
+proj_life   300
+proj_radius 4.0
+cap_cost    30
+emission    0.85
+proj_hp     1.2
+price       1600
+tier        2
+engage_range 50000
+eject_speed  400
+ignition_delay 0.4
+muzzle -0.6 1.1
+muzzle  0.0 1.4
+muzzle  0.6 1.1
+muzzle_pattern salvo
+desc "Three tubes, one pull. Each round is fragile alone; the cluster arrives together and asks the point-defense to be in three places at once."

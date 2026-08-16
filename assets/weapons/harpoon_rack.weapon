@@ -1,0 +1,28 @@
+# Standard guided-missile launcher (the former hardcoded "Missile Launcher").
+# Fire-and-seek: missiles steer onto hostiles after launch. Hot engines make them
+# easy to see coming; 3.5 hp costs enemy PD a real dwell to burn down.
+id          harpoon_rack
+name        "Harpoon Missile Rack"
+kind        missile
+size        M
+icon        ic-missile
+damage      40
+reload      4.0
+proj_speed  10000
+proj_life   400
+proj_radius 6.0
+cap_cost    25
+emission    0.9
+proj_hp     3.5
+# Tactical range (autopilot approach / ROE acquisition / HUD ring): outranges the gun
+# catalog (19k-58k) so missile boats fight from standoff, without the 4,000k flight
+# endurance leaking into engagement geometry. Flight time stays proj_life (PD counterplay).
+engage_range 60000
+# Cold launch: expelled from the cell at 350 u/s along the cell's facing, half a second
+# of unpowered coast (~175 units of hull clearance), then the motor lights and the
+# guidance arcs the round onto its intercept.
+eject_speed  350
+ignition_delay 0.5
+price       900
+tier        1
+desc "Fire-and-seek ordnance. Hot engines make every launch visible from across the system, but a harpoon that connects does the work of ten shells."

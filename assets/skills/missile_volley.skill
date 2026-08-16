@@ -1,0 +1,12 @@
+# Alpha Strike: every participating ship empties its ready missile tubes at the
+# designated hull in a staggered ripple. Launcher reloads, capacitor and flak claims
+# all still gate per tube -- the skill synchronizes, it does not cheat.
+id        missile_volley
+name      "Alpha Strike"
+icon      ic-missile
+targeting entity
+effect    missile_volley
+scope     selection
+cooldown  45
+stagger   0.12
+desc "Concentrated ordnance release. Every ship in the selection ripples its loaded missile tubes at one designated hull."

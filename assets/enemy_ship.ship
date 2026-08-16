@@ -1,0 +1,31 @@
+# Black Stride ship definition (.ship format).
+
+id raider
+name "Raider-class Interceptor"
+faction 0
+world_scale 0.25
+size 2336 4832
+
+# Placeholder texture — replace with enemy-specific art when available.
+layer sprite assets/textures/ship.png 0 0 1 0 0
+
+# Box collider (ship-local space)
+collider -1168 -2416
+collider  1168 -2416
+collider  1168  2416
+collider -1168  2416
+
+# Thruster nozzles pinned to art pixels (the 364x686 art stretches onto this card's
+# 2336x4832 local frame: local_x = px*6.42 - 1168, local_y = 2416 - py*7.04). The twin
+# stern engine pods sit at art px 65-138 / 225-298, exit plane ~py 684. facing is the
+# direction the exhaust LEAVES the hull, CCW from the nose. Visual only: ShipRendering
+# projects the flight telemetry onto each nozzle.
+# Format: thruster <main|rcs> <x> <y> <facing_deg> [size]
+thruster main -517 -2400 180 0.6   # port engine pod
+thruster main  510 -2400 180 0.6   # starboard engine pod
+thruster rcs  -845  1359  90 0.9   # bow port lateral
+thruster rcs   840  1359 -90 0.9   # bow starboard lateral
+thruster rcs  -590  1500   0 0.9   # bow port retro (reverse burn)
+thruster rcs   590  1500   0 0.9   # bow starboard retro
+thruster rcs  -885 -1950  90 0.9   # stern port lateral
+thruster rcs   880 -1950 -90 0.9   # stern starboard lateral

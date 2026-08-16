@@ -1,0 +1,1459 @@
+/* =====================================================================================
+   hud.rcss — layout + skin for the in-game HUD document (hud.rml).
+
+   Pairs with the shared palette in theme.rcss. The whole document is a transparent, full-
+   screen overlay: `pointer-events: none` on <body> makes every panel click-through by default
+   (so world picking still works underneath), and only the genuinely interactive elements
+   (encounter buttons, the discoveries close box) opt back in with `pointer-events: auto`.
+   ===================================================================================== */
+
+body {
+    width: 100%;
+    height: 100%;
+    /* Transparent overlay; individual panels paint their own backdrops. */
+    pointer-events: none;
+}
+
+/* --- Shared HUD readout panel (small fabricated plate, chamfered, baked shadow) ---- */
+.hud-panel {
+    display: block;
+    decorator: ninepatch(plate-sm, plate-sm-inner);
+    padding: 14px 16px;          /* 6px shadow margin + plate ring */
+}
+
+.hud-row {
+    display: block;
+    margin-bottom: 2px;
+}
+
+.hud-key {
+    display: inline-block;
+    width: 64px;
+    color: #a89a7e;          /* dusty beige label */
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+.hud-val {
+    color: #ddd6c4;
+    font-size: 13px;
+}
+
+/* --- Navigation readout (top-right) ----------------------------------------------- */
+#nav {
+    position: absolute;
+    top: 16px;
+    right: 16px;
+    width: 236px;
+}
+
+/* --- Ship readout (top-right, stacked below nav) ---------------------------------- */
+#ship {
+    position: absolute;
+    top: 124px;
+    right: 16px;
+    width: 236px;
+}
+
+/* --- Time control (top-center): pause + speed tiers on the shared calendar -------- */
+#time {
+    position: absolute;
+    top: 16px;
+    left: 50%;
+    width: 230px;
+    margin-left: -115px;         /* half of border-box width -> centered */
+    box-sizing: border-box;
+    text-align: center;
+}
+
+.time-date {
+    display: block;
+    color: #ddd6c4;
+    font-size: 13px;
+    letter-spacing: 1px;
+    margin-bottom: 6px;
+}
+
+.time-btns {
+    display: block;
+}
+
+.time-btn {
+    display: inline-block;
+    decorator: ninepatch(btn, btn-inner);
+    border: 1px transparent;     /* preserves the Phase-1 box size; edges live in the texture */
+    color: #ddd6c4;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 4px 7px;
+    margin: 0 1px;
+    pointer-events: auto;        /* buttons are interactive */
+    transition: decorator color 0.12s quadratic-out;
+}
+
+.time-btn:hover {
+    decorator: ninepatch(btn-hi, btn-hi-inner);
+    color: #f2ead6;
+}
+
+.time-btn.active {
+    decorator: ninepatch(btn-amber, btn-amber-inner);
+    color: #e8b45a;
+}
+
+/* --- Action log (bottom-right, right-aligned, fades via data-style-opacity) -------- */
+#log {
+    position: absolute;
+    bottom: 16px;
+    right: 16px;
+    width: 340px;
+    text-align: right;
+}
+
+.log-line {
+    display: block;
+    color: #ddd6c4;
+    font-size: 13px;
+    margin-bottom: 1px;
+}
+
+/* --- Discoveries browser (floating, left side) ------------------------------------ */
+#discoveries {
+    position: absolute;
+    top: 118px;
+    left: 32px;
+    width: 380px;
+    max-height: 440px;
+    overflow: hidden;
+}
+
+.win-title {
+    display: block;
+    color: #f2ead6;
+    font-size: 15px;
+    font-weight: 700;              /* bold, crisp title (was thin 13px) */
+    margin-bottom: 6px;
+    text-transform: uppercase;
+    letter-spacing: 3px;
+    /* Engraved: dark bite above, faint light lip below -- stamped INTO the plate. */
+    font-effect: shadow(0px -1px #000000b0), shadow(0px 1px #6a707840);
+}
+
+.win-close {
+    float: right;
+    color: #a3543a;              /* oxidized copper */
+    padding: 0 4px;
+    pointer-events: auto;    /* only the close box is clickable */
+    transition: color 0.12s quadratic-out;   /* ease the hover brighten */
+}
+
+.win-close:hover {
+    color: #c76b4d;
+}
+
+/* Inspector uses a static oxidized-copper machined "Collapse" button instead of a bare X (the
+   window is fullscreen). Scoped to #inspector so other windows keep their plain X close glyph.
+   Utilitarian: no pulse, just a clear pressed-metal exit control. */
+#inspector .win-close {
+    float: right;
+    margin-top: -2px;                       /* seat the button within the title bar */
+    padding: 3px 12px;
+    color: #e8d6c8;
+    decorator: ninepatch(copper-btn, copper-btn-inner);   /* oxidized copper cap */
+    border: 1px transparent;
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    pointer-events: auto;
+    transition: color 0.12s quadratic-out;   /* ease hover */
+}
+
+#inspector .win-close:hover {
+    color: #ffffff;
+}
+
+.win-count {
+    display: block;
+    color: #a89a7e;
+    font-size: 12px;
+    margin-bottom: 6px;
+}
+
+.disc-list {
+    display: block;
+}
+
+.disc-line {
+    display: block;
+    font-size: 12px;
+    margin-bottom: 2px;
+}
+
+/* --- Encounter modal (centered) --------------------------------------------------- */
+#encounter {
+    position: absolute;
+    left: 50%;
+    top: 26%;
+    width: 360px;
+    margin-left: -180px;     /* pull back half the width to center horizontally */
+}
+
+.modal-title {
+    display: block;
+    color: #f2ead6;
+    font-size: 16px;
+    margin-bottom: 6px;
+    font-effect: shadow(1px 1px #000000a0);
+}
+
+.modal-row {
+    display: block;
+    color: #ddd6c4;
+    margin-bottom: 3px;
+}
+
+.modal-desc {
+    display: block;
+    color: #a89a7e;
+    font-style: italic;
+    margin: 6px 0;
+}
+
+.modal-btn {
+    display: block;
+    decorator: ninepatch(btn, btn-inner);
+    border: 1px transparent;
+    color: #ddd6c4;
+    font-weight: 600;
+    padding: 6px 8px;
+    margin-top: 6px;
+    text-align: center;
+    pointer-events: auto;    /* buttons are interactive */
+    transition: decorator color 0.12s quadratic-out;   /* ease hover states */
+}
+
+.modal-btn:hover {
+    decorator: ninepatch(btn-hi, btn-hi-inner);
+    color: #f2ead6;
+}
+
+/* --- Fleet ship panel (top-right, stacked below the nav/ship readouts) ------------ */
+#fleet {
+    position: absolute;
+    top: 182px;
+    right: 16px;
+    width: 236px;
+}
+
+.fleet-name {
+    display: block;
+    color: #f2ead6;
+    font-size: 14px;
+    font-effect: shadow(1px 1px #000000a0);
+}
+
+.fleet-faction {
+    display: block;
+    color: #a89a7e;
+    font-size: 12px;
+}
+
+.fleet-stat {
+    display: block;
+    color: #ddd6c4;
+    font-size: 12px;
+    margin-bottom: 1px;
+}
+
+.fleet-hdr {
+    display: block;
+    color: #a89a7e;
+    font-size: 12px;
+    margin-bottom: 3px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+/* --- Capacitor gauge + PD doctrine line (fleet panel; Phase E feedback) ------------ */
+/* Channel = baked-inner-shadow sprite; fill = energized hot gradient with a bright core
+   line (the one place metal glows: energy is literally flowing here). */
+.cap-gauge {
+    display: block;
+    width: 100%;
+    height: 8px;
+    decorator: ninepatch(chan, chan-inner);
+    padding: 1px;
+    overflow: hidden;
+    margin: 2px 0 4px 0;
+}
+
+.cap-gauge-fill {
+    display: block;
+    width: 0%;                   /* driven per-frame by data-style-width */
+    height: 100%;
+    decorator: horizontal-gradient(#77833f #a8b45c);   /* energized brass-olive */
+}
+
+.cap-gauge-core {
+    display: block;
+    height: 2px;
+    margin-top: 2px;
+    decorator: horizontal-gradient(#c3d075 #e4f0a0);   /* hot core line */
+}
+
+.fleet-pd {
+    display: block;
+    color: #a89a7e;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 2px;
+}
+
+.fleet-pd.warn {
+    color: #e8b45a;              /* amber: stance is not STANDARD (HOLD / OVERDRIVE) */
+    font-effect: glow(1px 3px #e8b45a44);   /* diegetic: energy committed */
+}
+
+/* Fire-group assignment matrix (inspector): columns = mounted weapons, rows = keys 1-5.
+   Each cell is a checkbox toggling that weapon's membership in that group. */
+.gm-table {
+    display: block;
+    margin-bottom: 6px;
+}
+
+.gm-hdr-row, .gm-row {
+    display: block;
+    margin-bottom: 2px;
+}
+
+.gm-corner, .gm-row-hdr {
+    display: inline-block;
+    width: 34px;
+    color: #8a8069;
+    font-size: 11px;
+    text-align: center;
+    vertical-align: top;
+    padding-top: 3px;
+}
+
+.gm-row-hdr {
+    color: #ddd6c4;
+    font-size: 12px;
+}
+
+.gm-row.active .gm-row-hdr {
+    color: #b5c063;
+}
+
+.gm-col-hdr {
+    display: inline-block;
+    width: 38px;
+    margin-right: 3px;
+    color: #8a8069;
+    font-size: 10px;
+    text-align: center;
+    overflow: hidden;
+    vertical-align: top;
+}
+
+.gm-cell {
+    display: inline-block;
+    width: 38px;
+    height: 18px;
+    margin-right: 3px;
+    text-align: center;
+    color: #e8b45a;
+    font-size: 12px;
+    padding-top: 1px;
+    border-radius: 0;
+    border-width: 1px;
+    border-color: #0b0c0e;
+    border-bottom-color: #3a3f46;   /* light lip = recessed socket */
+    background-color: #101115;
+    vertical-align: top;         /* empty and checked cells share the same top edge (an empty
+                                    inline-block otherwise aligns by its bottom edge and the
+                                    row jumps when a checkmark appears) */
+    overflow: hidden;
+    pointer-events: auto;        /* checkbox: click toggles membership */
+}
+
+.gm-cell:hover {
+    background-color: #1a1c21;
+    border-bottom-color: #4a5058;
+}
+
+.gm-cell.on {
+    background-color: #2b2415;   /* amber-stained recess */
+    border-color: #5c4a24;
+}
+
+/* --- Fleet roster (top-left, command overlay): one row per fleet member ------------ */
+/* pointer-events:auto on the container makes the whole panel a solid commanding surface:
+   bs_rml_wants_mouse() reports the cursor as UI-owned over it, which is what keeps a roster
+   click from also starting a selection drag in the world behind it (the arbitration the old
+   self-drawn panel had to answer for itself via fleet_roster_wants_mouse). */
+#roster {
+    position: absolute;
+    top: 120px;
+    left: 16px;
+    width: 244px;
+    pointer-events: auto;
+}
+
+.roster-hdr {
+    color: #7fd4e8;
+    font-size: 12px;
+    letter-spacing: 2px;
+    margin-bottom: 4px;
+}
+
+.roster-row {
+    display: block;
+    background-color: #191d23d9;
+    border-left: 2px transparent;
+    padding: 3px 6px;
+    margin-bottom: 3px;
+}
+
+.roster-row.selected {
+    background-color: #24424ce8;
+    border-left: 2px #59d9f2;
+}
+
+/* World-hover cue: the cursor is over this ship's hull out in the world. */
+.roster-row.hovered {
+    background-color: #2e333a;
+}
+
+.roster-main {
+    display: block;
+}
+
+.roster-main:hover {
+    background-color: #2e333a;
+}
+
+.roster-label {
+    color: #d0dae2;
+    font-size: 12px;
+}
+
+.roster-label.piloted {
+    color: #59ff8c;              /* the manually-piloted ship */
+}
+
+.roster-status {
+    display: inline-block;
+    color: #808f9a;
+    font-size: 10px;
+    margin-left: 8px;            /* breathing room after the name on the shared line */
+}
+
+.roster-chips {
+    display: block;
+    text-align: right;
+    margin-top: -12px;           /* chips share the status line, right-aligned */
+}
+
+.roster-chip {
+    display: inline-block;
+    width: 22px;
+    color: #6e7a84;
+    background-color: #23272cd9;
+    font-size: 10px;
+    text-align: center;
+    padding: 1px 0;
+    margin-left: 3px;
+}
+
+.roster-chip:hover {
+    color: #d0dae2;
+    background-color: #2e333a;
+}
+
+.roster-chip.on {
+    color: #14171b;
+    background-color: #d99e40;   /* amber: the ship's active stance */
+}
+
+/* Per-row inspect button ("i"): opens the full-screen ship inspector on that member. Cyan
+   family, not amber -- it navigates, it does not set a stance. */
+.roster-chip.insp {
+    color: #7fd4e8;
+    background-color: #14262cd9;
+}
+
+.roster-chip.insp:hover {
+    color: #14171b;
+    background-color: #59d9f2;
+}
+
+.weapon-row {
+    display: block;
+    color: #ddd6c4;
+    font-size: 12px;
+    padding: 2px 4px;
+    margin-bottom: 1px;
+    border-radius: 0;
+    pointer-events: auto;        /* fitted weapons are clickable to select */
+}
+
+.weapon-row:hover {
+    background-color: #2e333a;
+}
+
+.weapon-row.selected {
+    background-color: #3a3325;   /* amber-tinted graphite */
+    color: #e8b45a;
+}
+
+.weapon-row.empty {
+    color: #6e6555;
+    pointer-events: none;        /* empty slots are inert */
+}
+
+/* Fire-group row with no member weapons: dimmed but still clickable to select. */
+.weapon-row.dim {
+    color: #6e6555;
+}
+
+.fleet-mode {
+    display: block;
+    decorator: ninepatch(btn, btn-inner);
+    border: 1px transparent;
+    color: #ddd6c4;
+    font-weight: 600;
+    padding: 6px 8px;
+    text-align: center;
+    pointer-events: auto;
+    transition: decorator color 0.12s quadratic-out;   /* ease hover states */
+}
+
+.fleet-mode:hover {
+    decorator: ninepatch(btn-hi, btn-hi-inner);
+    color: #f2ead6;
+}
+
+.fleet-mode.disabled {
+    color: #6e6555;              /* dimmed while a camera transition is in flight */
+}
+
+/* --- FTL jump-mode banner (bottom-center) ----------------------------------------- */
+#jumpmode {
+    position: absolute;
+    bottom: 104px;               /* the shared banner slot, clear of the skill hotbar below */
+    left: 0;
+    width: 100%;
+    text-align: center;
+    color: #c9963f;              /* stenciled amber military labeling */
+    font-size: 22px;
+    text-transform: uppercase;
+    letter-spacing: 4px;
+    /* Earned glow exception: an active FTL field announcement, not decoration. */
+    font-effect: shadow(1px 2px #000000c0), glow(2px 5px #c9963f50);
+}
+
+/* --- Fleet skill hotbar (bottom-center; detached RTS camera only) ------------------ */
+/* The container is click-through scaffolding centered by the #inspector-btn negative-
+   margin trick; the slots opt back in with pointer-events:auto. */
+#skillbar {
+    position: absolute;
+    bottom: 52px;                /* above the Inspector button, below the banner slot */
+    left: 50%;
+    width: 460px;
+    margin-left: -230px;
+    text-align: center;
+    pointer-events: none;
+}
+
+/* One 44px hotbar tile: the .weapon-symbol armor-plate recipe, sized up, no drag. */
+.skill-slot {
+    display: inline-block;
+    width: 44px;
+    height: 44px;
+    margin: 0 3px;
+    background-color: #2e333a;
+    decorator: ninepatch(btn, btn-inner);
+    border: 1px transparent;     /* box-size keeper; hosts the armed/denied edge flashes */
+    transition: decorator color 0.12s quadratic-out;
+    color: #ddd6c4;
+    position: relative;
+    pointer-events: auto;
+}
+
+.skill-slot:hover {
+    decorator: ninepatch(btn-hi, btn-hi-inner);
+    color: #f2ead6;
+}
+
+.skill-slot.armed {
+    decorator: ninepatch(btn-amber, btn-amber-inner);
+    border-color: #c9963f;
+    color: #e8b45a;
+    animation: 0.4s cubic-out 1 sel-flash;   /* one-shot flash on arm */
+}
+
+/* One-shot red edge flash on a refused press (on cooldown / nothing able to fire). */
+@keyframes deny-flash {
+    0%   { border-color: #e05545; }
+    100% { border-color: #00000000; }
+}
+
+.skill-slot.denied {
+    animation: 0.35s cubic-out 1 deny-flash;
+}
+
+/* Emblem stencil: dim while the skill cannot fire, ivory when ready, amber while armed.
+   pointer-events:none is LOAD-BEARING -- the per-frame data-attr-sprite churn must never
+   own the click (the insp-fleet-list lesson). */
+.skill-icon {
+    display: block;
+    width: 32px;
+    height: 32px;
+    margin: 6px auto;
+    image-color: #6e6555;        /* dim: on cooldown / no tube ready */
+    transition: image-color 0.12s quadratic-out;
+    pointer-events: none;
+}
+
+.skill-slot.ready .skill-icon { image-color: #ddd6c4; }
+.skill-slot:hover .skill-icon { image-color: #f2ead6; }
+.skill-slot.armed .skill-icon { image-color: #e8b45a; }
+
+/* Cooldown strip along the tile's bottom edge: width = REMAINING fraction, driven by the
+   cd_w string bind (the cap-gauge-fill recipe), shrinking to nothing as the skill readies. */
+.skill-cd {
+    position: absolute;
+    left: 1px;
+    bottom: 1px;
+    height: 4px;
+    width: 0%;                   /* driven per-frame by data-style-width */
+    decorator: horizontal-gradient(#7a4a35 #c9963f);
+    pointer-events: none;
+}
+
+/* Corner labels: keycap top-left, participant tube count top-right. */
+.skill-key {
+    position: absolute;
+    top: 1px;
+    left: 4px;
+    font-size: 10px;
+    color: #a89a7e;
+    pointer-events: none;
+}
+
+.skill-badge {
+    position: absolute;
+    top: 1px;
+    right: 4px;
+    font-size: 10px;
+    color: #9db4c0;
+    pointer-events: none;
+}
+
+/* Remaining-seconds readout, centered over the dimmed icon while cooling. */
+.skill-cdtext {
+    position: absolute;
+    top: 14px;
+    left: 0;
+    width: 100%;
+    text-align: center;
+    font-size: 13px;
+    font-weight: 700;
+    color: #f2ead6;
+    font-effect: shadow(1px 1px #000000c0);
+    pointer-events: none;
+}
+
+/* Skill entity-targeting banner: #jumpmode's voice in the same banner slot (the two armed
+   modes are mutually exclusive, so they share it). Click-through: it announces, the world
+   underneath takes the targeting click. */
+#skilltarget {
+    position: absolute;
+    bottom: 104px;
+    left: 0;
+    width: 100%;
+    text-align: center;
+    color: #c9963f;
+    font-size: 22px;
+    text-transform: uppercase;
+    letter-spacing: 4px;
+    font-effect: shadow(1px 2px #000000c0), glow(2px 5px #c9963f50);
+    pointer-events: none;
+}
+
+/* --- HierPos2 debug readout (top-left, dev toggle) -------------------------------- */
+#debug {
+    position: absolute;
+    top: 120px;
+    left: 12px;
+    color: #ddd6c4;
+    font-size: 13px;
+    white-space: pre;            /* honour the '\n' line breaks in debug_text */
+}
+
+/* --- Galaxy-map hover tooltip (cursor-anchored; light plate, tighter than .panel) --- */
+#tooltip {
+    position: absolute;          /* left/top set per-frame via data-style-left/top */
+    display: block;
+    max-width: 460px;
+    decorator: ninepatch(plate-sm, plate-sm-inner);   /* small plate, baked shadow */
+    padding: 14px 16px;
+    color: #ddd6c4;
+    font-size: 13px;
+    white-space: pre;            /* honour the '\n' breaks + column alignment in tip_text */
+    pointer-events: none;        /* stay click-through so world picking works underneath */
+}
+
+/* --- Ship hover nameplate (hull-anchored; a thin translucent strip over the hull) -------
+   left/top are bound to the HULL CENTER in screen px; the fixed width and the negative
+   margins pull the plate back so it centres on the hull (same trick as #inspector-btn).
+   MUST stay pointer-events:none -- it sits exactly where the cursor is hovering, and a
+   mouse-owning element here would flip bs_rml_wants_mouse and kill the very hover that
+   shows it. */
+#nameplate {
+    position: absolute;          /* left/top set per-frame via data-style-left/top */
+    display: block;
+    width: 240px;
+    margin-left: -120px;         /* pull back half the width to centre on the hull */
+    margin-top: -22px;           /* ~half the two-line height */
+    background-color: #0a141ea6; /* the thin transparent layer */
+    border: 1px #59d9f24d;
+    padding: 6px 8px;
+    text-align: center;
+    pointer-events: none;        /* click-through: world hover/picking works underneath */
+}
+
+.np-name {
+    display: block;              /* RmlUi defaults to inline; the two lines must stack */
+    color: #f2ead6;
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: 1px;
+}
+
+.np-class {
+    display: block;
+    color: #9db4c0;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+}
+
+/* --- Flagship inspector launcher button (bottom-center) --------------------------- */
+#inspector-btn {
+    position: absolute;
+    bottom: 16px;
+    left: 50%;
+    width: 140px;
+    margin-left: -70px;          /* pull back half the width to centre */
+    decorator: ninepatch(btn, btn-inner);
+    border: 1px transparent;
+    color: #ddd6c4;
+    padding: 6px 8px;
+    text-align: center;
+    font-size: 13px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    pointer-events: auto;        /* the launcher is interactive */
+    transition: decorator color 0.12s quadratic-out;   /* ease hover states */
+}
+
+#inspector-btn:hover {
+    decorator: ninepatch(btn-hi, btn-hi-inner);
+    color: #f2ead6;
+}
+
+/* --- Ship inspector (FULL-SCREEN, three zones) ------------------------------------- */
+/* The container is click-through scaffolding; the two side columns are solid plates that opt
+   back in with pointer-events:auto. The CENTER band stays open to the world so the inspected
+   hull's hardpoint boxes remain visible and drag-mountable "through" the window -- phase 2
+   swaps that band for an offscreen-rendered portrait. Weapon firing is additionally
+   suppressed game-side while the window is open (see game.cpp), so a left-click anywhere --
+   inside or outside the columns -- never fires the active weapon. */
+/* ONE window: the container paints the plate but stays click-through; sections opt back in.
+   NOTHING here may overflow -- RmlUi overflow containers break hit-testing and nested layout,
+   so every section is sized to fit (that is what the middle tabs are for). Layout constants
+   (insets, title height, column widths, tab-panel height) are mirrored in ship_scene.cpp. */
+#inspector {
+    position: absolute;
+    top: 60px;
+    left: 16px;
+    right: 16px;
+    bottom: 52px;
+    decorator: ninepatch(plate, plate-inner);
+    pointer-events: none;
+}
+
+.insp-titlebar {
+    position: absolute;
+    left: 6px; right: 6px; top: 6px;
+    height: 40px;
+    padding: 10px 16px 0 16px;
+    box-sizing: border-box;
+    decorator: ninepatch(rail, rail-inner);
+    color: #f2ead6;
+    font-size: 15px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 3px;
+}
+
+.insp-left {
+    position: absolute;
+    left: 0; top: 46px; bottom: 0;
+    width: 250px;
+    box-sizing: border-box;
+    padding: 10px 8px 10px 22px;
+    pointer-events: auto;
+}
+
+.insp-right {
+    position: absolute;
+    right: 0; top: 46px; bottom: 0;
+    width: 400px;
+    box-sizing: border-box;
+    padding: 10px 22px 10px 8px;
+    pointer-events: auto;
+}
+
+.insp-center {
+    position: absolute;
+    left: 250px; right: 400px; top: 46px; bottom: 0;
+    pointer-events: none;        /* input passes to the game-side portrait hit-test */
+}
+
+.insp-tabpanel {
+    position: absolute;
+    left: 8px; right: 8px; bottom: 8px;
+    height: 200px;
+    box-sizing: border-box;
+    padding: 6px 10px;
+    background-color: #14171bd0;  /* recessed well under the portrait */
+    pointer-events: auto;
+}
+
+.insp-doctrine-col {
+    display: inline-block;
+    width: 46%;
+    margin-right: 12px;
+    vertical-align: top;
+}
+
+.insp-center-hint {
+    position: absolute;
+    bottom: 6px; left: 24px; right: 24px;
+    color: #8a8069;
+    font-size: 12px;
+    text-align: center;
+}
+
+/* The live hull portrait (offscreen render target via the reserved "bs:portrait" source).
+   The element is the full middle-zone well (non-square); the SQUARE target paints as an
+   image decorator with `cover` fit, which scales to the well's long side and crops the
+   central band via texcoords -- undistorted, and clipped in-geometry, so it needs no
+   overflow container (overflow:hidden does NOT clip absolutely-positioned children here;
+   an oversized <img> leaked over the tab panel, verified live). left/top/width/height
+   arrive per-frame from the game; click-through so the game-side portrait hit-test owns
+   every interaction over it. */
+.insp-portrait {
+    position: absolute;
+    decorator: image("bs:portrait" cover);
+    pointer-events: none;
+}
+
+/* Fleet list (inspector): live thumbnail entries sliced from the "bs:thumbs" strip; a click
+   retargets the inspector ("insp:N"). The slices are a SPRITESHEET (like the ui-icons the bay
+   uses), not <img rect> -- per-frame rect attribute reapplication broke RmlUi hit-testing. */
+@spritesheet fleet-thumbs {
+    src: bs:thumbs;
+    bs-thumb-0: 0px    0px 256px 256px;
+    bs-thumb-1: 0px  256px 256px 256px;
+    bs-thumb-2: 0px  512px 256px 256px;
+    bs-thumb-3: 0px  768px 256px 256px;
+    bs-thumb-4: 0px 1024px 256px 256px;
+    bs-thumb-5: 0px 1280px 256px 256px;
+    bs-thumb-6: 0px 1536px 256px 256px;
+    bs-thumb-7: 0px 1792px 256px 256px;
+}
+
+.insp-fleet-list {
+    display: block;
+    margin-bottom: 6px;
+}
+
+.insp-fleet-entry {
+    display: block;
+    background-color: #191d23d9;
+    border: 1px transparent;
+    margin: 0 0 4px 0;
+    padding: 4px;
+    pointer-events: auto;
+}
+
+.insp-fleet-entry:hover {
+    background-color: #2e333a;
+}
+
+.insp-fleet-entry.selected {
+    border: 1px #59d9f2;
+    background-color: #24424ce8;
+}
+
+.insp-fleet-thumb {
+    display: inline-block;
+    width: 48px;
+    height: 48px;
+    vertical-align: middle;
+}
+
+/* Thumbnails paint as DECORATORS on plain divs, not <img> children: an img child (static or
+   data-bound) silently killed click handling on the whole entry, while decorators are pure
+   paint with no element-tree implications. */
+.thumb-0 { decorator: image(bs-thumb-0 contain); }
+.thumb-1 { decorator: image(bs-thumb-1 contain); }
+.thumb-2 { decorator: image(bs-thumb-2 contain); }
+.thumb-3 { decorator: image(bs-thumb-3 contain); }
+.thumb-4 { decorator: image(bs-thumb-4 contain); }
+.thumb-5 { decorator: image(bs-thumb-5 contain); }
+.thumb-6 { decorator: image(bs-thumb-6 contain); }
+.thumb-7 { decorator: image(bs-thumb-7 contain); }
+
+.insp-fleet-text {
+    display: inline-block;
+    color: #d0dae2;
+    font-size: 12px;
+    margin-left: 8px;
+    vertical-align: middle;
+}
+
+.insp-fleet-status {
+    color: #808f9a;
+    font-size: 10px;
+    margin-left: 6px;
+}
+
+.insp-ship-name {
+    display: block;
+    color: #e8b45a;
+    font-size: 16px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    margin-bottom: 4px;
+}
+
+.insp-status {
+    display: block;
+    color: #d0dae2;
+    font-size: 12px;
+    white-space: pre;            /* honour '\n' rows + the fill's key-column padding */
+    margin-bottom: 6px;
+}
+
+/* Floating side window: stamped header rail bleeding to the panel's top edges (margins
+   cancel the .panel 16px padding). */
+#inspector .win-title {
+    margin: -16px -16px 10px -16px;
+    padding: 12px 16px 10px 16px;
+    decorator: ninepatch(rail, rail-inner);
+}
+
+.insp-tabs {
+    display: block;
+    margin-bottom: 4px;
+}
+
+.insp-tab {
+    display: inline-block;
+    pointer-events: auto;
+    padding: 4px 12px;
+    color: #a89a7e;
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    border: 1px #2e333a00;       /* transparent border keeps inactive tabs the same size */
+    border-radius: 0;
+    transition: color background-color border-color 0.12s quadratic-out;   /* ease tab activation */
+}
+
+.insp-tab.active {
+    color: #e8b45a;
+    border-color: #c9963f;
+    background-color: #2b2415;
+}
+
+/* Vertically stacked Arsenal body: inventory sections, then the hardpoint slot strip. */
+
+.insp-section-hdr {
+    display: block;
+    color: #ddd6c4;
+    font-size: 14px;
+    font-weight: 600;
+    margin-top: 10px;
+    margin-bottom: 5px;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    border-left: 3px #c9963f;    /* single painted marking on the plate -- hierarchy without ornament */
+    padding-left: 8px;
+}
+
+/* Weapon-symbol drag queue (replaces the old text rows): a horizontal row of small draggable
+   symbols, one per weapon slot. Hover shows a themed tooltip; pressing to drag hides it. */
+.weapon-queue {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: wrap;
+    margin-bottom: 6px;
+}
+
+/* The offensive inventory list doubles as an UNMOUNT drop target: dragging a mounted weapon back
+   here returns it to the stash. It must stay hit-testable and keep a visible drop area even when it
+   holds no weapons, so give it a min-height and a recessed "drop tray" treatment. */
+.inv-drop {
+    min-height: 44px;
+    padding: 6px;
+    decorator: ninepatch(well, well-inner);   /* recessed tray */
+    border: 1px transparent;     /* border reserved for the amber drag-over cue */
+    pointer-events: auto;
+    transition: border-color 0.12s quadratic-out;
+}
+
+.inv-drop:hover {
+    border-color: #c9963f;       /* drag-over cue while unmounting */
+}
+
+/* One-shot "acknowledge" flash, played once when a weapon becomes the active selection: the border
+   flares bright then settles back to the resting amber accent. Interest through motion, not ornament. */
+@keyframes sel-flash {
+    0%   { border-color: #f2d391; }
+    100% { border-color: #c9963f; }
+}
+
+.weapon-symbol {
+    display: block;
+    width: 32px;
+    height: 32px;
+    margin: 0 6px 6px 0;
+    background-color: #2e333a;
+    decorator: ninepatch(btn, btn-inner);   /* raised armor-plate emblem socket */
+    border: 1px transparent;     /* box-size keeper; also hosts the sel-flash edge */
+    transition: decorator color 0.12s quadratic-out;   /* ease hover; border-color owned by sel-flash */
+    text-align: center;
+    color: #ddd6c4;
+    position: relative;          /* anchor for the absolutely-positioned tooltip */
+    pointer-events: auto;        /* interactive: hover tooltip + click-select + drag */
+    drag: clone;                 /* native RmlUi visual drag (a clone follows the cursor) */
+}
+
+.weapon-symbol:hover {
+    decorator: ninepatch(btn-hi, btn-hi-inner);
+    color: #f2ead6;
+}
+
+.weapon-symbol.selected {
+    decorator: ninepatch(btn-amber, btn-amber-inner);
+    border-color: #c9963f;
+    color: #e8b45a;
+    animation: 0.4s cubic-out 1 sel-flash;   /* one-shot flash on select */
+}
+
+.weapon-symbol.empty {
+    color: #6e6555;
+    decorator: ninepatch(socket, socket-inner);   /* recessed empty socket */
+    drag: none;                  /* empty placeholders are not draggable */
+    pointer-events: none;        /* and inert (no hover tooltip) */
+}
+
+.weapon-glyph {
+    display: block;
+    line-height: 32px;           /* vertically centre the single-char fallback text */
+    font-size: 15px;
+    text-align: center;
+}
+
+/* Emblem stencil inside a tile: white ui-icons sprite tinted per tile state. */
+.weapon-icon {
+    display: block;
+    width: 26px;
+    height: 26px;
+    margin: 3px auto;            /* centred inside the 32px tile */
+    image-color: #ddd6c4;        /* ivory at rest */
+    transition: image-color 0.12s quadratic-out;
+}
+
+.weapon-symbol:hover .weapon-icon    { image-color: #f2ead6; }
+.weapon-symbol.selected .weapon-icon { image-color: #e8b45a; }   /* amber = selected */
+.weapon-symbol.empty .weapon-icon    { image-color: #6e6555; }   /* dim open socket  */
+
+/* Structured stat card: fabricated plate slab above the tile (shown on hover, hidden the
+   instant the symbol is pressed to begin a drag -- the :active rule below wins by source
+   order). Anchored to the tile's LEFT edge so cards from the leftmost column never clip. */
+/* Hover stat card: hidden by default, shown on tile hover (and re-hidden the
+   instant the symbol is pressed to begin a drag -- the :active rule below wins by source
+   order). Anchored to the tile's LEFT edge so cards from the leftmost column never clip.
+   Drops BELOW the tile: the bay well sits near the top of the screen, so the full-height
+   stat sheet has room downward but clips at the viewport when raised above the tile. */
+.stat-card {
+    display: none;
+    position: absolute;
+    top: 44px;
+    left: -8px;
+    width: 300px;
+    z-index: 100;                                     /* paint above ALL sibling sections (PD doctrine etc) */
+    decorator: ninepatch(plate-sm, plate-sm-inner);   /* same plate material as the panels */
+    padding: 14px 16px;
+    color: #ddd6c4;
+    font-size: 12px;
+    text-align: left;
+    pointer-events: none;
+}
+
+.weapon-symbol:hover  .stat-card { display: block; }   /* hover -> card appears */
+.weapon-symbol:active .stat-card { display: none;  }   /* press-to-drag -> card hides */
+
+.card-title {
+    display: block;
+    color: #f2ead6;
+    font-size: 13px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 4px;
+}
+
+.card-rows {
+    display: block;
+    color: #a89a7e;
+    font-size: 11px;
+    white-space: pre;            /* preserve '\n' rows AND the key-column space padding */
+    margin-bottom: 2px;
+}
+
+/* Mount-compatibility line: green when a flagship hardpoint can take the item's size/kind,
+   red when nothing on the hull ever will (mono column-aligned, same grid as .card-rows). */
+.card-size {
+    display: block;
+    font-size: 11px;
+    white-space: pre;
+    margin-bottom: 2px;
+}
+.card-size.ok  { color: #8fae52; }
+.card-size.bad { color: #d05c4a; }
+
+/* Role paragraph from the item's def (`desc`): body face, normal wrapping. */
+.card-desc {
+    display: block;
+    color: #a89a7e;
+    font-size: 11px;
+    white-space: normal;
+    margin-top: 4px;
+}
+
+.card-mode {
+    display: block;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-top: 3px;
+}
+
+.card-mode.on  { color: #e8b45a; }   /* live/primary mode: amber */
+.card-mode.dim { color: #6e6555; }   /* alternate mode: dimmed   */
+
+.card-stats {
+    display: block;
+    font-size: 12px;
+    margin-top: 1px;
+}
+
+.card-stats.on  { color: #ddd6c4; }
+.card-stats.dim { color: #6e6555; }
+
+.card-foot {
+    display: block;
+    color: #a89a7e;
+    font-size: 11px;
+    margin-top: 2px;
+}
+
+.stat-card .rule { margin: 5px 0; }
+
+/* Inspector captions (hint line + ship name under the module sections). */
+.ship-preview-label {
+    display: block;
+    color: #8a8069;
+    font-size: 13px;
+    margin-top: 6px;
+}
+
+/* --- Point-defense doctrine chips (inspector; Phase C) ----------------------------- */
+.pd-doctrine {
+    display: block;
+    margin-bottom: 6px;
+}
+
+.pd-row {
+    display: block;
+    margin-bottom: 3px;
+}
+
+/* Speed-limit gear chips (fleet panel): the pd-opt chip pattern, sized for five short
+   u/s numbers on one row. The selected gear is the ship's live velocity cap. */
+.spd-row {
+    display: block;
+    margin-bottom: 3px;
+}
+
+.spd-opt {
+    display: inline-block;
+    padding: 2px 5px;
+    margin-right: 2px;
+    color: #a89a7e;
+    font-size: 11px;
+    letter-spacing: 1px;
+    border: 1px #2e333a00;       /* transparent border keeps inactive chips the same size */
+    pointer-events: auto;        /* clickable gear chip */
+    transition: color background-color border-color 0.12s quadratic-out;
+}
+
+.spd-opt:hover {
+    color: #f2ead6;
+    background-color: #2e333a;
+}
+
+.spd-opt.active {
+    color: #e8b45a;              /* amber = the selected gear */
+    border-color: #c9963f;
+    background-color: #2b2415;
+}
+
+.pd-lbl {
+    display: inline-block;
+    width: 58px;
+    color: #a89a7e;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+.pd-opt {
+    display: inline-block;
+    padding: 2px 8px;
+    margin-right: 2px;
+    color: #a89a7e;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    border: 1px #2e333a00;       /* transparent border keeps inactive chips the same size */
+    position: relative;          /* anchor for the hover tooltip */
+    pointer-events: auto;        /* clickable doctrine chip */
+    transition: color background-color border-color 0.12s quadratic-out;
+}
+
+.pd-opt:hover {
+    color: #f2ead6;
+    background-color: #2e333a;
+}
+
+.pd-opt.active {
+    color: #e8b45a;              /* amber = the selected doctrine */
+    border-color: #c9963f;
+    background-color: #2b2415;
+}
+
+/* Doctrine tooltip: plate slab above the chip (same pattern as .weapon-tip). Normal-case
+   body text -- the chip's uppercase/tracking must not leak into a paragraph. */
+.pd-tip {
+    display: none;
+    position: absolute;
+    bottom: 22px;
+    left: 50%;
+    margin-left: -110px;
+    width: 220px;
+    padding: 6px 8px;
+    background-color: #141518f2;
+    border: 1px #0b0c0e;
+    border-top-color: #33383f;
+    color: #ddd6c4;
+    font-size: 12px;
+    text-transform: none;
+    letter-spacing: 0px;
+    text-align: left;
+    pointer-events: none;
+}
+
+.pd-opt:hover .pd-tip { display: block; }
+
+.ship-preview-name {
+    display: block;
+    color: #a89a7e;
+    font-size: 13px;
+    margin-top: 4px;
+    text-align: center;
+}
+
+/* --- Space-station right-click context menu (cursor-anchored) ---------------------- */
+#station-menu {
+    position: absolute;          /* left/top set per-frame via data-style-left/top */
+    display: block;
+    decorator: ninepatch(plate-sm, plate-sm-inner);   /* small plate, baked shadow */
+    padding: 14px;
+    min-width: 120px;
+    pointer-events: auto;        /* solid, clickable menu */
+}
+
+.station-menu-item {
+    display: block;
+    padding: 6px 12px;
+    color: #ddd6c4;
+    font-size: 13px;
+    border-radius: 0;
+    pointer-events: auto;
+}
+
+.station-menu-item:hover {
+    background-color: #3a3325;   /* amber-tinted graphite = selection language */
+    color: #e8b45a;
+}
+
+/* --- Fleet-ship right-click context menu (cursor-anchored; station-menu styling) --- */
+#ship-menu {
+    position: absolute;          /* left/top set per-frame via data-style-left/top */
+    display: block;
+    decorator: ninepatch(plate-sm, plate-sm-inner);   /* small plate, baked shadow */
+    padding: 14px;
+    min-width: 120px;
+    pointer-events: auto;        /* solid, clickable menu */
+}
+
+.ship-menu-name {
+    display: block;
+    padding: 2px 12px 6px 12px;
+    color: #8f8672;              /* dim header: names the hull the rows act on */
+    font-size: 11px;
+}
+
+/* --- Space-station inspector window (floating, right side; planet-inspector rules) -- */
+#station-inspector {
+    position: absolute;
+    top: 96px;
+    right: 32px;
+    width: 460px;
+    max-height: 680px;
+    overflow-y: auto;
+    pointer-events: auto;
+}
+
+#station-inspector .win-title {
+    margin: -16px -16px 10px -16px;
+    padding: 12px 16px 10px 16px;
+    decorator: ninepatch(rail, rail-inner);
+}
+
+/* Market tab column-header line: must share the resource-line font metrics
+   (13px, no letter-spacing) so the pre-formatted columns line up. */
+.market-colhead {
+    display: block;
+    white-space: pre;
+    color: #8a8069;
+    font-size: 13px;
+    padding: 2px 0 0 0;
+}
+
+/* Category the station specializes in: amber accent head + small tag. */
+.planet-insp-head.spec {
+    color: #e8b45a;
+}
+
+.spec-tag {
+    color: #c9963f;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 1px;
+}
+
+/* --- Planet inspector window (floating, right side; opened by clicking a planet) --- */
+#planet-inspector {
+    position: absolute;
+    top: 96px;
+    right: 32px;
+    width: 400px;
+    max-height: 640px;
+    overflow-y: auto;
+    pointer-events: auto;
+}
+
+.planet-insp-subtitle {
+    display: block;
+    color: #a89a7e;
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 1px;
+    margin-bottom: 6px;
+}
+
+.planet-insp-section {
+    display: block;
+}
+
+.planet-insp-head {
+    display: block;
+    color: #f2ead6;
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    margin: 4px 0 2px 0;
+}
+
+.planet-insp-line {
+    display: block;
+    white-space: pre;
+    color: #ddd6c4;
+    font-size: 13px;
+    padding: 2px 0;
+}
+
+.planet-insp-line.dim {
+    color: #a89a7e;
+    font-size: 12px;
+}
+
+.planet-gauge-label {
+    display: block;
+    color: #ddd6c4;
+    font-size: 12px;
+    font-weight: 600;
+    margin: 4px 0 2px 0;
+}
+
+.planet-gauge {
+    display: block;
+    width: 100%;
+    height: 8px;
+    background-color: #0c0d11;   /* recessed channel — a step darker than the plate interior */
+    border: 1px #060708;
+    border-bottom-color: #454b53;
+    border-radius: 0;
+    overflow: hidden;
+}
+
+.planet-gauge-fill {
+    display: block;      /* RmlUi defaults to inline: without this the fill has zero size */
+    width: 0%;           /* actual width driven per-frame by data-style-width */
+    height: 100%;
+    border-radius: 0;
+}
+
+.planet-gauge-fill.hab {
+    decorator: horizontal-gradient(#6a7439 #8f9a4f);   /* faded brass-olive */
+}
+
+.planet-gauge-fill.haz {
+    decorator: horizontal-gradient(#7a4322 #b3622f);   /* dull oxidized orange */
+}

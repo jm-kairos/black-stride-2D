@@ -1,0 +1,5 @@
+# Black Stride ship-module registry manifest.
+# One .module file path per line (relative to the working directory, bin/).
+# Loaded once at game init by module_registry_load (sim/module.cpp).
+assets/modules/surveyor_mk1.module
+assets/modules/surveyor_mk2.module

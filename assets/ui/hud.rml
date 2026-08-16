@@ -1,0 +1,439 @@
+<rml>
+<head>
+    <link type="text/rcss" href="theme.rcss"/>
+    <link type="text/rcss" href="hud.rcss"/>
+    <title>Black Stride HUD</title>
+</head>
+<body data-model="hud" data-class-kit-neon="ui_kit == 0" data-class-kit-clean="ui_kit == 1" data-class-kit-minimal="ui_kit == 2" data-class-kit-frontier="ui_kit == 3">
+
+    <!-- Navigation readout (top-right) -->
+    <div id="nav" class="hud-panel" data-if="nav_visible">
+        <div class="hud-row"><span class="hud-key">SECTOR</span><span class="hud-val">{{ nav_sector }}</span></div>
+        <div class="hud-row"><span class="hud-key">SYS</span><span class="hud-val">{{ nav_system }}</span></div>
+        <div class="hud-row"><span class="hud-key">DIST</span><span class="hud-val">{{ nav_distance }}</span></div>
+        <div class="hud-row"><span class="hud-key">ZONE</span><span class="hud-val">{{ nav_zone }}</span></div>
+    </div>
+
+    <!-- Ship readout (top-right, below nav) -->
+    <div id="ship" class="hud-panel" data-if="ship_visible">
+        <div class="hud-row"><span class="hud-key">SPEED</span><span class="hud-val">{{ ship_speed }}</span></div>
+    </div>
+
+    <!-- Time control (top-center): pause + speed tiers on the shared in-game calendar -->
+    <div id="time" class="hud-panel" data-if="time_visible">
+        <div class="time-date">{{ time_date }}</div>
+        <div class="time-btns">
+            <span class="time-btn" data-class-active="time_tier == 0" data-event-click="hud_action('time:0')">Pause</span>
+            <span class="time-btn" data-class-active="time_tier == 1" data-event-click="hud_action('time:1')">1x</span>
+            <span class="time-btn" data-class-active="time_tier == 2" data-event-click="hud_action('time:3')">3x</span>
+            <span class="time-btn" data-class-active="time_tier == 3" data-event-click="hud_action('time:5')">5x</span>
+            <span class="time-btn" data-class-active="time_tier == 4" data-event-click="hud_action('time:10')">10x</span>
+        </div>
+    </div>
+
+    <!-- Fleet roster (top-left): one row per fleet member while the command overlay is up.
+         The row-select click lives on roster-main, NOT the row container: chips sit inside the
+         row and RML clicks bubble, so a container handler would turn every stance change into a
+         selection change as well. -->
+    <div id="roster" class="hud-panel" data-if="roster_visible">
+        <div class="roster-hdr">FLEET</div>
+        <div class="roster-row" data-for="r : roster"
+             data-class-selected="r.selected" data-class-hovered="r.hovered">
+            <div class="roster-main" data-event-click="hud_action(r.action)">
+                <div class="roster-label" data-class-piloted="r.piloted">{{ r.label }}</div>
+                <div class="roster-status">{{ r.status }}</div>
+            </div>
+            <div class="roster-chips">
+                <span class="roster-chip insp" data-event-click="hud_action(r.action_insp)">i</span>
+                <span class="roster-chip" data-for="ch : r.chip" data-class-on="ch.on"
+                      data-event-click="hud_action(ch.action)">{{ ch.label }}</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Action log (bottom-right; whole-panel opacity driven by the game's idle fade) -->
+    <div id="log" class="hud-panel" data-if="log_visible" data-style-opacity="log_alpha">
+        <div class="log-line" data-for="line : log">{{ line.text }}</div>
+    </div>
+
+    <!-- Discoveries browser (floating) -->
+    <div id="discoveries" class="panel" data-if="disc_visible">
+        <div class="win-title">DISCOVERIES<span class="win-close" data-event-click="hud_action('close_discoveries')">X</span></div>
+        <div class="win-count">{{ disc_count_label }}</div>
+        <div class="rule"></div>
+        <div class="disc-list">
+            <div class="disc-line" data-for="d : disc" data-style-color="d.color">{{ d.text }}</div>
+        </div>
+    </div>
+
+    <!-- Fleet ship panel (top-right, piloted-ship combat readout + controls) -->
+    <div id="fleet" class="hud-panel" data-if="fleet_visible">
+        <div class="fleet-name">{{ fleet_name }}</div>
+        <div class="fleet-faction">{{ fleet_faction }}</div>
+        <div class="rule"></div>
+        <div class="fleet-stat">Speed: {{ fleet_speed }}</div>
+        <div class="fleet-stat">Heading: {{ fleet_heading }}</div>
+        <div class="fleet-stat">Health: {{ fleet_health }}</div>
+        <div class="fleet-stat">{{ fleet_cap_label }}</div>
+        <div class="cap-gauge"><div class="cap-gauge-fill" data-style-width="fleet_cap_w"><div class="cap-gauge-core"></div></div></div>
+        <div class="fleet-pd" data-class-warn="fleet_pd_warn">{{ fleet_pd_label }}</div>
+        <div class="rule"></div>
+        <div class="fleet-hdr">SPEED LIMIT</div>
+        <div class="spd-row">
+            <span class="spd-opt" data-class-active="speed_sel == 0" data-event-click="hud_action('spd:0')">{{ speed_l0 }}</span>
+            <span class="spd-opt" data-class-active="speed_sel == 1" data-event-click="hud_action('spd:1')">{{ speed_l1 }}</span>
+            <span class="spd-opt" data-class-active="speed_sel == 2" data-event-click="hud_action('spd:2')">{{ speed_l2 }}</span>
+            <span class="spd-opt" data-class-active="speed_sel == 3" data-event-click="hud_action('spd:3')">{{ speed_l3 }}</span>
+            <span class="spd-opt" data-class-active="speed_sel == 4" data-event-click="hud_action('spd:4')">{{ speed_l4 }}</span>
+        </div>
+        <div class="rule"></div>
+        <div class="fleet-hdr">FIRE GROUPS</div>
+        <div class="weapon-row" data-for="g : fleet_group"
+             data-class-selected="g.selected" data-class-dim="g.empty"
+             data-event-click="hud_action(g.action)">{{ g.text }}</div>
+        <div class="rule"></div>
+        <div class="fleet-mode" data-if="fleet_mode_visible"
+             data-class-disabled="!fleet_mode_enabled"
+             data-event-click="hud_action('fleet_mode')">{{ fleet_mode_label }}</div>
+    </div>
+
+    <!-- Encounter modal (centered) -->
+    <div id="encounter" class="panel accent" data-if="enc_visible">
+        <div class="modal-title">{{ enc_name }}</div>
+        <div class="rule"></div>
+        <div class="modal-row">Distance: {{ enc_distance }}</div>
+        <div class="modal-row">Faction: {{ enc_faction }}</div>
+        <div class="modal-desc">{{ enc_desc }}</div>
+        <div class="rule"></div>
+        <div class="modal-btn" data-event-click="hud_action('engage')">Engage</div>
+        <div class="modal-btn" data-event-click="hud_action('avoid')">Avoid</div>
+        <div class="modal-btn" data-event-click="hud_action('hail')">Hail</div>
+        <div class="modal-btn" data-event-click="hud_action('observe')">Observe</div>
+    </div>
+
+    <!-- FTL jump-mode banner (bottom-center, above the skill hotbar; shares the banner slot
+         with #skilltarget -- the two armed modes are mutually exclusive) -->
+    <div id="jumpmode" data-if="jump_visible">Currently in Jump Mode</div>
+
+    <!-- Fleet skill hotbar (bottom-center, above the Inspector button; detached camera only).
+         The container is click-through; the slots opt back in. The icon is pointer-events:none
+         so per-frame data-attr-sprite churn can never eat the tile's click (insp-fleet lesson). -->
+    <div id="skillbar" data-if="skills_visible">
+        <div class="skill-slot" data-for="sk : skill"
+             data-class-ready="sk.ready" data-class-armed="sk.armed" data-class-denied="sk.denied"
+             data-event-click="hud_action(sk.action)">
+            <img class="skill-icon" data-if="sk.icon != ''" data-attr-sprite="sk.icon"/>
+            <div class="skill-cd" data-style-width="sk.cd_w"></div>
+            <div class="skill-key">{{ sk.key }}</div>
+            <div class="skill-cdtext" data-if="sk.cd_text != ''">{{ sk.cd_text }}</div>
+            <div class="skill-badge" data-if="sk.badge != ''">{{ sk.badge }}</div>
+        </div>
+    </div>
+
+    <!-- Skill entity-targeting banner (#jumpmode's voice, same banner slot) -->
+    <div id="skilltarget" data-if="skill_target_visible">{{ skill_target_label }}</div>
+
+    <!-- HierPos2 debug readout (top-left, dev toggle from the COORDINATE SPACE editor panel) -->
+    <div id="debug" data-if="debug_visible">{{ debug_text }}</div>
+
+    <!-- Flagship inspector launcher (bottom-center) -->
+    <div id="inspector-btn" data-if="inspector_btn_visible"
+         data-event-click="hud_action('toggle_inspector')">Inspector</div>
+
+    <!-- Flagship inspector window (floating, right side; planet-inspector footprint). The single
+         MODULES tab presents all unmounted equipment -- weapons, point-defense, ship modules --
+         as ONE bay grid of draggable tiles, each with a structured hover stat card (type/size/
+         integrity rows, per-mode stat blocks, keybind footer). Drag a tile onto a matching world
+         hardpoint box to mount; drag a mounted item back into the bay well to unmount ('baydrop',
+         routed game-side by dragged kind). Drag sources also emit 'dragend' so a release over the
+         world can hit-test the cruiser's hardpoint boxes and install directly (game.cpp). -->
+    <div id="inspector" data-if="inspector_visible"
+         data-event-dragdrop="hud_action('uidrop')">
+        <!-- ONE window, three sections. The container paints the window plate but stays
+             click-through (pointer-events none): the sections opt back in, while the middle
+             zone passes input to the game-side portrait hit-test (drag-mounting). NOTHING in
+             this window may overflow -- RmlUi overflow containers break hit-testing and
+             nested layout here, so every section is sized to fit (the tabs exist for that). -->
+        <div class="insp-titlebar">SHIP INSPECTOR<span class="win-close" data-event-click="hud_action('close_inspector')">Collapse</span></div>
+        <div class="insp-left">
+            <div class="insp-section-hdr">Fleet</div>
+            <!-- Entries are STATICALLY authored (no data-for, fixed sprite classes, literal
+                 actions): the HUD snapshot dirties every variable every frame, so per-row
+                 data-attr bindings re-apply each frame and churn the elements -- a churned
+                 element can never complete a press/release pair. Text and class bindings are
+                 idempotent, and thumbnails paint as DECORATORS (an <img> child also killed
+                 clicks on generated entries). -->
+            <div class="insp-fleet-list">
+                <div class="insp-fleet-entry" data-if="insp_ship_count > 0"
+                     data-class-selected="insp_ships[0].selected" data-event-click="hud_action('insp:0')">
+                    <div class="insp-fleet-thumb thumb-0"></div>
+                    <div class="insp-fleet-text">{{ insp_ships[0].name }}<span class="insp-fleet-status">{{ insp_ships[0].status }}</span></div>
+                </div>
+                <div class="insp-fleet-entry" data-if="insp_ship_count > 1"
+                     data-class-selected="insp_ships[1].selected" data-event-click="hud_action('insp:1')">
+                    <div class="insp-fleet-thumb thumb-1"></div>
+                    <div class="insp-fleet-text">{{ insp_ships[1].name }}<span class="insp-fleet-status">{{ insp_ships[1].status }}</span></div>
+                </div>
+                <div class="insp-fleet-entry" data-if="insp_ship_count > 2"
+                     data-class-selected="insp_ships[2].selected" data-event-click="hud_action('insp:2')">
+                    <div class="insp-fleet-thumb thumb-2"></div>
+                    <div class="insp-fleet-text">{{ insp_ships[2].name }}<span class="insp-fleet-status">{{ insp_ships[2].status }}</span></div>
+                </div>
+                <div class="insp-fleet-entry" data-if="insp_ship_count > 3"
+                     data-class-selected="insp_ships[3].selected" data-event-click="hud_action('insp:3')">
+                    <div class="insp-fleet-thumb thumb-3"></div>
+                    <div class="insp-fleet-text">{{ insp_ships[3].name }}<span class="insp-fleet-status">{{ insp_ships[3].status }}</span></div>
+                </div>
+                <div class="insp-fleet-entry" data-if="insp_ship_count > 4"
+                     data-class-selected="insp_ships[4].selected" data-event-click="hud_action('insp:4')">
+                    <div class="insp-fleet-thumb thumb-4"></div>
+                    <div class="insp-fleet-text">{{ insp_ships[4].name }}<span class="insp-fleet-status">{{ insp_ships[4].status }}</span></div>
+                </div>
+                <div class="insp-fleet-entry" data-if="insp_ship_count > 5"
+                     data-class-selected="insp_ships[5].selected" data-event-click="hud_action('insp:5')">
+                    <div class="insp-fleet-thumb thumb-5"></div>
+                    <div class="insp-fleet-text">{{ insp_ships[5].name }}<span class="insp-fleet-status">{{ insp_ships[5].status }}</span></div>
+                </div>
+                <div class="insp-fleet-entry" data-if="insp_ship_count > 6"
+                     data-class-selected="insp_ships[6].selected" data-event-click="hud_action('insp:6')">
+                    <div class="insp-fleet-thumb thumb-6"></div>
+                    <div class="insp-fleet-text">{{ insp_ships[6].name }}<span class="insp-fleet-status">{{ insp_ships[6].status }}</span></div>
+                </div>
+                <div class="insp-fleet-entry" data-if="insp_ship_count > 7"
+                     data-class-selected="insp_ships[7].selected" data-event-click="hud_action('insp:7')">
+                    <div class="insp-fleet-thumb thumb-7"></div>
+                    <div class="insp-fleet-text">{{ insp_ships[7].name }}<span class="insp-fleet-status">{{ insp_ships[7].status }}</span></div>
+                </div>
+            </div>
+        </div>
+        <div class="insp-center">
+            <!-- Full-zone portrait: the well is the whole (generally non-square) middle zone;
+                 the square render target shows through it as a DECORATOR with `cover` fit,
+                 which crops to the element's central band in-geometry (texcoords) -- no
+                 oversized child, no overflow, nothing for RmlUi to (fail to) clip. Same
+                 pattern as the fleet-list thumbs. NOT an <img>: overflow:hidden on a wrapper
+                 does not clip absolutely-positioned children here (verified live). -->
+            <div class="insp-portrait"
+                 data-style-left="insp_portrait_left" data-style-top="insp_portrait_top"
+                 data-style-width="insp_portrait_w" data-style-height="insp_portrait_h"></div>
+            <div class="insp-tabpanel">
+                <div class="insp-tabs">
+                    <div class="insp-tab" data-class-active="insp_show_loadout" data-event-click="hud_action('insp_tab:0')">Loadout</div>
+                    <div class="insp-tab" data-class-active="insp_show_doctrine" data-event-click="hud_action('insp_tab:1')">Doctrine</div>
+                </div>
+                <div class="insp-tabbody" data-if="insp_show_loadout">
+                    <div class="insp-ship-name">{{ insp_ship_name }}</div>
+                    <div class="insp-status">{{ insp_status }}</div>
+                </div>
+                <div class="insp-tabbody" data-if="insp_show_doctrine">
+                    <div class="insp-doctrine-col">
+                        <div class="insp-section-hdr" data-if="gm_visible">Fire groups</div>
+                        <div class="gm-table" data-if="gm_visible">
+                <div class="gm-hdr-row">
+                    <div class="gm-corner">key</div>
+                    <div class="gm-col-hdr" data-for="cname : gm_col">{{ cname }}</div>
+                </div>
+                <div class="gm-row" data-for="r : gm_row" data-class-active="r.selected">
+                    <div class="gm-row-hdr">{{ r.label }}</div>
+                    <div class="gm-cell" data-for="cl : r.cell" data-class-on="cl.on"
+                         data-event-click="hud_action(cl.action)"><span data-if="cl.on">X</span></div>
+                </div>
+            </div>
+                        <div class="insp-section-hdr">Engagement</div>
+                        <div class="pd-doctrine">
+                <div class="pd-row">
+                    <span class="pd-lbl">ROE</span>
+                    <span class="pd-opt" data-class-active="insp_roe == 0" data-event-click="hud_action('doc:roe:0')">Weapons free
+                        <div class="pd-tip">Engage any hostile the sensors can justify. The ship picks its own fights inside its weapons&#8217; envelope and closes to range if the stance allows. The default posture of a warship.</div></span>
+                    <span class="pd-opt" data-class-active="insp_roe == 1" data-event-click="hud_action('doc:roe:1')">Return fire
+                        <div class="pd-tip">Self-defense only: engage factions that have recently landed hits on the fleet. Nobody shoots first &#8212; but a grudge lasts long enough to finish the argument.</div></span>
+                    <span class="pd-opt" data-class-active="insp_roe == 2" data-event-click="hud_action('doc:roe:2')">Hold
+                        <div class="pd-tip">Never self-acquire. The ship fights only targets you designate with an attack order. Full manual fire control, the pre-doctrine behaviour.</div></span>
+                </div>
+                <div class="pd-row">
+                    <span class="pd-lbl">Flak</span>
+                    <span class="pd-opt" data-class-active="insp_flak == 0" data-event-click="hud_action('doc:flak:0')">Auto screen
+                        <div class="pd-tip">Every cannon defends: incoming ordnance draws flak fire automatically, each gun covering its own side of the hull, defense preempting the broadside for the shot. The outer layer of the missile-defense onion.</div></span>
+                    <span class="pd-opt" data-class-active="insp_flak == 1" data-event-click="hud_action('doc:flak:1')">Manual
+                        <div class="pd-tip">No autonomous flak. Guns fire flak only through your trigger or an attack order&#8217;s broadside. The point-defense laser becomes the only automatic layer.</div></span>
+                </div>
+                <div class="pd-row">
+                    <span class="pd-lbl">Missiles</span>
+                    <span class="pd-opt" data-class-active="insp_missile == 0" data-event-click="hud_action('doc:mp:0')">Free
+                        <div class="pd-tip">Launchers fire whenever the fire solution allows. Maximum pressure, fastest magazine burn.</div></span>
+                    <span class="pd-opt" data-class-active="insp_missile == 1" data-event-click="hud_action('doc:mp:1')">Conserve
+                        <div class="pd-tip">Launch only at targets beyond every cannon&#8217;s reach &#8212; guns do gun work, ordnance is saved for what only ordnance can touch.</div></span>
+                    <span class="pd-opt" data-class-active="insp_missile == 2" data-event-click="hud_action('doc:mp:2')">Hold
+                        <div class="pd-tip">No autonomous launches. Racks stay loaded for your manual trigger.</div></span>
+                </div>
+                <div class="pd-row">
+                    <span class="pd-lbl">Cap floor</span>
+                    <span class="pd-opt" data-class-active="insp_capfloor == 0" data-event-click="hud_action('doc:capfloor:0')">Off
+                        <div class="pd-tip">Guns fire down to an empty bank. Nothing is held back for the defensive screens &#8212; maximum offense, at the risk of a dark laser when the missiles arrive.</div></span>
+                    <span class="pd-opt" data-class-active="insp_capfloor == 1" data-event-click="hud_action('doc:capfloor:1')">15%
+                        <div class="pd-tip">Guns hold at the same floor the point defense reserves. Offense and defense drain together to the wire.</div></span>
+                    <span class="pd-opt" data-class-active="insp_capfloor == 2" data-event-click="hud_action('doc:capfloor:2')">25%
+                        <div class="pd-tip">The balanced default: guns yield first, leaving the flak screen and the laser a working margin above the PD reserve.</div></span>
+                    <span class="pd-opt" data-class-active="insp_capfloor == 3" data-event-click="hud_action('doc:capfloor:3')">40%
+                        <div class="pd-tip">Defense-heavy: a deep reserve for sustained missile weather, paid for in gun uptime.</div></span>
+                </div>
+            </div>
+                    </div>
+                    <div class="insp-doctrine-col">
+                        <div class="insp-section-hdr" data-if="pd_visible">Point defense</div>
+                        <div class="pd-doctrine" data-if="pd_visible">
+                <div class="pd-row">
+                    <span class="pd-lbl">Stance</span>
+                    <span class="pd-opt" data-class-active="pd_stance == 0" data-event-click="hud_action('pd:stance:0')">Hold
+                        <div class="pd-tip">Laser offline. Drains no energy &#8212; and stops nothing. Stay dark, or bank every drop of capacitor for the guns. Hotkey P cycles stance.</div></span>
+                    <span class="pd-opt" data-class-active="pd_stance == 1" data-event-click="hud_action('pd:stance:1')">Standard
+                        <div class="pd-tip">Balanced auto-fire. Steady beam damage at a drain the reactor can almost sustain. The default watch setting.</div></span>
+                    <span class="pd-opt" data-class-active="pd_stance == 2" data-event-click="hud_action('pd:stance:2')">Overdrive
+                        <div class="pd-tip">Double beam damage, triple energy drain, faster retargeting. Empties a full capacitor in seconds &#8212; switch on when a salvo is inbound, off when it passes.</div></span>
+                </div>
+                <div class="pd-row">
+                    <span class="pd-lbl">Priority</span>
+                    <span class="pd-opt" data-class-active="pd_priority == 0" data-event-click="hud_action('pd:pri:0')">Impact time
+                        <div class="pd-tip">Burn whatever will hit this ship soonest, missile or shell. The best all-round choice against mixed incoming fire.</div></span>
+                    <span class="pd-opt" data-class-active="pd_priority == 1" data-event-click="hud_action('pd:pri:1')">Missiles first
+                        <div class="pd-tip">Always target missiles before cannon shells, even distant ones. Choose this when missiles are the real killer and stray shells can be absorbed.</div></span>
+                    <span class="pd-opt" data-class-active="pd_priority == 2" data-event-click="hud_action('pd:pri:2')">Nearest
+                        <div class="pd-tip">Shoot the closest threat, nothing fancier. Predictable &#8212; but easily distracted by harmless near-misses that were never going to hit.</div></span>
+                </div>
+                <div class="pd-row">
+                    <span class="pd-lbl">Gate</span>
+                    <span class="pd-opt" data-class-active="pd_gate == 0" data-event-click="hud_action('pd:gate:0')">Near 60%
+                        <div class="pd-tip">Hold fire until threats are deep inside range. Wastes no energy on targets that might still miss or turn away &#8212; but leaves no margin if the beam fails to kill.</div></span>
+                    <span class="pd-opt" data-class-active="pd_gate == 1" data-event-click="hud_action('pd:gate:1')">Mid 80%
+                        <div class="pd-tip">A working compromise: earlier engagement than NEAR without chasing everything at the edge of range.</div></span>
+                    <span class="pd-opt" data-class-active="pd_gate == 2" data-event-click="hud_action('pd:gate:2')">Full 100%
+                        <div class="pd-tip">Engage at maximum laser range. Longest time on target and a second chance at leakers &#8212; at the cost of energy spent on threats that might never have connected.</div></span>
+                </div>
+            </div>
+                    </div>
+                </div>
+            </div>
+            <div class="insp-center-hint">Drag bay items onto the hull's hardpoint boxes to mount &#8212; drag a mounted item off the ship or into the bay to unmount</div>
+        </div>
+        <div class="insp-right">
+        <div class="insp-section-hdr">Module bay</div>
+        <div class="weapon-queue inv-drop" data-event-dragdrop="hud_action('baydrop')">
+            <div class="weapon-symbol" data-for="w : bay"
+                 data-class-selected="w.selected" data-class-empty="w.empty"
+                 data-event-dragstart="hud_action(w.action)"
+                 data-event-dragend="hud_action('dragend')">
+                <img class="weapon-icon" data-if="w.icon != ''" data-attr-sprite="w.icon"/>
+                <span class="weapon-glyph" data-if="w.icon == ''">{{ w.glyph }}</span>
+                <div class="stat-card" data-if="w.card_title != ''">
+                    <div class="card-title">{{ w.card_title }}</div>
+                    <div class="card-rows">{{ w.card_rows }}</div>
+                    <div class="card-size" data-if="w.card_size != ''"
+                         data-class-ok="w.card_size_ok" data-class-bad="!w.card_size_ok">{{ w.card_size }}</div>
+                    <div class="card-desc" data-if="w.card_desc != ''">{{ w.card_desc }}</div>
+                    <div class="rule"></div>
+                    <div class="card-mode on">{{ w.card_mode_a }}</div>
+                    <div class="card-stats on" data-if="w.card_mode_a_stats != ''">{{ w.card_mode_a_stats }}</div>
+                    <div class="card-mode dim" data-if="w.card_mode_b != ''">{{ w.card_mode_b }}</div>
+                    <div class="card-stats dim" data-if="w.card_mode_b != ''">{{ w.card_mode_b_stats }}</div>
+                    <div class="rule" data-if="w.card_foot != ''"></div>
+                    <div class="card-foot" data-if="w.card_foot != ''">{{ w.card_foot }}</div>
+                </div>
+            </div>
+        </div>
+        <div class="ship-preview-label">Hover a tile for its stat card - drag onto the ship to mount - drag a mounted item back into the bay to unmount</div>
+        </div>
+    </div>
+
+    <!-- Galaxy-map hover tooltip (cursor-anchored; position set game-side via tip_left/tip_top) -->
+    <div id="tooltip" class="panel" data-if="tip_visible"
+         data-style-left="tip_left" data-style-top="tip_top">{{ tip_text }}</div>
+
+    <!-- Ship hover nameplate (floats ABOVE the hovered hull; np_left is the hull's screen-px
+         center, np_top the top of its bounding circle minus a gap -- both game-side. The RCSS
+         margins pull the fixed-size plate back to centre on that anchor). np_class "" (a hull
+         whose vessel name IS its class name) collapses to the single name line. -->
+    <div id="nameplate" data-if="np_visible" data-style-left="np_left" data-style-top="np_top">
+        <div class="np-name">{{ np_name }}</div>
+        <div class="np-class" data-if="np_class != ''">{{ np_class }}</div>
+    </div>
+
+    <!-- Space-station right-click context menu (cursor-anchored via station_menu_left/top) -->
+    <div id="station-menu" class="panel" data-if="station_menu_visible"
+         data-style-left="station_menu_left" data-style-top="station_menu_top">
+        <div class="station-menu-item" data-event-click="hud_action('station_inspect')">Inspect</div>
+    </div>
+
+    <!-- Fleet-ship right-click context menu (cursor-anchored via ship_menu_left/top).
+         One of Pilot (take the stick / transfer hulls) / Auto-pilot (release the piloted
+         hull) shows, plus Escort (order the selected ships onto this hull) whenever a
+         selection exists. Rows are STATIC with data-if visibility; only the name header
+         is a text binding. -->
+    <div id="ship-menu" class="panel" data-if="ship_menu_visible"
+         data-style-left="ship_menu_left" data-style-top="ship_menu_top">
+        <div class="ship-menu-name">{{ ship_menu_name }}</div>
+        <div class="station-menu-item" data-if="ship_menu_can_pilot"
+             data-event-click="hud_action('ship_pilot')">Pilot</div>
+        <div class="station-menu-item" data-if="ship_menu_can_release"
+             data-event-click="hud_action('ship_autopilot')">Auto-pilot</div>
+        <div class="station-menu-item" data-if="ship_menu_can_escort"
+             data-event-click="hud_action('ship_escort')">Escort</div>
+    </div>
+
+    <!-- Space-station inspector window (floating, right side; planet-inspector styling) -->
+    <div id="station-inspector" class="panel" data-if="station_inspector_visible">
+        <div class="win-title">{{ station_insp_title }}<span class="win-close" data-event-click="hud_action('close_station_inspector')">Collapse</span></div>
+        <div class="planet-insp-subtitle">{{ station_insp_subtitle }}</div>
+        <div class="insp-tabs">
+            <div class="insp-tab" data-class-active="station_insp_show_dock" data-event-click="hud_action('station_tab:0')">Dock</div>
+            <div class="insp-tab" data-class-active="station_insp_show_market" data-event-click="hud_action('station_tab:1')">Market</div>
+            <div class="insp-tab" data-if="station_insp_tab2_visible" data-class-active="station_insp_show_contracts" data-event-click="hud_action('station_tab:2')">Contracts</div>
+        </div>
+        <div class="rule"></div>
+        <div class="planet-insp-line" data-if="station_insp_show_dock">{{ station_insp_dock }}</div>
+        <div class="planet-insp-section" data-if="station_insp_show_market">
+            <div class="market-colhead">{{ station_insp_market_head }}</div>
+            <div class="planet-insp-head" data-class-spec="station_insp_spec_agri">Agriculture<span class="spec-tag" data-if="station_insp_spec_agri"> &#8212; specialty</span></div>
+            <div class="planet-insp-line">{{ station_insp_market_agri }}</div>
+            <div class="rule"></div>
+            <div class="planet-insp-head" data-class-spec="station_insp_spec_mine">Minerals<span class="spec-tag" data-if="station_insp_spec_mine"> &#8212; specialty</span></div>
+            <div class="planet-insp-line">{{ station_insp_market_mine }}</div>
+            <div class="rule"></div>
+            <div class="planet-insp-head" data-class-spec="station_insp_spec_vola">Volatiles<span class="spec-tag" data-if="station_insp_spec_vola"> &#8212; specialty</span></div>
+            <div class="planet-insp-line">{{ station_insp_market_vola }}</div>
+            <div class="rule"></div>
+            <div class="planet-insp-head" data-class-spec="station_insp_spec_indu">Industrial<span class="spec-tag" data-if="station_insp_spec_indu"> &#8212; specialty</span></div>
+            <div class="planet-insp-line">{{ station_insp_market_indu }}</div>
+            <div class="rule"></div>
+            <div class="planet-insp-line dim">{{ station_insp_market_note }}</div>
+        </div>
+        <div class="planet-insp-line" data-if="station_insp_show_contracts">{{ station_insp_contracts }}</div>
+    </div>
+
+    <!-- Planet inspector window (floating; opened by left-clicking a planet on the map) -->
+    <div id="planet-inspector" class="panel" data-if="planet_insp_visible">
+        <div class="win-title">{{ planet_insp_title }}<span class="win-close" data-event-click="hud_action('close_planet_inspector')">X</span></div>
+        <div class="planet-insp-subtitle">{{ planet_insp_subtitle }}</div>
+        <div class="rule"></div>
+        <div class="planet-gauge-label">{{ planet_insp_hab_label }}</div>
+        <div class="planet-gauge"><div class="planet-gauge-fill hab" data-style-width="planet_insp_hab_w"></div></div>
+        <div class="planet-gauge-label">{{ planet_insp_haz_label }}</div>
+        <div class="planet-gauge"><div class="planet-gauge-fill haz" data-style-width="planet_insp_haz_w"></div></div>
+        <div class="rule"></div>
+        <div class="planet-insp-line">{{ planet_insp_stats }}</div>
+        <div class="rule"></div>
+        <div class="planet-insp-line">{{ planet_insp_comp }}</div>
+        <div class="planet-insp-section" data-if="planet_insp_moons != ''">
+            <div class="rule"></div>
+            <div class="planet-insp-head">Moons</div>
+            <div class="planet-insp-line">{{ planet_insp_moons }}</div>
+        </div>
+        <div class="planet-insp-section" data-if="planet_insp_events != ''">
+            <div class="rule"></div>
+            <div class="planet-insp-head">Chronicle</div>
+            <div class="planet-insp-line dim">{{ planet_insp_events }}</div>
+        </div>
+    </div>
+
+</body>
+</rml>
+

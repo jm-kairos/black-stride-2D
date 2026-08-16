@@ -1,0 +1,3 @@
+# Black Stride skill registry manifest. One .skill path per line ('#' comments).
+# SLOT ORDER: line N of this manifest is hotbar slot N = number key N (detached camera).
+assets/skills/missile_volley.skill

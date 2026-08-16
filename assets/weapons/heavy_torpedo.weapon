@@ -1,0 +1,26 @@
+# Large torpedo: devastating if it lands, slow and expensive. 6.0 hp makes it a
+# point-defense CHECK -- standard PD needs most of a second of beam time, so it
+# punishes drained capacitors and HOLD stances. Counter it early or dodge hard.
+id          heavy_torpedo
+name        "Heavy Torpedo"
+kind        missile
+size        L
+icon        ic-missile
+damage      120
+reload      9.0
+proj_speed  5000
+proj_life   16
+proj_radius 8.0
+cap_cost    45
+emission    1.0
+proj_hp     6.0
+price       2600
+tier        2
+# Tactical range (autopilot approach / ROE acquisition / HUD ring); flight reach stays
+# proj_speed x proj_life (80k).
+engage_range 70000
+# Ponderous cold launch: a heavy round shoved slowly out of the tube, a full second of
+# silent coast, then the motor lights. Menace, not snap.
+eject_speed  180
+ignition_delay 1.0
+desc "Slow, blazing-hot, and nearly unstoppable once inside terminal range. Point-defense needs most of a second of beam time to burn one down."

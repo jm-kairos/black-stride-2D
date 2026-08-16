@@ -1,0 +1,28 @@
+# Large alpha-strike railgun: brutal single hits at sniper reach, with a capacitor
+# spike per shot that forces deliberate timing. Fast, tough slugs are hard for
+# point-defense to stop.
+id          longlance_rail
+name        "Long-Lance Railgun"
+kind        ballistic
+size        L
+icon        ic-cannon
+damage      45
+fire_rate   0.8
+proj_speed  16000
+# Uniform 0.15 range compression (see autocannon_mk1): 24 -> 3.6s, 384,000 -> 57,600 units.
+# Still the longest ballistic reach in the catalog, and now the only one that reaches past
+# what the arena look frames -- which is the right shape for the sniper.
+proj_life   3.6
+proj_radius 5.0
+cap_cost    18
+emission    0.8
+proj_hp     1.6
+price       1400
+tier        2
+
+# The one def in the catalog that opts out of its kind's default visual family. A rail-driven
+# slug is not a propellant round: the launch is an electromagnetic snap with no expanding gas,
+# and the shot is a long thin very bright line rather than a short hot streak. Everything else
+# ballistic keeps `shell`, which is why this is one authored line and not a code branch.
+vfx_family  slug
+desc "An alpha-strike railgun for captains who pick their moment. Each slug spikes the capacitor hard - time the shot, or drift powerless."

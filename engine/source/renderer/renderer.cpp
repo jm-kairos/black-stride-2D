@@ -2,6 +2,7 @@
 #include "renderer/renderer_backend.h"
 #include "renderer/camera2d.h"
 #include "renderer/bs_imgui.h"
+#include "renderer/bs_rml.h"
 
 #include "core/logger.h"
 #include "core/memory/bs_memory.h"
@@ -29,6 +30,12 @@ struct RendererState
                                    // thickness a constant SCREEN width regardless of zoom
     b8               frame_active; // TRUE between a successful begin_frame and its end_frame
     b8               initialized;
+    f32              draw_alpha_mul; // global alpha multiplier applied to sprite/line/circle/quad
+                                    // tints (1.0 = opaque). Reset to 1.0 each frame; used to
+                                    // cross-fade whole render passes (e.g. arena<->galaxy map).
+    f32              last_render_ms;  // CPU time of the game's render(dt) (application loop)
+    f32              last_present_ms; // CPU time of end_frame incl. present/vsync wait
+    b8               present_immediate; // TRUE when the swapchain is in IMMEDIATE (uncapped) mode
 };
 
 static RendererState state;
@@ -70,6 +77,13 @@ b8 renderer_initialize(const char* app_name, struct PlatformState* plat)
         BS_LOG_WARN("Dear ImGui failed to initialize; continuing without the UI overlay.");
     }
 
+    // Bring up RmlUi (the in-game UI). Like ImGui this needs the live GPU device + window, and a
+    // failure is non-fatal: the game still runs, just without the retained-mode HTML/CSS UI.
+    if (!bs_rml_initialize())
+    {
+        BS_LOG_WARN("RmlUi failed to initialize; continuing without the in-game UI.");
+    }
+
     state.initialized = TRUE;
     BS_LOG_INFO("Renderer initialized (backend: SDL3 GPU).");
     return TRUE;
@@ -86,6 +100,10 @@ void renderer_shutdown()
     // owns device-bound resources. bs_imgui_shutdown drains the GPU first and is a no-op if
     // ImGui never initialized.
     bs_imgui_shutdown();
+
+    // Likewise tear down RmlUi before the device is destroyed; it owns GPU buffers/textures and
+    // drains the GPU internally. No-op if RmlUi never initialized.
+    bs_rml_shutdown();
 
     state.backend.shutdown(&state.backend);
     renderer_backend_destroy(&state.backend);
@@ -117,6 +135,11 @@ b8 renderer_begin_frame(f32 dt)
     }
 
     state.frame_active = TRUE;
+    state.draw_alpha_mul = 1.0f; // opaque by default; passes opt into fading per frame
+
+    // Advance the in-game UI: sync its size to the swapchain and run layout/animation/hover from
+    // the events already pumped this frame. The actual RmlUi render is sequenced inside end_frame.
+    bs_rml_update();
     return TRUE;
 }
 
@@ -230,6 +253,23 @@ bs_texture renderer_create_texture(const u8* pixels, u32 width, u32 height)
     return tex;
 }
 
+b8 renderer_update_texture(bs_texture texture, const u8* pixels, u32 width, u32 height)
+{
+    if (!state.initialized || texture.id == BS_INVALID_HANDLE || !pixels || width == 0 || height == 0)
+    {
+        BS_LOG_ERROR("renderer_update_texture: invalid arguments or renderer not initialized.");
+        return FALSE;
+    }
+
+    if (!state.backend.update_texture)
+    {
+        BS_LOG_ERROR("renderer_update_texture: backend does not support texture updates.");
+        return FALSE;
+    }
+
+    return state.backend.update_texture(&state.backend, texture, pixels, width, height);
+}
+
 void renderer_destroy_texture(bs_texture texture)
 {
     if (!state.initialized || texture.id == BS_INVALID_HANDLE)
@@ -249,13 +289,194 @@ void renderer_set_camera(Camera2D camera)
     state.backend.set_camera(&state.backend, camera);
 }
 
+void renderer_set_draw_alpha(f32 alpha)
+{
+    if (!state.initialized) return;
+    state.draw_alpha_mul = (alpha < 0.0f) ? 0.0f : (alpha > 1.0f ? 1.0f : alpha);
+}
+
+f32 renderer_get_draw_alpha()
+{
+    return state.initialized ? state.draw_alpha_mul : 1.0f;
+}
+
 void renderer_draw_sprite(const bs_sprite* sprite)
 {
     if (!state.initialized || !state.frame_active || !sprite)
     {
         return;
     }
+    if (state.draw_alpha_mul < 0.999f)
+    {
+        bs_sprite faded = *sprite;
+        faded.tint.a *= state.draw_alpha_mul;
+        // An opaque draw must switch to alpha blending to actually fade.
+        if (faded.blend == BLEND_NONE) faded.blend = BLEND_ALPHA;
+        state.backend.draw_sprite(&state.backend, &faded);
+        return;
+    }
     state.backend.draw_sprite(&state.backend, sprite);
+}
+
+void renderer_draw_mapped_sprite(const bs_mapped_sprite* sprite)
+{
+    if (!state.initialized || !state.frame_active || !sprite)
+    {
+        return;
+    }
+    if (state.backend.draw_mapped_sprite)
+        state.backend.draw_mapped_sprite(&state.backend, sprite);
+}
+
+void renderer_portrait_begin(Camera2D camera)
+{
+    if (!state.initialized || !state.frame_active) return;
+    if (state.backend.portrait_begin)
+        state.backend.portrait_begin(&state.backend, camera);
+}
+
+void renderer_portrait_end(void)
+{
+    if (!state.initialized || !state.frame_active) return;
+    if (state.backend.portrait_end)
+        state.backend.portrait_end(&state.backend);
+}
+
+void renderer_thumb_begin(i32 slot, Camera2D camera)
+{
+    if (!state.initialized || !state.frame_active) return;
+    if (state.backend.thumb_begin)
+        state.backend.thumb_begin(&state.backend, slot, camera);
+}
+
+void renderer_draw_starfield(const bs_starfield_params* params)
+{
+    if (!state.initialized || !state.frame_active || !params || !state.backend.draw_starfield)
+    {
+        return;
+    }
+    state.backend.draw_starfield(&state.backend, params);
+}
+
+void renderer_draw_sunburst(const bs_sunburst_params* params)
+{
+    if (!state.initialized || !state.frame_active || !params || !state.backend.draw_sunburst)
+    {
+        return;
+    }
+    state.backend.draw_sunburst(&state.backend, params);
+}
+
+void renderer_draw_starsurface(const bs_starsurface_params* params)
+{
+    if (!state.initialized || !state.frame_active || !params || !state.backend.draw_starsurface)
+    {
+        return;
+    }
+    state.backend.draw_starsurface(&state.backend, params);
+}
+
+void renderer_draw_planetsurface(const bs_planetsurface_params* params)
+{
+    if (!state.initialized || !state.frame_active || !params || !state.backend.draw_planetsurface)
+    {
+        return;
+    }
+    state.backend.draw_planetsurface(&state.backend, params);
+}
+
+void renderer_draw_heat_map(const bs_heat_map_params* params)
+{
+    if (!state.initialized || !state.frame_active || !params || !state.backend.draw_heat_map)
+    {
+        return;
+    }
+    state.backend.draw_heat_map(&state.backend, params);
+}
+
+void renderer_draw_nebula(const bs_nebula_params* params)
+{
+    if (!state.initialized || !state.frame_active || !params || !state.backend.draw_nebula)
+    {
+        return;
+    }
+    state.backend.draw_nebula(&state.backend, params);
+}
+
+void renderer_draw_godrays(const bs_godray_params* params)
+{
+    if (!state.initialized || !state.frame_active || !params || !state.backend.draw_godrays)
+    {
+        return;
+    }
+    state.backend.draw_godrays(&state.backend, params);
+}
+
+void renderer_set_lights(const bs_light2d* lights, u32 count, bs_color ambient, u32 unlit_layer)
+{
+    if (!state.initialized || !state.backend.set_lights)
+    {
+        return;
+    }
+    // A null/empty list is valid: it disables lighting (fullbright).
+    state.backend.set_lights(&state.backend, lights, (lights ? count : 0), ambient, unlit_layer);
+}
+
+void renderer_set_glow_params(const bs_glow_params* params)
+{
+    if (!state.initialized || !state.backend.set_glow_params)
+    {
+        return;
+    }
+    state.backend.set_glow_params(&state.backend, params);
+}
+
+void renderer_set_bloom_enabled(b8 enabled)
+{
+    if (!state.initialized || !state.backend.set_bloom_enabled) return;
+    state.backend.set_bloom_enabled(&state.backend, enabled);
+}
+
+void renderer_set_bloom_params(f32 threshold, f32 intensity)
+{
+    if (!state.initialized || !state.backend.set_bloom_params) return;
+    state.backend.set_bloom_params(&state.backend, threshold, intensity);
+}
+
+void renderer_set_streak_enabled(b8 enabled)
+{
+    if (!state.initialized || !state.backend.set_streak_enabled) return;
+    state.backend.set_streak_enabled(&state.backend, enabled);
+}
+
+void renderer_set_streak_params(f32 angle, f32 length)
+{
+    if (!state.initialized || !state.backend.set_streak_params) return;
+    state.backend.set_streak_params(&state.backend, angle, length);
+}
+
+void renderer_set_streak_intensity(f32 intensity)
+{
+    if (!state.initialized || !state.backend.set_streak_intensity) return;
+    state.backend.set_streak_intensity(&state.backend, intensity);
+}
+
+void renderer_set_streak_source(bs_math::Vec2 screen_pos)
+{
+    if (!state.initialized || !state.backend.set_streak_source) return;
+    state.backend.set_streak_source(&state.backend, screen_pos);
+}
+
+void renderer_set_streak_flare_intensity(f32 intensity)
+{
+    if (!state.initialized || !state.backend.set_streak_flare_intensity) return;
+    state.backend.set_streak_flare_intensity(&state.backend, intensity);
+}
+
+void renderer_set_aux_bloom_mode(b8 enabled)
+{
+    if (!state.initialized || !state.backend.set_aux_bloom_mode) return;
+    state.backend.set_aux_bloom_mode(&state.backend, enabled);
 }
 
 // -------------------------------------------------------------------------------------
@@ -281,16 +502,19 @@ void renderer_draw_line(bs_math::Vec2 a, bs_math::Vec2 b, f32 thickness,
 
     // Center the quad on the segment midpoint; size = (length, thickness); rotate to the
     // segment's direction. origin {0.5,0.5} keeps rotation about the midpoint.
+    f32 eff_a = color.a * state.draw_alpha_mul;
     bs_sprite s;
     s.position = bs_math::Vec2{ (a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f };
     s.size     = bs_math::Vec2{ len, world_thickness };
     s.origin   = bs_math::Vec2{ 0.5f, 0.5f };
     s.rotation = atan2f(d.y, d.x);
     s.uv       = bs_rect{ 0.0f, 0.0f, 1.0f, 1.0f };
-    s.tint     = color;
+    s.tint     = color; s.tint.a = eff_a;
+    s.custom   = bs_color{ 0.0f, 0.0f, 0.0f, 0.0f };
     s.texture  = bs_texture{ BS_INVALID_HANDLE }; // white texture => solid color
-    s.blend    = (color.a < 0.999f) ? BLEND_ALPHA : BLEND_NONE;
-    s.layer    = layer;
+    s.blend          = (eff_a < 0.999f) ? BLEND_ALPHA : BLEND_NONE;
+    s.layer          = layer;
+    s.glow_override  = nullptr;
     state.backend.draw_sprite(&state.backend, &s);
 }
 
@@ -299,16 +523,19 @@ void renderer_draw_quad(bs_math::Vec2 center, bs_math::Vec2 size,
 {
     if (!state.initialized || !state.frame_active) return;
 
+    f32 eff_a = color.a * state.draw_alpha_mul;
     bs_sprite s;
     s.position = center;
     s.size     = size;
     s.origin   = bs_math::Vec2{ 0.5f, 0.5f };
     s.rotation = 0.0f;
     s.uv       = bs_rect{ 0.0f, 0.0f, 1.0f, 1.0f };
-    s.tint     = color;
+    s.tint     = color; s.tint.a = eff_a;
+    s.custom   = bs_color{ 0.0f, 0.0f, 0.0f, 0.0f };
     s.texture  = bs_texture{ BS_INVALID_HANDLE };
-    s.blend    = (color.a < 0.999f) ? BLEND_ALPHA : BLEND_NONE;
-    s.layer    = layer;
+    s.blend          = (eff_a < 0.999f) ? BLEND_ALPHA : BLEND_NONE;
+    s.layer          = layer;
+    s.glow_override  = nullptr;
     state.backend.draw_sprite(&state.backend, &s);
 }
 
@@ -374,4 +601,39 @@ bs_frame_stats renderer_get_frame_stats()
     if (!state.initialized || !state.backend.get_frame_stats) return stats;
     state.backend.get_frame_stats(&state.backend, &stats);
     return stats;
+}
+
+void renderer_report_frame_timing(f32 render_ms, f32 present_ms)
+{
+    state.last_render_ms  = render_ms;
+    state.last_present_ms = present_ms;
+}
+
+void renderer_get_frame_timing(f32* out_render_ms, f32* out_present_ms)
+{
+    if (out_render_ms)  *out_render_ms  = state.last_render_ms;
+    if (out_present_ms) *out_present_ms = state.last_present_ms;
+}
+
+b8 renderer_set_present_mode(b8 immediate)
+{
+    if (!state.initialized || !state.backend.set_present_mode) return FALSE;
+    // Only mirror the mode when the backend actually applied it — a refused IMMEDIATE must not
+    // report as immediate (that would also wrongly disable the app-level frame cap).
+    if (!state.backend.set_present_mode(&state.backend, immediate)) return FALSE;
+    state.present_immediate = immediate;
+    return TRUE;
+}
+
+b8 renderer_is_present_immediate()
+{
+    return state.present_immediate;
+}
+
+void renderer_get_present_breakdown(f32* out_acquire_ms, f32* out_submit_ms)
+{
+    if (out_acquire_ms) *out_acquire_ms = 0.0f;
+    if (out_submit_ms)  *out_submit_ms  = 0.0f;
+    if (!state.initialized || !state.backend.get_present_timing) return;
+    state.backend.get_present_timing(&state.backend, out_acquire_ms, out_submit_ms);
 }

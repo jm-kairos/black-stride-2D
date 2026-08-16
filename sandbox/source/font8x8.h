@@ -1,5 +1,4 @@
 #pragma once
-
 // -------------------------------------------------------------------------------------
 // font8x8 — embedded 8x8 monochrome bitmap font (basic Latin, ASCII 0x20..0x7E).
 //
@@ -15,15 +14,12 @@
 // Consumed by text.cpp, which bakes these glyphs into a single RGBA8 atlas at startup and
 // then draws strings as textured quads. Index into the table with `c - FONT8X8_FIRST`.
 // -------------------------------------------------------------------------------------
-
 #include <defines.h>
-
 #define FONT8X8_FIRST      0x20  // first encoded code point (space)
 #define FONT8X8_LAST       0x7E  // last encoded code point (~)
 #define FONT8X8_COUNT      (FONT8X8_LAST - FONT8X8_FIRST + 1)  // 95 glyphs
 #define FONT8X8_GLYPH_W    8
 #define FONT8X8_GLYPH_H    8
-
 // Row-major glyph bitmaps, indexed [code - FONT8X8_FIRST][row].
 static const u8 g_font8x8[FONT8X8_COUNT][FONT8X8_GLYPH_H] = {
     { 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00 }, // U+0020 (space)

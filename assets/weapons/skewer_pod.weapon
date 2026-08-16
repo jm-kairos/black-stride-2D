@@ -1,0 +1,23 @@
+# Light interceptor-class missile: quick, cheap, disposable. One PD blink kills it,
+# but it cycles nearly twice as fast as a harpoon and sips capacitor -- saturation
+# and finishing work, not door-kicking.
+id          skewer_pod
+name        "Skewer Light Missile"
+kind        missile
+size        S
+icon        ic-missile
+damage      14
+reload      2.2
+proj_speed  12000
+proj_life   250
+proj_radius 4.5
+cap_cost    12
+emission    0.8
+proj_hp     1.5
+price       500
+tier        1
+engage_range 45000
+# Snappy cold launch: light round, hard kick, short coast.
+eject_speed  450
+ignition_delay 0.3
+desc "Featherweight seeker round. Any point-defense blink burns one down, but the rack cycles fast enough to ask the question twice."

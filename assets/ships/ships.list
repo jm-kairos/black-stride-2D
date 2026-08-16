@@ -1,0 +1,8 @@
+# Black Stride ship registry manifest: one .ship card path per line ('#' comments).
+# Loaded once at game init by ship_registry_load (sim/ship_def.cpp); every hull the game
+# can spawn is one card here, and spawn sites reference cards by their `id` line.
+assets/ships/ship/ship.ship
+assets/enemy_ship.ship
+assets/ships/npc/npc_escort.ship
+assets/ships/npc/npc_hauler.ship
+assets/ships/npc/npc_warship.ship

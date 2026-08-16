@@ -4,6 +4,7 @@
 #include "core/input.h"
 #include "core/event.h"
 #include "renderer/bs_imgui.h" // SDL-free ImGui facade: feed events to ImGui from the pump
+#include "renderer/bs_rml.h"   // SDL-free RmlUi facade: feed events to the in-game UI from the pump
 
 #include <SDL3/SDL.h>
 
@@ -28,8 +29,9 @@ b8 platform_initialize(
     const char* app_name,
     i32 x,
     i32 y,
-    i32 width,
-    i32 height)
+    i32* width,
+    i32* height,
+    b8 fullscreen)
 {
     plat_state->internal_state = malloc(sizeof(InternalState));
     InternalState* state = (InternalState*)plat_state->internal_state;
@@ -41,14 +43,24 @@ b8 platform_initialize(
         return FALSE;
     }
 
-    state->window = SDL_CreateWindow(app_name, width, height, SDL_WINDOW_RESIZABLE);
+    // SDL3's FULLSCREEN flag with no explicit display mode = borderless fullscreen at the
+    // desktop resolution (no mode switch). width/height then only describe the windowed
+    // geometry the window falls back to on leaving fullscreen.
+    SDL_WindowFlags flags = SDL_WINDOW_RESIZABLE;
+    if (fullscreen) flags |= SDL_WINDOW_FULLSCREEN;
+    state->window = SDL_CreateWindow(app_name, *width, *height, flags);
     if (!state->window)
     {
         BS_LOG_FATAL("SDL_CreateWindow failed: %s", SDL_GetError());
         return FALSE;
     }
 
-    SDL_SetWindowPosition(state->window, x, y);
+    if (!fullscreen)
+        SDL_SetWindowPosition(state->window, x, y);
+
+    // Report the size the window ACTUALLY came up at (the desktop resolution when
+    // fullscreen), so the application seeds its state from reality instead of the config.
+    SDL_GetWindowSizeInPixels(state->window, width, height);
 
     perf_freq = SDL_GetPerformanceFrequency();
     perf_start = SDL_GetPerformanceCounter();
@@ -99,6 +111,11 @@ b8 platform_pump_messages(PlatformState* plat_state)
         // so input consumed by a UI panel does not also drive the game. Passing &ev as void* keeps
         // this TU free of ImGui headers (the facade casts it back inside the backend TU).
         bs_imgui_process_event(&ev);
+
+        // Feed the same event to the in-game UI (RmlUi). This updates its hover/focus state and
+        // the bs_rml_wants_mouse/keyboard flags the game gates world input on. Same void* trick as
+        // above keeps this TU free of RmlUi headers.
+        bs_rml_process_event(&ev);
 
         switch (ev.type)
         {
@@ -221,18 +238,34 @@ VOID_PTR platform_set_memory(VOID_PTR dest, i32 value, u64 size)
     return memset(dest, value, size);
 }
 
+#if BS_PLATFORM_WINDOWS
+// WriteConsoleA only works on a real console handle: it fails silently when stdout/stderr is a
+// file or pipe (`sandbox.exe > log.txt`), which makes log scraping impossible. Detect a console
+// with GetConsoleMode and fall back to WriteFile so redirected output is captured too.
+static void win_console_write(HANDLE handle, const char* message, u8 colour)
+{
+    if (handle == NULL || handle == INVALID_HANDLE_VALUE) return;
+
+    OutputDebugStringA(message);
+    DWORD length  = (DWORD)strlen(message);
+    DWORD written = 0;
+    DWORD mode    = 0;
+    if (GetConsoleMode(handle, &mode))
+    {
+        // FATAL, ERROR, WARN, INFO, DEBUG, TRACE
+        static const u8 levels[6] = {64, 4, 6, 2, 1, 8};
+        SetConsoleTextAttribute(handle, levels[colour < 6 ? colour : 5]);
+        WriteConsoleA(handle, message, length, &written, 0);
+        return;
+    }
+    WriteFile(handle, message, length, &written, NULL);
+}
+#endif
+
 void platform_console_write(const char* message, u8 colour)
 {
 #if BS_PLATFORM_WINDOWS
-    HANDLE console_handle = GetStdHandle(STD_OUTPUT_HANDLE);
-    // FATAL, ERROR, WARN, INFO, DEBUG, TRACE
-    static u8 levels[6] = {64, 4, 6, 2, 1, 8};
-    SetConsoleTextAttribute(console_handle, levels[colour]);
-
-    OutputDebugStringA(message);
-    u64 length = strlen(message);
-    LPDWORD number_written = 0;
-    WriteConsoleA(console_handle, message, (DWORD)length, number_written, 0);
+    win_console_write(GetStdHandle(STD_OUTPUT_HANDLE), message, colour);
 #else
     (void)colour;
     fputs(message, stdout);
@@ -242,14 +275,7 @@ void platform_console_write(const char* message, u8 colour)
 void platform_console_write_error(const char* message, u8 colour)
 {
 #if BS_PLATFORM_WINDOWS
-    HANDLE console_handle = GetStdHandle(STD_ERROR_HANDLE);
-    static u8 levels[6] = {64, 4, 6, 2, 1, 8};
-    SetConsoleTextAttribute(console_handle, levels[colour]);
-
-    OutputDebugStringA(message);
-    u64 length = strlen(message);
-    LPDWORD number_written = 0;
-    WriteConsoleA(console_handle, message, (DWORD)length, number_written, 0);
+    win_console_write(GetStdHandle(STD_ERROR_HANDLE), message, colour);
 #else
     (void)colour;
     fputs(message, stderr);
@@ -298,6 +324,19 @@ static keys sdl_scancode_to_bs_key(SDL_Scancode sc)
         case SDL_SCANCODE_INSERT:    return KEY_INSERT;
         case SDL_SCANCODE_DELETE:    return KEY_DELETE;
         case SDL_SCANCODE_HELP:      return KEY_HELP;
+
+        // Number row (0-9). The engine's `keys` enum uses Win32 VK values, where
+        // VK '0'-'9' match ASCII 0x30-0x39.
+        case SDL_SCANCODE_1: return KEY_NUM1;
+        case SDL_SCANCODE_2: return KEY_NUM2;
+        case SDL_SCANCODE_3: return KEY_NUM3;
+        case SDL_SCANCODE_4: return KEY_NUM4;
+        case SDL_SCANCODE_5: return KEY_NUM5;
+        case SDL_SCANCODE_6: return KEY_NUM6;
+        case SDL_SCANCODE_7: return KEY_NUM7;
+        case SDL_SCANCODE_8: return KEY_NUM8;
+        case SDL_SCANCODE_9: return KEY_NUM9;
+        case SDL_SCANCODE_0: return KEY_NUM0;
 
         case SDL_SCANCODE_A: return KEY_A;
         case SDL_SCANCODE_B: return KEY_B;

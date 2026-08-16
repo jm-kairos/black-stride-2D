@@ -40,8 +40,9 @@ b8 application_init(Game* game_inst){
 
     app_state.game_inst = game_inst;
 
-    // Seed the window dimensions from the requested config size. The platform
-    // resize event will keep these current once the window is live.
+    // Seeded from the config size here, then corrected to the ACTUAL window size right
+    // after platform_initialize (fullscreen comes up at the desktop resolution, not the
+    // config size). The platform resize event keeps these current once the window is live.
     app_state.width  = (i16)game_inst->app_config.start_width;
     app_state.height = (i16)game_inst->app_config.start_height;
     app_state.last_time = 0;
@@ -73,16 +74,23 @@ b8 application_init(Game* game_inst){
     event_register(EVENT_CODE_KEY_RELEASED, 0, application_on_key);
     event_register(EVENT_CODE_WINDOW_RESIZED, 0, application_on_resized);
 
-    if (!platform_initialize(&app_state.platform, 
-        game_inst->app_config.name, 
-        game_inst->app_config.start_pos_x, 
-        game_inst->app_config.start_pos_y, 
-        game_inst->app_config.start_width, 
-        game_inst->app_config.start_height)){
+    i32 window_w = game_inst->app_config.start_width;
+    i32 window_h = game_inst->app_config.start_height;
+    if (!platform_initialize(&app_state.platform,
+        game_inst->app_config.name,
+        game_inst->app_config.start_pos_x,
+        game_inst->app_config.start_pos_y,
+        &window_w,
+        &window_h,
+        game_inst->app_config.fullscreen)){
 
         BS_LOG_ERROR("platform_initialize failed !");
         return FALSE;
     }
+    // The window may have come up at a different size than requested (fullscreen = the
+    // desktop resolution): adopt reality before the renderer and game initialize.
+    app_state.width  = (i16)window_w;
+    app_state.height = (i16)window_h;
 
     // Bring up the renderer after the window exists but before the game's init, so the
     // game can create GPU resources during its own initialization.
@@ -144,19 +152,47 @@ b8 application_run(){
             // (e.g. window minimized) means we must not call render or end_frame.
             if (renderer_begin_frame(dt))
             {
+                f64 t0 = platform_get_absolute_time();
                 if (!app_state.game_inst->render(app_state.game_inst, dt))
                 {
                     BS_LOG_FATAL("Game render failed, shutting down.");
                     app_state.is_running = FALSE;
                     break;
                 }
-
+                f64 t1 = platform_get_absolute_time();
                 renderer_end_frame(dt);
+                f64 t2 = platform_get_absolute_time();
+                f32 render_ms = (f32)((t1 - t0) * 1000.0);
+                f32 present_ms = (f32)((t2 - t1) * 1000.0);
+                renderer_report_frame_timing(render_ms, present_ms);
+                if (render_ms > 100.0f || present_ms > 100.0f)
+                {
+                    BS_LOG_WARN("SLOW FRAME: render=%.1fms present=%.1fms", render_ms, present_ms);
+                }
             }
 
             input_update(delta);
         }
-        
+
+        // ---- Frame rate cap ----
+        // The swapchain defaults to VSYNC, which already limits presentation to the
+        // monitor's refresh rate. This limiter enforces a fixed target regardless of
+        // refresh rate (e.g. holds 60 FPS on a 144 Hz display) and prevents the loop
+        // from running unthrottled if VSYNC is ever disabled or while suspended.
+        // Skipped in IMMEDIATE present mode so GPU-cost profiling sees the true frame time.
+        if (!renderer_is_present_immediate())
+        {
+            const real target_frame_seconds = 1.0 / 60.0;
+            real frame_elapsed = platform_get_absolute_time() - current_time;
+            if (frame_elapsed < target_frame_seconds)
+            {
+                real remaining_ms = (target_frame_seconds - frame_elapsed) * 1000.0;
+                if (remaining_ms >= 1.0)
+                {
+                    platform_sleep((u64)remaining_ms);
+                }
+            }
+        }
     }
 
     event_unregister(EVENT_CODE_APPLICATION_QUIT, 0, application_on_event);
@@ -195,13 +231,11 @@ b8 application_on_key(u16 code, VOID_PTR sender, VOID_PTR listener_inst, event_c
     if (code == EVENT_CODE_KEY_PRESSED)
     {
         u16 key_code = context.data.u16[0];
-        if (key_code == KEY_ESCAPE)
-        {
-            event_context data = {};
-            event_fire(EVENT_CODE_APPLICATION_QUIT, 0, data);
-
-            return TRUE;
-        } else if (key_code == KEY_A){
+        // NOTE: ESC no longer quits here. Quit-on-ESC is GAME policy now (game.cpp fires
+        // EVENT_CODE_APPLICATION_QUIT itself), because the game needs the key to be
+        // modal-aware: an ESC that collapses an open management window must be consumed by
+        // it, not also tear the application down.
+        if (key_code == KEY_A){
             BS_LOG_DEBUG("Explicit - A key pressed !");
 
         }else{
