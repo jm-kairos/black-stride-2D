@@ -22,6 +22,8 @@
 
 #include "sim/weapon_def.h"
 
+#include "sim/skill_def.h"
+
 
 
 #include "sim/projectile.h"
@@ -3652,6 +3654,10 @@ struct game_state {
     // ---- Weapon def registry (immutable stat blocks loaded once from assets/weapons) -------------
 
     WeaponRegistry   weapon_registry;         // shared WeaponDef pool; instances built via weapon_instantiate
+
+    // ---- Skill def registry (immutable ability cards loaded once from assets/skills) -------------
+
+    SkillRegistry    skill_registry;          // shared SkillDef pool; hotbar slots bind entries by pointer
 
 
 

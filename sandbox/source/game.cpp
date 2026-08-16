@@ -427,6 +427,10 @@ b8 game_init(Game* game_inst) {
 
     weapon_registry_load(&s->weapon_registry, "assets/weapons/weapons.list");
 
+    // ---- Skill def registry: fleet ability cards; manifest order = hotbar slot order -----
+
+    skill_registry_load(&s->skill_registry, "assets/skills/skills.list");
+
     s->view.alt_movement_active = FALSE;
 
     // ---- Fleet: flagship (member 0) loaded from the player hull --------------------------
