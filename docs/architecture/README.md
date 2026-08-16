@@ -108,6 +108,7 @@ Not subsystems: `containers/` (3 headers, one of which has zero includers) — s
 | 2 | [Economy](sandbox/Economy.md) | Station markets: goods catalogue, deterministic baselines, trade deltas, price formation. |
 | 2 | [Territory](sandbox/Territory.md) | The Voronoi partition of the galaxy into star-system territories, and its queries. |
 | 3 | [RtsControl](sandbox/RtsControl.md) | Hover, box/click selection, move and attack orders, jump mode, free camera. |
+| 3 | [SkillSystem](sandbox/SkillSystem.md) | Hotkey fleet abilities: the skill-card registry, entity targeting, cooldowns, the missile-volley ripple. |
 | 3 | [CameraControl](sandbox/CameraControl.md) | Wheel-driven zoom easing and the arena/map view-mode flip with control hand-off. |
 | 3 | [WorldEditor](sandbox/WorldEditor.md) | Hit-testing and dragging in-world entities via transform gizmos. |
 | 3 | [Discovery](sandbox/Discovery.md) | First-identification of NPC ships and stations, remembered across re-visits. |

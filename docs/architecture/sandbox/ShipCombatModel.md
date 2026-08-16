@@ -359,10 +359,11 @@ it reports affordability, and the caller commits via `ship_try_spend_cap`.
   it and the three `combat_arena.cpp` sites now go through `ProjectileSystem::retire`.
   `ProjectileSystem::update` still recounts from scratch each tick, quietly repairing the
   counter, so the invariant remains unenforced rather than checked.
-- Three hand-rolled `sscanf` parsers with near-identical helpers (`ship_def.cpp`, `module.cpp`,
-  `weapon_def.cpp`); the latter two duplicate four functions almost verbatim. All three define
-  `_CRT_SECURE_NO_WARNINGS` locally. (The ship parser moved whole from `ship.cpp` into
-  `ship_def.cpp` with the registry work; the duplication stands.)
+- Four hand-rolled `sscanf` parsers with near-identical helpers (`ship_def.cpp`, `module.cpp`,
+  `weapon_def.cpp`, `skill_def.cpp`); they duplicate the rstrip/quoted-string helpers almost
+  verbatim. All four define `_CRT_SECURE_NO_WARNINGS` locally. (The ship parser moved whole
+  from `ship.cpp` into `ship_def.cpp` with the registry work; the duplication stands, and the
+  skill parser followed it as the standing decision.)
 - Parse failures are graded and mostly silent: unknown `type`/`size` tokens warn and keep a
   default, registry overflow past 32 drops the tail, `.svis` layers past 8 are skipped.
 - `WeaponDef::price` and `tier` are declared and marked "market-forward: unused v1".
