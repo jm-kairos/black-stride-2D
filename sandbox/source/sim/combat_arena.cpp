@@ -283,6 +283,15 @@ void combat_arena_update_projectiles(game_state* s, f32 sim_dt) {
             Projectile* p = &s->projectiles.pool[pi];
             if (!p->active || p->kind != PROJ_MISSILE) continue;
 
+            // Cold-launch coast: the round was EJECTED from its cell and its motor has not
+            // lit yet -- pure ballistic drift, no seeker, no turn, no thrust (and render
+            // draws no plume while ignition_in > 0). The curved launch trajectory is this
+            // coast plus the turn-in below once the motor lights.
+            if (p->ignition_in > 0.0f) {
+                p->ignition_in -= sim_dt;
+                continue;
+            }
+
             f32 speed = vec2_length(p->velocity);
             if (speed < 1.0e-3f) speed = 1.0e-3f;
             Vec2 heading = vec2_scale(p->velocity, 1.0f / speed);
@@ -302,11 +311,24 @@ void combat_arena_update_projectiles(game_state* s, f32 sim_dt) {
                 best   = ci;
             }
 
+            // Steering goal: the seeker's lock when it has one; else the LAUNCH AIM hint (the
+            // lead solution at trigger time) -- that turn-in is what bends a sideways cell
+            // eject onto its intercept instead of accelerating dumbfire along the eject
+            // vector. A missile with neither (legacy hot spawn that lost its lock) flies
+            // straight, the original cone-break counterplay.
+            b8  have_goal = FALSE;
+            f32 want      = 0.0f;
             if (best >= 0) {
-                // Rotate the heading toward the target, clamped by turn_rate * dt.
                 Vec2 to  = hierpos_diff(&s->combat_entities[best].position, &p->position,
                                         BS_HIERPOS_CELL_SIZE);
-                f32 want = atan2f(to.y, to.x);
+                want      = atan2f(to.y, to.x);
+                have_goal = TRUE;
+            } else if (p->aim_dir.x != 0.0f || p->aim_dir.y != 0.0f) {
+                want      = atan2f(p->aim_dir.y, p->aim_dir.x);
+                have_goal = TRUE;
+            }
+            if (have_goal) {
+                // Rotate the heading toward the goal, clamped by turn_rate * dt.
                 f32 cur  = atan2f(heading.y, heading.x);
                 f32 delta = want - cur;
                 while (delta >  3.14159265f) delta -= 6.28318531f;

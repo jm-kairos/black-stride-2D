@@ -58,6 +58,15 @@ struct Projectile {
                               // rather than a global, so a .weapon file's proj_speed actually
                               // governs the missile's flight (and therefore its reach). 0 => fall
                               // back to the global missile_tuning clamp (non-missile projectiles).
+    // ---- Cold-launch sequence (PROJ_MISSILE only) ---------------------------------------
+    // A missile is EXPELLED from its cell at low eject speed and coasts unpowered while
+    // `ignition_in` runs down; only then does the guidance pass steer and thrust it, and
+    // only then does render draw its exhaust plume. `aim_dir` is the unit launch aim (the
+    // lead solution at trigger time): after ignition the missile turns onto it whenever
+    // the seeker holds no lock, which is what bends the sideways eject into a curved
+    // intercept instead of a dumbfire straight line. {0,0} = no hint (legacy spawns).
+    f32           ignition_in; // seconds of unpowered coast remaining; <= 0 = motor lit
+    bs_math::Vec2 aim_dir;     // unit launch-aim hint; {0,0} = none
 };
 struct ProjectileSystem {
     Projectile pool[MAX_PROJECTILES];
@@ -76,10 +85,16 @@ struct ProjectileSystem {
     // spawn a guided missile (kind = PROJ_MISSILE): same pool, fat HP so point-defense needs a
     // dwell to kill it. Steering happens in the combat-arena pass, not here. `max_speed` is the
     // seeker's own velocity clamp (the launcher's proj_speed); 0 => use the global tuning clamp.
+    // `aim_dir`/`ignition_delay` are the cold-launch sequence (see Projectile): pass a unit aim
+    // and a positive delay for an ejected round that ignites in flight; the zero defaults spawn
+    // a legacy hot round already at speed. A cold launch also swaps the propellant muzzle flash
+    // for nothing -- the motor is not burning yet.
     b8 spawn_missile(bs_math::HierPos2 origin, bs_math::Vec2 velocity,
                      f32 lifetime, f32 radius, bs_color color, VesselFaction owner, i16 faction_id,
                      f32 radiation_emission, f32 hp, f32 dmg = 40.0f, f32 max_speed = 0.0f,
-                     u8 vfx_family = 2 /* VFX_ORDNANCE */);
+                     u8 vfx_family = 2 /* VFX_ORDNANCE */,
+                     bs_math::Vec2 aim_dir = bs_math::Vec2{ 0.0f, 0.0f },
+                     f32 ignition_delay = 0.0f);
     // advance all active projectiles; retire those whose lifetime expired
     void update(f32 dt);
     // Free slot `index` and record the matching termination effect. THE one place a shot

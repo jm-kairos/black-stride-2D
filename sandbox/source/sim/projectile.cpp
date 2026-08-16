@@ -95,6 +95,8 @@ b8 ProjectileSystem::spawn(HierPos2 origin, Vec2 velocity,
             pool[i].trail_timer        = 0.0f;   // occupant's flight path
 
             pool[i].max_speed          = 0.0f;   // shells are unguided: no per-projectile clamp
+            pool[i].ignition_in        = 0.0f;   // shells are always "lit" (slot hygiene)
+            pool[i].aim_dir            = Vec2{ 0.0f, 0.0f };
             ++count;
             // Muzzle flash, pinned in world space at the barrel. `velocity` carries the firing
             // ship's own velocity too, but a shell leaves at 8500-16000 units/s against a hull
@@ -111,7 +113,7 @@ b8 ProjectileSystem::spawn(HierPos2 origin, Vec2 velocity,
 b8 ProjectileSystem::spawn_missile(HierPos2 origin, Vec2 velocity,
                                    f32 lifetime, f32 radius, bs_color color, VesselFaction owner,
                                    i16 faction_id, f32 radiation_emission, f32 hp, f32 dmg,
-                                   f32 max_speed, u8 vfx_family)
+                                   f32 max_speed, u8 vfx_family, Vec2 aim_dir, f32 ignition_delay)
 {
     // Same free-slot scan as spawn(), but the slot is tagged PROJ_MISSILE so the combat-arena
     // steering pass picks it up. Kept as a separate loop (not a spawn() call) because spawn()
@@ -137,11 +139,15 @@ b8 ProjectileSystem::spawn_missile(HierPos2 origin, Vec2 velocity,
             pool[i].trail_timer        = 0.0f;   // occupant's flight path
 
             pool[i].max_speed          = max_speed;
+            pool[i].ignition_in        = ignition_delay;
+            pool[i].aim_dir            = aim_dir;
             ++count;
-            // Same launch flash as a shell. A launcher is a tube rather than a barrel, but the
-            // event being drawn -- ordnance leaving the hull -- is the same one, and reusing it
-            // means a new WeaponKind inherits the flash without touching this file.
-            if (fx)
+            // A HOT launch keeps the shell's muzzle flash (ordnance leaving the hull under
+            // power is the same drawn event). A COLD launch suppresses it: the round is
+            // pushed out by the cell, and its own motor lights seconds later in open space
+            // -- a propellant blast at the hull would be drawing something that never
+            // happened.
+            if (fx && ignition_delay <= 0.0f)
                 fx->emit(PFX_MUZZLE, vfx_family, origin, velocity, radius,
                          projectile_fx_power(dmg), color);
             return TRUE;
@@ -359,7 +365,10 @@ void ProjectileSystem::render(u32 layer, const bs_math::HierPos2* camera,
         // deliberately shallow -- +/-18% around 0.82 -- because that section also warns the goal
         // is controlled instability, not flicker. Driving it off `age` rather than a frame
         // counter keeps two missiles launched a moment apart out of phase for free.
-        if (p.vfx_family == 2) {
+        // A cold-launched round shows NO plume until its motor lights (ignition_in runs down
+        // in the guidance pass): the coast phase reads as inert ordnance drifting clear of
+        // the hull, and the plume popping on IS the ignition moment on screen.
+        if (p.vfx_family == 2 && p.ignition_in <= 0.0f) {
             f32 pulse = 0.82f + 0.18f * sinf(p.age * 26.0f);
             bs_sprite plume{};
             plume.position = draw_pos;

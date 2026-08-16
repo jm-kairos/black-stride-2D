@@ -94,6 +94,10 @@ MissileLauncher::MissileLauncher(const char* name,
     , missile_emission(emission)
     , missile_hp(hp)
     , cap_cost_value(25.0f)
+    , eject_speed(300.0f)
+    , ignition_delay(0.5f)
+    , next_eject_dir(bs_math::Vec2{ 0.0f, 0.0f })
+    , has_next_eject_dir(FALSE)
     , cooldown_remaining(0.0f)
 {
     icon  = "ic-missile";
@@ -106,9 +110,31 @@ void MissileLauncher::spawn_shot(HierPos2 origin, Vec2 direction, Vec2 ship_velo
     f32 len = vec2_length(dir);
     if (len > 0.0001f)
         dir = vec2_scale(dir, 1.0f / len);
-    Vec2 vel = vec2_add(ship_velocity, vec2_scale(dir, missile_speed));
     // Exhaust-orange tint distinguishes missiles from cannon shells until bespoke art lands.
     bs_color col = bs_color{ 1.00f, 0.45f, 0.20f, 1.0f };
+    if (ignition_delay > 0.0f) {
+        // COLD LAUNCH: expelled from the cell at eject speed -- along the cell's rest
+        // facing when ship_hardpoint_fire stamped one, along the aim otherwise (the NPC
+        // gunner's direct Weapon::fire path) -- then an unpowered coast; the guidance pass
+        // lights the motor and arcs the round onto `dir`, the lead solution. The launch
+        // therefore reads eject -> coast -> ignition -> turn-in instead of gun-shell-
+        // at-full-speed.
+        Vec2 eject = dir;
+        if (has_next_eject_dir) {
+            eject = next_eject_dir;
+            has_next_eject_dir = FALSE;
+        }
+        Vec2 vel = vec2_add(ship_velocity, vec2_scale(eject, eject_speed));
+        projectiles->spawn_missile(origin, vel, missile_lifetime, missile_radius, col,
+                                   owner_faction, owner_faction_id, missile_emission, missile_hp,
+                                   damage, missile_speed,
+                                   def ? def->vfx_family : (u8)VFX_ORDNANCE,
+                                   dir, ignition_delay);
+        return;
+    }
+    // Hot launch (ignition_delay <= 0 authored): the original full-speed spawn.
+    has_next_eject_dir = FALSE;
+    Vec2 vel = vec2_add(ship_velocity, vec2_scale(dir, missile_speed));
     projectiles->spawn_missile(origin, vel, missile_lifetime, missile_radius, col,
                                owner_faction, owner_faction_id, missile_emission, missile_hp,
                                damage, missile_speed,

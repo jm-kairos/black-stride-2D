@@ -263,6 +263,17 @@ HierPos2 ship_muzzle_origin(const Ship* ship, i32 hp_index, i32 muzzle_index) {
     const Vec2 off  = vec2_add(vec2_scale(rgt, m.x * unit), vec2_scale(fwd, m.y * unit));
     return hierpos_add_vec2(&pivot, off);
 }
+// Cold-launch eject direction for a missile mount: the CELL's rest facing in world space,
+// so a nose battery fans its ordnance outward before the motors turn it in. Stamped per
+// shot (the owner_faction_id pattern) and consumed by MissileLauncher::spawn_shot;
+// ballistics never read it.
+static void ship_stamp_eject_dir(Ship* ship, i32 hp_index, Weapon* w) {
+    if (w->wkind != WEAPON_KIND_MISSILE) return;
+    f32 a = ship->angle + ship->hardpoints[hp_index].facing;   // 0 = nose = +Y
+    MissileLauncher* ml = static_cast<MissileLauncher*>(w);
+    ml->next_eject_dir     = Vec2{ -sinf(a), cosf(a) };
+    ml->has_next_eject_dir = TRUE;
+}
 void ship_hardpoint_fire(Ship* ship, i32 hp_index, Vec2 world_dir, Vec2 ship_velocity,
                          ProjectileSystem* projectiles) {
     if (!ship || !projectiles) return;
@@ -274,6 +285,7 @@ void ship_hardpoint_fire(Ship* ship, i32 hp_index, Vec2 world_dir, Vec2 ship_vel
     const i32 n = def ? def->muzzle_count : 0;
     if (n <= 0) {
         // No barrels authored: fire from the mount centre, exactly as before barrels existed.
+        ship_stamp_eject_dir(ship, hp_index, w);
         w->fire(ship_hardpoint_fire_origin(ship, hp_index), world_dir, ship_velocity, projectiles);
         return;
     }
@@ -281,9 +293,11 @@ void ship_hardpoint_fire(Ship* ship, i32 hp_index, Vec2 world_dir, Vec2 ship_vel
 
     const i32 first = (def->muzzle_pattern == MUZZLE_SALVO) ? 0 : (i32)(w->next_muzzle % n);
     const i32 count = (def->muzzle_pattern == MUZZLE_SALVO) ? n : 1;
-    for (i32 k = 0; k < count; ++k)
+    for (i32 k = 0; k < count; ++k) {
+        ship_stamp_eject_dir(ship, hp_index, w);   // per barrel: spawn_shot consumes the stamp
         w->spawn_shot(ship_muzzle_origin(ship, hp_index, (first + k) % n),
                       world_dir, ship_velocity, projectiles);
+    }
     w->next_muzzle = (u8)((first + count) % n);
     w->begin_cooldown();
 }

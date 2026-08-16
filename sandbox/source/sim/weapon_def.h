@@ -30,6 +30,10 @@
 //   engage_range 60000               # missile: tactical range the autopilot fights at
 //                                    # (absent = clamped default; a ballistic never needs it --
 //                                    # its flight reach IS its range. See weapon_engage_range.)
+//   eject_speed  350                 # missile: cell expulsion speed (cold launch)
+//   ignition_delay 0.5               # missile: seconds of unpowered coast before the motor
+//                                    # lights and the guidance turn-in begins; 0 = legacy hot
+//                                    # launch at full speed along the aim
 //   price       400                  # market-forward: credits (unused until markets trade weapons)
 //   tier        1                    # market-forward: tech tier / rarity band
 //
@@ -126,6 +130,8 @@ struct WeaponDef {
     f32           emission;      // projectile radiation emission (0..1)
     f32           proj_hp;       // projectile HP vs point-defense/flak
     f32           engage_range;  // tactical range (0 = unauthored; resolved by weapon_engage_range)
+    f32           eject_speed;   // missile cold launch: cell expulsion speed (world units/s)
+    f32           ignition_delay;// missile cold launch: coast seconds before the motor lights (0 = hot)
     i32           price;         // market-forward: credits (unused v1)
     i32           tier;          // market-forward: tech tier (unused v1)
     u8            vfx_family;    // VfxFamily: cosmetic only; defaults from `kind` at load

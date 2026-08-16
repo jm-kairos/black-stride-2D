@@ -115,12 +115,24 @@ struct BallisticWeapon : Weapon {
 struct MissileLauncher : Weapon {
     // tuning
     f32 reload_time;        // seconds per tube cycle
-    f32 missile_speed;      // launch speed added along the aim direction (world units/s)
+    f32 missile_speed;      // flight-speed clamp the motor accelerates to (world units/s)
     f32 missile_lifetime;   // seconds before self-destruct
     f32 missile_radius;     // visual/collision radius (world units)
     f32 missile_emission;   // 0..1 radiation heat: hot engine = strongly sensor-visible
     f32 missile_hp;         // point-defense must burn through this (shell = 1.0)
     f32 cap_cost_value;     // capacitor cost per launch (member, editor-exposable)
+    // Cold-launch sequence: the round is EXPELLED at eject_speed and coasts for
+    // ignition_delay seconds before its motor lights and the guidance turn-in begins.
+    // ignition_delay <= 0 = legacy hot launch (spawn at full speed along the aim).
+    f32 eject_speed;        // cell expulsion speed (world units/s)
+    f32 ignition_delay;     // seconds of unpowered coast after leaving the cell
+    // Per-call eject direction, stamped by ship_hardpoint_fire from the firing CELL's rest
+    // facing (the owner_faction_id stamping pattern): a nose battery fans its ordnance
+    // outward before the motors turn it in. Consumed (and cleared) by spawn_shot; when
+    // absent -- the NPC gunner path that calls Weapon::fire directly -- the round ejects
+    // along the aim instead.
+    bs_math::Vec2 next_eject_dir;
+    b8            has_next_eject_dir;
     // runtime state
     f32 cooldown_remaining; // seconds until the next launch
     MissileLauncher(const char* name,

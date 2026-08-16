@@ -67,6 +67,10 @@ static b8 weapon_def_load(WeaponDef* out, const char* path) {
     // 0 = unauthored: ballistics resolve to their flight reach, missiles to the clamped
     // default -- both inside weapon_engage_range, the one place that decision lives.
     out->engage_range = 0.0f;
+    // Cold-launch defaults: every missile ejects and coasts unless its card says otherwise
+    // (ignition_delay 0 authors the legacy hot launch). Ballistics ignore both.
+    out->eject_speed    = 300.0f;
+    out->ignition_delay = 0.5f;
     out->price       = 0;
     out->tier        = 1;
     // 0xFF means "not authored". VFX_SHELL is 0, so a zeroed struct is indistinguishable from
@@ -160,6 +164,8 @@ static b8 weapon_def_load(WeaponDef* out, const char* path) {
         if (sscanf(line, "emission %f",    &out->emission)    == 1) continue;
         if (sscanf(line, "proj_hp %f",     &out->proj_hp)     == 1) continue;
         if (sscanf(line, "engage_range %f", &out->engage_range) == 1) continue;
+        if (sscanf(line, "eject_speed %f",  &out->eject_speed)  == 1) continue;
+        if (sscanf(line, "ignition_delay %f", &out->ignition_delay) == 1) continue;
         if (sscanf(line, "price %d",       &out->price)       == 1) continue;
         if (sscanf(line, "tier %d",        &out->tier)        == 1) continue;
     }
@@ -240,6 +246,8 @@ Weapon* weapon_instantiate(const WeaponDef* def, VesselFaction owner) {
                                                   def->proj_life, def->proj_radius,
                                                   def->emission, def->proj_hp);
         ml->cap_cost_value = def->cap_cost;
+        ml->eject_speed    = def->eject_speed;
+        ml->ignition_delay = def->ignition_delay;
         w = ml;
     } else {
         BallisticWeapon* bw = new BallisticWeapon(def->name, def->fire_rate, def->proj_speed,
