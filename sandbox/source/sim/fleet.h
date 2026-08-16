@@ -162,6 +162,10 @@ struct FleetShip {
     void update_escort(f32 dt);
     // Autopilot an Avoid order: run from avoid_target until outside the disengage band.
     void update_avoid(f32 dt);
+    // Apply the hull card's authored doctrine (roe / flak / missiles / cap_floor), if any --
+    // called by the spawn sites after ship_instantiate populates ship.def, so a hull class
+    // ships with a temperament. Unauthored fields keep Fleet::add's runtime defaults.
+    void apply_card_doctrine();
     // Clear a single order type.
     void clear_move_target();
     void clear_attack_target();

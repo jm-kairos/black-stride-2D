@@ -220,6 +220,45 @@
                          data-event-click="hud_action(cl.action)"><span data-if="cl.on">X</span></div>
                 </div>
             </div>
+                        <div class="insp-section-hdr">Engagement</div>
+                        <div class="pd-doctrine">
+                <div class="pd-row">
+                    <span class="pd-lbl">ROE</span>
+                    <span class="pd-opt" data-class-active="insp_roe == 0" data-event-click="hud_action('doc:roe:0')">Weapons free
+                        <div class="pd-tip">Engage any hostile the sensors can justify. The ship picks its own fights inside its weapons&#8217; envelope and closes to range if the stance allows. The default posture of a warship.</div></span>
+                    <span class="pd-opt" data-class-active="insp_roe == 1" data-event-click="hud_action('doc:roe:1')">Return fire
+                        <div class="pd-tip">Self-defense only: engage factions that have recently landed hits on the fleet. Nobody shoots first &#8212; but a grudge lasts long enough to finish the argument.</div></span>
+                    <span class="pd-opt" data-class-active="insp_roe == 2" data-event-click="hud_action('doc:roe:2')">Hold
+                        <div class="pd-tip">Never self-acquire. The ship fights only targets you designate with an attack order. Full manual fire control, the pre-doctrine behaviour.</div></span>
+                </div>
+                <div class="pd-row">
+                    <span class="pd-lbl">Flak</span>
+                    <span class="pd-opt" data-class-active="insp_flak == 0" data-event-click="hud_action('doc:flak:0')">Auto screen
+                        <div class="pd-tip">Every cannon defends: incoming ordnance draws flak fire automatically, each gun covering its own side of the hull, defense preempting the broadside for the shot. The outer layer of the missile-defense onion.</div></span>
+                    <span class="pd-opt" data-class-active="insp_flak == 1" data-event-click="hud_action('doc:flak:1')">Manual
+                        <div class="pd-tip">No autonomous flak. Guns fire flak only through your trigger or an attack order&#8217;s broadside. The point-defense laser becomes the only automatic layer.</div></span>
+                </div>
+                <div class="pd-row">
+                    <span class="pd-lbl">Missiles</span>
+                    <span class="pd-opt" data-class-active="insp_missile == 0" data-event-click="hud_action('doc:mp:0')">Free
+                        <div class="pd-tip">Launchers fire whenever the fire solution allows. Maximum pressure, fastest magazine burn.</div></span>
+                    <span class="pd-opt" data-class-active="insp_missile == 1" data-event-click="hud_action('doc:mp:1')">Conserve
+                        <div class="pd-tip">Launch only at targets beyond every cannon&#8217;s reach &#8212; guns do gun work, ordnance is saved for what only ordnance can touch.</div></span>
+                    <span class="pd-opt" data-class-active="insp_missile == 2" data-event-click="hud_action('doc:mp:2')">Hold
+                        <div class="pd-tip">No autonomous launches. Racks stay loaded for your manual trigger.</div></span>
+                </div>
+                <div class="pd-row">
+                    <span class="pd-lbl">Cap floor</span>
+                    <span class="pd-opt" data-class-active="insp_capfloor == 0" data-event-click="hud_action('doc:capfloor:0')">Off
+                        <div class="pd-tip">Guns fire down to an empty bank. Nothing is held back for the defensive screens &#8212; maximum offense, at the risk of a dark laser when the missiles arrive.</div></span>
+                    <span class="pd-opt" data-class-active="insp_capfloor == 1" data-event-click="hud_action('doc:capfloor:1')">15%
+                        <div class="pd-tip">Guns hold at the same floor the point defense reserves. Offense and defense drain together to the wire.</div></span>
+                    <span class="pd-opt" data-class-active="insp_capfloor == 2" data-event-click="hud_action('doc:capfloor:2')">25%
+                        <div class="pd-tip">The balanced default: guns yield first, leaving the flak screen and the laser a working margin above the PD reserve.</div></span>
+                    <span class="pd-opt" data-class-active="insp_capfloor == 3" data-event-click="hud_action('doc:capfloor:3')">40%
+                        <div class="pd-tip">Defense-heavy: a deep reserve for sustained missile weather, paid for in gun uptime.</div></span>
+                </div>
+            </div>
                     </div>
                     <div class="insp-doctrine-col">
                         <div class="insp-section-hdr" data-if="pd_visible">Point defense</div>

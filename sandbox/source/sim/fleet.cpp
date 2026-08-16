@@ -618,6 +618,14 @@ void FleetShip::update_attack(game_state* s, f32 dt) {
     if (cur_speed > cap) fl->velocity = vec2_scale(fl->velocity, cap / cur_speed);
 }
 // =====================================================================================
+void FleetShip::apply_card_doctrine() {
+    const ShipDef* d = ship.def;
+    if (!d) return;
+    if (d->doct_roe     != 0xFF)   roe            = d->doct_roe;
+    if (d->doct_flak    != 0xFF)   flak_doctrine  = d->doct_flak;
+    if (d->doct_missile != 0xFF)   missile_policy = d->doct_missile;
+    if (d->doct_cap_floor >= 0.0f) cap_fire_floor = d->doct_cap_floor;
+}
 void FleetShip::clear_move_target() {
     has_move_target = FALSE;
     move_target = HierPos2{};

@@ -5203,6 +5203,12 @@ struct BsRmlHudModel
     int                         pd_priority = 0;     // 0 = impact time, 1 = missiles first, 2 = nearest
     int                         pd_gate     = 2;     // 0 = 60%, 1 = 80%, 2 = 100%
 
+    // Engagement doctrine of the INSPECTED ship (inspector "Engagement" section chips).
+    int                         insp_roe      = 0;   // 0 = weapons free, 1 = return fire, 2 = hold
+    int                         insp_flak     = 0;   // 0 = auto screen, 1 = manual
+    int                         insp_missile  = 0;   // 0 = free, 1 = conserve, 2 = hold
+    int                         insp_capfloor = 2;   // tier: 0 = off, 1 = 15%, 2 = 25%, 3 = 40%
+
     bool                        station_menu_visible = false;
     Rml::String                 station_menu_left = "0px", station_menu_top = "0px";
     bool                        ship_menu_visible = false;   // fleet-ship right-click menu
@@ -5450,6 +5456,10 @@ b8 bs_rml_hud_init(const char* rml_path)
     c.Bind("pd_stance",   &g_hud_model.pd_stance);
     c.Bind("pd_priority", &g_hud_model.pd_priority);
     c.Bind("pd_gate",     &g_hud_model.pd_gate);
+    c.Bind("insp_roe",      &g_hud_model.insp_roe);
+    c.Bind("insp_flak",     &g_hud_model.insp_flak);
+    c.Bind("insp_missile",  &g_hud_model.insp_missile);
+    c.Bind("insp_capfloor", &g_hud_model.insp_capfloor);
 
     c.Bind("station_menu_visible",      &g_hud_model.station_menu_visible);
     c.Bind("station_menu_left",         &g_hud_model.station_menu_left);
@@ -5629,8 +5639,8 @@ void bs_rml_hud_update(const bs_rml_hud_state* s)
             dst.selected = src.selected ? true : false;
             dst.piloted  = src.piloted ? true : false;
             dst.hovered  = src.hovered ? true : false;
-            dst.chip.resize(4);
-            for (i32 k = 0; k < 4; ++k)
+            dst.chip.resize(5);   // 4 stance chips + the ROE cycling chip
+            for (i32 k = 0; k < 5; ++k)
             {
                 bs_rml_assign(dst.chip[(size_t)k].label,  src.chip[k].label,  sizeof(src.chip[k].label));
                 bs_rml_assign(dst.chip[(size_t)k].action, src.chip[k].action, sizeof(src.chip[k].action));
@@ -5748,6 +5758,10 @@ void bs_rml_hud_update(const bs_rml_hud_state* s)
     g_hud_model.pd_stance   = s->pd_stance;
     g_hud_model.pd_priority = s->pd_priority;
     g_hud_model.pd_gate     = s->pd_gate;
+    g_hud_model.insp_roe      = s->insp_roe;
+    g_hud_model.insp_flak     = s->insp_flak;
+    g_hud_model.insp_missile  = s->insp_missile;
+    g_hud_model.insp_capfloor = s->insp_capfloor;
 
     g_hud_model.station_menu_visible = s->station_menu_visible ? true : false;
     bs_rml_assign(g_hud_model.station_menu_left, s->station_menu_left, sizeof(s->station_menu_left));

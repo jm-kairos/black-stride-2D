@@ -72,6 +72,11 @@ static b8 ship_def_load(ShipDef* out, const char* path) {
     out->hull_max_hp    = 100.0f;
     out->size_class     = SHIP_CLASS_DRONE;
     out->tier           = 1;
+    // Doctrine sentinels: a card that authors nothing keeps the runtime defaults.
+    out->doct_roe       = 0xFF;
+    out->doct_flak      = 0xFF;
+    out->doct_missile   = 0xFF;
+    out->doct_cap_floor = -1.0f;
     ship_visual_clear(&out->visual);
     b8 class_authored = FALSE;
     char line[512];
@@ -107,6 +112,34 @@ static b8 ship_def_load(ShipDef* out, const char* path) {
         if (sscanf(line, "hull %f", &hull) == 1) {
             if (hull > 0.0f) { out->hull_max_hp = hull; out->hull_authored = TRUE; }
             else BS_LOG_WARN("ship_def_load: invalid hull '%f' in '%s' (must be > 0).", hull, path);
+            continue;
+        }
+        // ---- Authored engagement doctrine (Phase 3) -- optional temperament lines --------
+        char word[16];
+        if (sscanf(line, "roe %15s", word) == 1) {
+            if      (strcmp(word, "free")   == 0) out->doct_roe = 0;
+            else if (strcmp(word, "return") == 0) out->doct_roe = 1;
+            else if (strcmp(word, "hold")   == 0) out->doct_roe = 2;
+            else BS_LOG_WARN("ship_def_load: unknown roe '%s' in '%s' (free|return|hold).", word, path);
+            continue;
+        }
+        if (sscanf(line, "flak %15s", word) == 1) {
+            if      (strcmp(word, "auto")   == 0) out->doct_flak = 0;
+            else if (strcmp(word, "manual") == 0) out->doct_flak = 1;
+            else BS_LOG_WARN("ship_def_load: unknown flak '%s' in '%s' (auto|manual).", word, path);
+            continue;
+        }
+        if (sscanf(line, "missiles %15s", word) == 1) {
+            if      (strcmp(word, "free")     == 0) out->doct_missile = 0;
+            else if (strcmp(word, "conserve") == 0) out->doct_missile = 1;
+            else if (strcmp(word, "hold")     == 0) out->doct_missile = 2;
+            else BS_LOG_WARN("ship_def_load: unknown missiles '%s' in '%s' (free|conserve|hold).", word, path);
+            continue;
+        }
+        f32 cfl;
+        if (sscanf(line, "cap_floor %f", &cfl) == 1) {
+            if (cfl >= 0.0f && cfl <= 0.9f) out->doct_cap_floor = cfl;
+            else BS_LOG_WARN("ship_def_load: invalid cap_floor '%f' in '%s' (0..0.9).", cfl, path);
             continue;
         }
         ShipMotion mo;

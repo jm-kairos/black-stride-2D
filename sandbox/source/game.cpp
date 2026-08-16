@@ -448,6 +448,9 @@ b8 game_init(Game* game_inst) {
 
         }
 
+        // Hull cards may author a shipped temperament (roe / flak / missiles / cap_floor).
+        fs.apply_card_doctrine();
+
         fs.ship_type = SHIP_TYPE_DRONE;
 
         fs.ship.origin = hierpos_from_vec2(Vec2{ 25000.0f, 0.0f }, BS_HIERPOS_CELL_SIZE);
@@ -543,6 +546,8 @@ b8 game_init(Game* game_inst) {
                 continue;
 
             }
+
+            fs.apply_card_doctrine();   // card-authored temperament, if the hull ships one
 
             fs.ship_type = SHIP_TYPE_DRONE;
 
@@ -1696,6 +1701,16 @@ static void game_push_hud(game_state* s, f32 dt) {
                 snprintf(row.chip[st].action, sizeof(row.chip[st].action), "fstance:%d:%d", i, st);
                 row.chip[st].on = (fs.stance == (u8)st) ? TRUE : FALSE;
             }
+            // ROE cycling chip (slot 4): shows the current rules-of-engagement letter, click
+            // cycles free -> return -> hold. Lit only when the ship DEVIATES from the
+            // weapons-free default, so a glance finds the hulls on a leash.
+            {
+                static const char* ROE_CHIP[3] = { "F", "R", "H" };
+                u8 r = (fs.roe <= (u8)ROE_HOLD) ? fs.roe : (u8)ROE_WEAPONS_FREE;
+                snprintf(row.chip[4].label,  sizeof(row.chip[4].label),  "%s", ROE_CHIP[r]);
+                snprintf(row.chip[4].action, sizeof(row.chip[4].action), "froe:%d", i);
+                row.chip[4].on = (r != (u8)ROE_WEAPONS_FREE) ? TRUE : FALSE;
+            }
         }
     }
 
@@ -1826,6 +1841,16 @@ static void game_push_hud(game_state* s, f32 dt) {
                 i32 ii = s->inspected_ship_idx;
                 if (ii < 0 || ii >= s->fleet_state.fleet.count()) ii = 0;
                 const FleetShip& ifs = s->fleet_state.fleet.at(ii);
+                // Engagement doctrine chips (Doctrine tab): the inspected ship's live values
+                // drive the active-chip highlights; clicks come back as "doc:*" actions.
+                hud.insp_roe     = (i32)ifs.roe;
+                hud.insp_flak    = (i32)ifs.flak_doctrine;
+                hud.insp_missile = (i32)ifs.missile_policy;
+                // Nearest tier for the highlight (off / 15% / 25% / 40%): the editor slider
+                // can set in-between values; the chip shows the closest step.
+                hud.insp_capfloor = (ifs.cap_fire_floor < 0.075f) ? 0
+                                  : (ifs.cap_fire_floor < 0.20f)  ? 1
+                                  : (ifs.cap_fire_floor < 0.325f) ? 2 : 3;
                 static const char* const ST_NAME[4] =
                     { "AGGRESSIVE", "DEFENSIVE", "PASSIVE", "HOLD FIRE" };
                 const char* what = "IDLE";
@@ -2524,6 +2549,24 @@ static void game_push_hud(game_state* s, f32 dt) {
             }
             continue;
         }
+        // Fleet roster ROE cycling chip ("froe:R"): weapons free -> return fire -> hold ->
+        // free. Same selection semantics as the stance chips: the whole selection when the
+        // clicked ship is part of it, that ship alone otherwise.
+        if (strncmp(action, "froe:", 5) == 0) {
+            i32 i = atoi(action + 5);
+            Fleet& fleet = s->fleet_state.fleet;
+            if (i >= 0 && i < fleet.count()) {
+                u8 next = (u8)((fleet.at(i).roe + 1) % ((u8)ROE_HOLD + 1));
+                static const char* const ROE_NAME[3] =
+                    { "Weapons free", "Return fire", "Hold (designate only)" };
+                if (fleet.is_selected(i)) fleet.set_selected_roe(next);
+                else                      fleet.at(i).roe = next;
+                action_log_push(s, "%s ROE: %s",
+                                fleet.at(i).ship.vessel_name ? fleet.at(i).ship.vessel_name : "Ship",
+                                ROE_NAME[next]);
+            }
+            continue;
+        }
         // Fire-group matrix checkbox: toggle INSPECTED-ship weapon (hardpoint H) in group G.
         // Refuses to orphan a weapon from all groups.
         if (strncmp(action, "gm:", 3) == 0) {
@@ -2673,6 +2716,42 @@ static void game_push_hud(game_state* s, f32 dt) {
                     pd.gate_tier = (u8)v;
                     static const char* PD_GATE_NAMES[3] = { "60%", "80%", "100%" };
                     action_log_push(s, "PD engagement gate: %s range", PD_GATE_NAMES[v]);
+                }
+            }
+            continue;
+        }
+        // Engagement doctrine chips (Phase 3): "doc:roe:N" / "doc:flak:N" / "doc:mp:N" /
+        // "doc:capfloor:N". Targets the INSPECTED ship, same convention as the PD trio --
+        // the inspector is the per-hull doctrine surface; the roster chips act on selections.
+        if (strncmp(action, "doc:", 4) == 0) {
+            FleetShip& ifs = s->fleet_state.fleet.at(s->inspected_ship_idx);
+            const char* ship_name = ifs.ship.vessel_name ? ifs.ship.vessel_name : "Ship";
+            if (strncmp(action + 4, "roe:", 4) == 0) {
+                i32 v = atoi(action + 8);
+                if (v >= 0 && v <= (i32)ROE_HOLD) {
+                    ifs.roe = (u8)v;
+                    static const char* N[3] = { "Weapons free", "Return fire", "Hold" };
+                    action_log_push(s, "%s ROE: %s", ship_name, N[v]);
+                }
+            } else if (strncmp(action + 4, "flak:", 5) == 0) {
+                i32 v = atoi(action + 9);
+                if (v >= 0 && v <= (i32)FLAK_MANUAL) {
+                    ifs.flak_doctrine = (u8)v;
+                    action_log_push(s, "%s flak screen: %s", ship_name, v == 0 ? "AUTO" : "MANUAL");
+                }
+            } else if (strncmp(action + 4, "mp:", 3) == 0) {
+                i32 v = atoi(action + 7);
+                if (v >= 0 && v <= (i32)MISSILE_HOLD) {
+                    ifs.missile_policy = (u8)v;
+                    static const char* N[3] = { "free", "conserve", "hold" };
+                    action_log_push(s, "%s missiles: %s", ship_name, N[v]);
+                }
+            } else if (strncmp(action + 4, "capfloor:", 9) == 0) {
+                i32 v = atoi(action + 13);
+                if (v >= 0 && v <= 3) {
+                    static const f32 TIER[4] = { 0.0f, 0.15f, 0.25f, 0.40f };
+                    ifs.cap_fire_floor = TIER[v];
+                    action_log_push(s, "%s gun cap floor: %.0f%%", ship_name, TIER[v] * 100.0f);
                 }
             }
             continue;

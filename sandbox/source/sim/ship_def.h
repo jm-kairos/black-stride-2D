@@ -78,6 +78,17 @@ struct ShipDef {
     f32           hull_max_hp;    // combat entity health at spawn (default 100)
     b8            hull_authored;  // TRUE when the card authored `hull` -- consumers with
                                   // their own tuning (NPC archetypes) fall back when FALSE
+
+    // ---- Authored engagement doctrine (Phase 3): the hull's shipped temperament ----------
+    // Optional card lines `roe free|return|hold`, `flak auto|manual`,
+    // `missiles free|conserve|hold`, `cap_floor 0.25`. 0xFF / negative = not authored: the
+    // spawn keeps the runtime defaults (weapons free / auto / free / 0.25), so every
+    // existing card is untouched. Values map onto FleetControl's EngageRoe / FlakDoctrine /
+    // MissilePolicy enums; applied only to PLAYER fleet spawns (NPC agents have AiProfile).
+    u8            doct_roe;        // 0 = free, 1 = return, 2 = hold, 0xFF = unauthored
+    u8            doct_flak;      // 0 = auto, 1 = manual, 0xFF = unauthored
+    u8            doct_missile;   // 0 = free, 1 = conserve, 2 = hold, 0xFF = unauthored
+    f32           doct_cap_floor; // 0..0.9, or < 0 = unauthored
     f32           cap_max_base;   // capacitor baselines (modules multiply on the instance)
     f32           cap_regen_base;
     SensorSuite   sensors_base;   // sensor baseline (modules multiply on the instance)

@@ -80,7 +80,13 @@ InWorldOverlays, FrameOrchestrator, GameStateModel.
   0.15 reserve so the power budget layers: offense yields first, the screens fight on, an
   in-progress PD dwell burns to the bottom). The manual trigger is never gated by any of
   them. Editor combos/slider beside the ROE combo; setters `set_selected_flak_doctrine` /
-  `_missile_policy` / `_cap_floor`.
+  `_missile_policy` / `_cap_floor`. Since Phase 3 the axes are player-facing: the inspector's
+  DOCTRINE tab carries an Engagement chip panel (all four axes, actions `doc:*` drained in
+  `game.cpp`), the fleet roster's 5th chip cycles ROE per row (`froe:R` — selection-wide when
+  the clicked ship is selected, the `fstance` pattern), and a hull CARD can author defaults:
+  `.ship` lines `roe`/`flak`/`missiles`/`cap_floor` land in `ShipDef::doct_*` (0xFF / -1 =
+  unauthored) and `FleetShip::apply_card_doctrine()` applies them at PLAYER fleet spawn only —
+  an unauthored card keeps the runtime defaults, and NPC agents (AiProfile) never read them.
 - **Focus fire and kiting (Phase 2).** `update_engagement` scores a hostile already engaged
   by a wingman as `ROE_FOCUS_BONUS` (8k) closer — the fleet converges on one kill — with the
   acquisition envelope as a hard gate the bonus never extends. `update_attack` gains the
@@ -255,7 +261,14 @@ characteristics without touching this code.
 **Source paths:** `sandbox/source/sim/fleet.{cpp,h}`, `sandbox/source/sim/ship_control.{cpp,h}`,
 `sandbox/source/sim/steering.{cpp,h}`
 
-**Last verified:** 2026-08-15, working tree on `game` (same day, latest: Phase 2 —
+**Last verified:** 2026-08-16, working tree on `game` (Phase 3 — the doctrine axes gain their
+in-game surface: inspector Engagement chips, the roster ROE cycling chip, and card-authored
+defaults via `FleetShip::apply_card_doctrine`. Live-verified end to end: inspector chip clicks
+flipped Iron Meridian to ROE Hold / missiles Conserve with action-log attribution and the
+roster chip label tracking H→F through a cycle click; a temporary
+`roe return / flak manual / missiles conserve / cap_floor 0.40` block in the vanguard card
+spawned the whole fleet with exactly those four non-default values showing in the inspector).
+Previously 2026-08-15 (same day, latest: Phase 2 —
 flak/missile/cap-floor doctrine axes, focus fire, kiting, and the broadside's flak-claim
 yield. The flak screen itself was live-verified from CombatArena's side (see that page);
 focus fire, kiting, CONSERVE and the cap floor are code-verified — their gates are

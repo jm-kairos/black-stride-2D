@@ -186,7 +186,9 @@ typedef struct bs_rml_roster_row
     b8                 selected;    // row highlight + bright left edge
     b8                 piloted;     // the manually-piloted ship (name tinted)
     b8                 hovered;     // cursor is over this hull in the world
-    bs_rml_roster_chip chip[4];     // stance chips (Aggressive/Defensive/Passive/Hold fire)
+    bs_rml_roster_chip chip[5];     // 4 stance chips (Aggressive/Defensive/Passive/Hold fire)
+                                    // + the ROE cycling chip (F/R/H, action "froe:N"; lit when
+                                    // the ship deviates from the weapons-free default)
 } bs_rml_roster_row;
 
 // One fleet-list entry of the ship inspector: a live-thumbnail slice + label. `sprite` names
@@ -352,6 +354,15 @@ typedef struct bs_rml_hud_state
     i32                pd_stance;    // 0 = HOLD, 1 = STANDARD, 2 = OVERDRIVE
     i32                pd_priority;  // 0 = impact time, 1 = missiles first, 2 = nearest
     i32                pd_gate;      // 0 = 60%, 1 = 80%, 2 = 100% of resolved PD range
+
+    // Engagement doctrine of the INSPECTED ship (inspector "Engagement" section). Unlike the
+    // PD trio above (flagship-global: the device is fleet-pool equipment), these four follow
+    // whichever hull the inspector shows, and are round-tripped via "doc:roe:N" /
+    // "doc:flak:N" / "doc:mp:N" / "doc:capfloor:N" -- the same chip grammar as "pd:*".
+    i32                insp_roe;          // 0 = weapons free, 1 = return fire, 2 = hold
+    i32                insp_flak;         // 0 = auto screen, 1 = manual
+    i32                insp_missile;      // 0 = free, 1 = conserve, 2 = hold
+    i32                insp_capfloor;     // tier: 0 = off, 1 = 15%, 2 = 25%, 3 = 40%
 
     // Space-station interaction: a cursor-anchored right-click context menu ("Inspect") and a
     // fullscreen Inspect window (collapsible). menu_left/top are prebuilt "NNNpx" CSS strings.

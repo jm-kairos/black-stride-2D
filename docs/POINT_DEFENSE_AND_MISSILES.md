@@ -34,6 +34,27 @@
 >   UI, the status lines and the engagement ring all follow the mount. The per-hull
 >   `DefenseLaser` struct remains the device's tuning/doctrine storage. "More PD
 >   mounts = more beams" (Phase C) still holds — scaling now means acquiring devices.
+> - **G — Autonomous flak screen + PD localization (2026-08-15)**: flak became the
+>   fleet's AUTONOMOUS outer defense layer (`sim/flak_screen.cpp`, ticked before PD in
+>   the arena): under the per-ship FLAK AUTO doctrine every ballistic mount screens
+>   inbound hostile ordnance with per-shot flak rounds (a `fire_mode` swap around
+>   `ship_hardpoint_fire` — AP guns keep their AP loadout for hull work), dedicated
+>   `MODE_FLAK` mounts are pure screens that pre-aim their sector when idle, defense
+>   preempts offense via per-tick `Ship::flak_screen_claimed` claims the attack
+>   autopilot yields to, and side discipline scores candidates inside a fit window
+>   around the mount's authored facing so a starboard gun never fires across the hull.
+>   PD's range decoupled from the sensor suite: `DefenseLaser::range` defaults to
+>   5000 (0 = legacy Layer-0 coupling), making PD the inner point layer inside the
+>   flak envelope (`weapon_flak_reach` ≈ 8–10k). The T-key manual flak channel is
+>   unchanged on top.
+> - **H — Engagement doctrine surface (2026-08-16)**: doctrine went in-game. The
+>   inspector's DOCTRINE tab gains an Engagement panel — ROE (weapons free / return
+>   fire / hold), flak doctrine (auto screen / manual), missile policy (free /
+>   conserve / hold) and gun cap floor (off / 15% / 25% / 40%) as chip rows with
+>   tooltip prose, actions `doc:*`. The fleet roster rows gain a 5th chip cycling the
+>   ship's ROE (`froe:R`, selection-wide like the stance chips). `.ship` cards can
+>   author doctrine defaults (`roe` / `flak` / `missiles` / `cap_floor` lines) applied
+>   to player fleet spawns via `FleetShip::apply_card_doctrine`.
 
 Design principle (agreed): **automated hands, player brain.** PD tracking is never manual;
 player agency lives in doctrine (stances/priorities), a shared resource (capacitor),

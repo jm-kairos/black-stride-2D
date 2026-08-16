@@ -282,7 +282,12 @@ velocity cap, read only through `ship_speed_cap`; omitted = derived from
 `motion.max_speed` × {0.5, 1, 2.5, 6, 15}, and the instance default selection is the
 highest gear ≤ the motion cap, so an untouched hull flies exactly as before),
 `sensors <l0> <l1> <l2>` (baseline suite, validated strictly increasing),
-`desc "..."`, and market-forward `price`/`tier`. `assets/ships/ship/ship.ship`
+`desc "..."`, market-forward `price`/`tier`, and the engagement-doctrine defaults
+`roe free|return|hold`, `flak auto|manual`, `missiles free|conserve|hold`,
+`cap_floor <0..0.9>` (`ShipDef::doct_*`, sentinel 0xFF / -1 when unauthored; unknown value
+words warn and keep the sentinel). Doctrine lines are the hull's shipped temperament —
+applied to PLAYER fleet spawns by `FleetShip::apply_card_doctrine` (FleetControl), never
+read by NPC agents, and an unauthored card keeps the runtime defaults exactly. `assets/ships/ship/ship.ship`
 (`vanguard_cruiser` — by design a high-tier LATE-game hull; the starting fleet flies it only
 until a dedicated starter hull card exists) is the worked example. The art/skeleton lines are
 unchanged, including
@@ -369,7 +374,11 @@ it reports affordability, and the caller commits via `ship_try_spend_cap`.
 `sandbox/source/sim/weapon.{cpp,h}`, `sandbox/source/sim/weapon_def.{cpp,h}`,
 `sandbox/source/sim/projectile.{cpp,h}`, `sandbox/source/render/ship_visual.{cpp,h}`
 
-**Last verified:** 2026-08-15, working tree on `game` (same day, later: the card grows the
+**Last verified:** 2026-08-16, working tree on `game` (the card grows the engagement-doctrine
+lines `roe`/`flak`/`missiles`/`cap_floor` → `ShipDef::doct_*` with unauthored sentinels;
+live-verified: a temporary four-line block in the vanguard card spawned the fleet with all
+four non-default values active in the inspector, and reverting it restored the runtime
+defaults). Previously 2026-08-15 (same day, later: the card grows the
 `speed_limits` gear list — `ShipDef::speed_limits[8]`/`speed_limit_count`, the runtime
 `Ship::speed_limit_sel`, and `ship_speed_cap` as the single velocity-cap authority that
 FleetControl's integrator and autopilot consume; the fleet panel's SPEED LIMIT chips
