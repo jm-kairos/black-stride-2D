@@ -15,6 +15,7 @@
 #include "sim/projectile.h"
 
 #include "sim/point_defense.h"
+#include "sim/flak_screen.h"
 
 #include "render/projectile_fx.h" // projectile_fx_render_init (bakes the VFX textures)
 
@@ -1915,18 +1916,17 @@ static void game_push_hud(game_state* s, f32 dt) {
                 row.selected = FALSE;
                 snprintf(row.card_title, sizeof(row.card_title), "Point Defense Laser");
                 {
-                    // Live engagement radius: Layer 0 sensors (or override) narrowed by the gate.
-                    static const f32 GATE_FRAC[3] = { 0.6f, 0.8f, 1.0f };
+                    // Live engagement radius from the shared resolver (one maths site with the
+                    // simulation and the range ring).
                     const DefenseLaser& pdl = fs.point_defense;
-                    const f32 gate = GATE_FRAC[(pdl.gate_tier < 3) ? pdl.gate_tier : 2];
-                    const f32 pd_range =
-                        ((pdl.range > 0.0f) ? pdl.range : fs.sensors.layer0_radius) * gate;
+                    const f32 gate = pd_gate_fraction(pdl.gate_tier);
+                    const f32 pd_range = pd_resolved_range(&fs);
                     snprintf(row.card_rows, sizeof(row.card_rows),
                              "TYPE       Defense - Point defense\n"
                              "INTEGRITY  100%%\n"
                              "DPS        %.0f  (burns ordnance HP)\n"
                              "DRAIN      %.0f/s while firing\n"
-                             "RANGE      %.1fk  (Layer 1 x %.0f%% gate)",
+                             "RANGE      %.1fk  (last-ditch x %.0f%% gate)",
                              pdl.damage_per_second, pdl.cap_drain_per_s,
                              pd_range / 1000.0f, gate * 100.0f);
                 }
@@ -3708,6 +3708,12 @@ b8 game_update(Game* game_inst, f32 dt) {
 
     // ---- Sync combat entity positions / velocities from their ships (sim/combat_arena.cpp) --
     combat_arena_sync_entities(s, sim_dt);
+
+    // ---- Autonomous flak screen: MODE_FLAK mounts engage incoming ordnance on their own ------
+    // (sim/flak_screen.cpp). The OUTER defense layer: runs after positions are synced, BEFORE
+    // the PD laser and the projectile advance, and claims its mounts so the attack broadside
+    // yields them this tick.
+    flak_screen_update(s, sim_dt);
 
     // ---- Point-defense lasers: intercept incoming hostile projectiles (sim/point_defense.cpp) --
     // Runs after positions are synced and BEFORE projectiles advance, so destroyed threats

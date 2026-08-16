@@ -11,6 +11,12 @@ enum WeaponKind : u8 { WEAPON_KIND_BALLISTIC = 0, WEAPON_KIND_MISSILE = 1 };
 // Ballistic fire modes (Phase D): AP shells kill ships; FLAK shells fly slow/short and
 // proximity-detonate against hostile ordnance (missiles + shells), never hulls.
 enum FireMode : u8 { MODE_AP = 0, MODE_FLAK = 1 };
+// FLAK flight envelope: a MODE_FLAK shell leaves at this fraction of the def's proj speed
+// and lives this long regardless of the authored lifetime. ONE site for the numbers --
+// BallisticWeapon::spawn_shot flies by them and the autonomous screen
+// (sim/flak_screen.cpp) engages by them, so the screen never shoots beyond its shells.
+#define FLAK_SPEED_MUL  0.6f
+#define FLAK_LIFETIME_S 1.4f
 struct WeaponDef;   // sim/weapon_def.h (full stat block; instances keep a pointer)
 struct Weapon {
     const char*   name;           // display label
@@ -142,6 +148,11 @@ struct MissileLauncher : Weapon {
 // the player sees is exactly what the ship does. Returns 0 for a weapon with no usable stats.
 // ---------------------------------------------------------------------------
 f32 weapon_effective_reach(const Weapon* w);
+
+// Reach of a MODE_FLAK shell from this weapon (proj speed * FLAK_SPEED_MUL *
+// FLAK_LIFETIME_S). 0 for a null or non-ballistic weapon -- the autonomous screen's
+// engagement envelope, guaranteed to match what spawn_shot actually flies.
+f32 weapon_flak_reach(const Weapon* w);
 
 // ---------------------------------------------------------------------------
 // Helper: instances are normally built from `.weapon` defs by weapon_instantiate

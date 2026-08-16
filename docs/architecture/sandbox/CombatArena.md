@@ -12,6 +12,8 @@ is split across ShipRendering, InWorldOverlays and the HUD, and that weapon firi
 `combat_arena_init`, `_rebuild_player_entities`, `_update_encounter`, `_update_enemy_orbit`,
 `_update_enemy_ai`, `_sync_entities`, `_update_projectiles`.
 `sandbox/source/sim/point_defense.h` — `point_defense_update`.
+`sandbox/source/sim/flak_screen.h` — `flak_screen_update` (Phase 2: the autonomous outer
+defense layer).
 `sandbox/source/sim/sensor_system.h` — `struct SensorContact`, `sensor_reading`,
 `sensor_gather_hostile_contacts`.
 Used from outside: `combat_arena.h` by 3 subsystems, `point_defense.h` by 1
@@ -22,12 +24,37 @@ GameStateModel; engine `math/math_utils.h`, `math/bs_hierpos.h`, `defines.h`.
 **Depended on by:** DevPanels, InWorldOverlays, FrameOrchestrator.
 
 **Key invariants:**
-- **A four-step call order spans three files and is documented only in comments.**
-  `point_defense.h` states `point_defense_update` must run *after*
-  `combat_arena_sync_entities()` (so positions are current) and *before*
-  `combat_arena_update_projectiles()` (so destroyed threats never advance or collide that
-  frame); `combat_arena.h` states `sync_entities` runs after fleet integration. Nothing
-  enforces any of it. Getting it wrong lets intercepted missiles still hit.
+- **A five-step call order spans four files and is documented only in comments.**
+  `sync_entities` (after fleet integration) → `flak_screen_update` → `point_defense_update` →
+  `combat_arena_update_projectiles`. The flak screen and PD both need synced positions and
+  must precede the projectile advance (destroyed threats never move or collide that frame).
+  Nothing enforces any of it. Getting it wrong lets intercepted missiles still hit.
+- **The missile-defense onion (Phase 2): flak screens at volume, PD catches leakers.**
+  `flak_screen_update` gives every fleet hull with a `MODE_FLAK` ballistic mount autonomous
+  anti-ordnance fire: threats scored fleet-wide (an escort screens the flagship), missiles
+  strictly outrank shells, soonest impact first, intercept lead solved at the flak shell's
+  own reduced speed, all through the shared validator/spawner. Engagement envelope =
+  `weapon_flak_reach`, so the screen never shoots beyond what its shells actually fly.
+  **EVERY ballistic mount screens under FLAK_AUTO**: an AP cannon fires FLAK rounds per-shot
+  when ordnance threatens (`fire_mode` swapped around the spawn and restored) and claims the
+  mount for the tick (`Ship::flak_screen_claimed`) — update_attack yields claimed mounts
+  from both the engaging-mount pick and the broadside, so defense preempts offense without
+  the hull-duty aim assertions that originally starved the screen to near-zero shots (the
+  barrel ping-ponged between hull and ordnance goals, never converging inside the slew
+  gate). A MODE_FLAK mount is a DEDICATED screen: excluded from hull duty entirely (flak
+  cannot hit hulls) and WATCHING the nearest hostile ship inside twice the envelope between
+  volleys instead of drooping to rest. **Side discipline**: a mount only engages (and
+  watches) threats within `FLAK_FIT_HALF` (~100°) of its authored FACING — deliberately
+  tighter than the raw traverse arc, whose 210° reach let a starboard cannon legally fire
+  across its own hull at port-side missiles — and among fitting threats the near-axis one
+  wins (`FLAK_BEARING_WEIGHT`), so port takes port, starboard takes starboard, and a threat
+  outside every fit window is the PD layer's job. Acquisition honours the PD reserve floor;
+  `FLAK_MANUAL` doctrine (FleetControl) opts a hull out; on the ATTACHED piloted hull only
+  the cursor-owned FIRE SELECTION is skipped — off-selection mounts still screen, the same
+  autonomy PD has always had there. PD's default range is now a TRUE last-ditch 5000 units
+  (`DefenseLaser::range` default; 0 still opts into the legacy Layer-0 coupling) resolved by
+  the shared `pd_resolved_range()` helper — sim, range ring and HUD card all call it, which
+  also retired the triplicated gate-fraction tables.
 - **The combat-entity array is a manually partitioned window:** slot 0 is the enemy, slots
   1..N mirror the active fleet, and `npc_combat_base` marks where LocalAgentAi appends.
   `combat_arena_rebuild_player_entities` must be called whenever the active fleet count changes
@@ -118,9 +145,17 @@ configurations from one code path. A new detection rule belongs in `sensor_readi
   hull.
 
 **Source paths:** `sandbox/source/sim/combat_arena.{cpp,h}`,
-`sandbox/source/sim/point_defense.{cpp,h}`, `sandbox/source/sim/sensor_system.{cpp,h}`
+`sandbox/source/sim/point_defense.{cpp,h}`, `sandbox/source/sim/flak_screen.{cpp,h}`,
+`sandbox/source/sim/sensor_system.{cpp,h}`
 
-**Last verified:** 2026-08-15, working tree on `game` (the fleet-hull hit branch notes the
+**Last verified:** 2026-08-15, working tree on `game` (same day, latest: AP cannons join the
+screen — per-shot FLAK rounds + per-tick claims that update_attack yields, and the
+piloted-hull skip narrowed to the cursor-owned fire selection; live-verified in the exact
+reported scenario: a gauss mounted in default AP mode, K-spawned warships, ROE broadside
+ACTIVE, produced "Flak burst: 1 ordnance destroyed" screen interceptions. Earlier same day:
+the aim-thrash fix and the watch pre-aim, verified unconfounded on a PASSIVE hull (the first
+verification had been confounded by broadside-fired flak). Earlier: the Phase 2 missile
+defense — `flak_screen_update` + PD's 5k default with the shared `pd_resolved_range`. Earlier: the fleet-hull hit branch notes the
 attacker faction on the Fleet for ROE return-fire — see FleetControl). Previously 2026-08-12
 (`point_defense_update` gains the
 mount gate — PD became fleet-pool equipment, see ShipCombatModel — and the missile-hit

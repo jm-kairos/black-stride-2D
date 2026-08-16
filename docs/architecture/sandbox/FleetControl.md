@@ -72,6 +72,28 @@ InWorldOverlays, FrameOrchestrator, GameStateModel.
   HOW. Hostility is `galaxy_history_faction_is_hostile`, not a hardcoded faction compare.
   Set from the editor panel's "ROE (selected)" combo via `set_selected_roe` (the
   `set_selected_stance` pattern); each self-acquisition logs "X: engaging Y".
+- **Phase 2 doctrine axes ride the same one-setter pattern as stance/ROE.** Per ship:
+  `flak_doctrine` (AUTO default / MANUAL — autonomy of the flak screen, consumed by
+  CombatArena's `flak_screen_update`), `missile_policy` (FREE default / CONSERVE — launch
+  only beyond every ballistic mount's reach / HOLD), and `cap_fire_floor` (0.25 default —
+  offensive fire holds below this cap fraction while turrets keep tracking; sits ABOVE PD's
+  0.15 reserve so the power budget layers: offense yields first, the screens fight on, an
+  in-progress PD dwell burns to the bottom). The manual trigger is never gated by any of
+  them. Editor combos/slider beside the ROE combo; setters `set_selected_flak_doctrine` /
+  `_missile_policy` / `_cap_floor`.
+- **Focus fire and kiting (Phase 2).** `update_engagement` scores a hostile already engaged
+  by a wingman as `ROE_FOCUS_BONUS` (8k) closer — the fleet converges on one kill — with the
+  acquisition envelope as a hard gate the bonus never extends. `update_attack` gains the
+  KITE branch: an AGGRESSIVE ship with no move order backs out on the strafing controller
+  when the target pushes inside `RTS_KITE_FRAC` (0.55) of its standoff, guns unmasked, with
+  a brake-only hold band between kite and approach so the regimes cannot oscillate.
+- **Defense preempts offense per mount.** `update_attack` yields a mount from both the
+  engaging-mount slot (`whp`) and the ballistic broadside when it is (a) MODE_FLAK — flak
+  cannot hit hulls, the mount is a dedicated screen — or (b) screen-claimed this tick
+  (`Ship::flak_screen_claimed`: an AP cannon defending against inbound ordnance). The
+  every-frame hull-target aim assertion was the bug that starved the autonomous screen —
+  the turret ping-ponged between hull and ordnance goals without ever converging inside the
+  validator's slew gate; the yield is what lets one gun serve both duties.
 - **An auto-acquired hunt overrides a standing move order (AGGRESSIVE only).** When an
   AGGRESSIVE ship's SELF-acquired target sits beyond the approach standoff while a move order
   is live, `update_attack` clears the move ("X: breaking station to engage" in the log) so the
@@ -233,7 +255,11 @@ characteristics without touching this code.
 **Source paths:** `sandbox/source/sim/fleet.{cpp,h}`, `sandbox/source/sim/ship_control.{cpp,h}`,
 `sandbox/source/sim/steering.{cpp,h}`
 
-**Last verified:** 2026-08-15, working tree on `game` (same day, latest: the beyond-reach chase
+**Last verified:** 2026-08-15, working tree on `game` (same day, latest: Phase 2 —
+flak/missile/cap-floor doctrine axes, focus fire, kiting, and the broadside's flak-claim
+yield. The flak screen itself was live-verified from CombatArena's side (see that page);
+focus fire, kiting, CONSERVE and the cap floor are code-verified — their gates are
+single-condition guards on the paths validated below. Earlier: the beyond-reach chase
 — instrumented live run with the debug strike ring moved to 40-48k: a parked flagship
 self-acquired at 41k (beyond its 36k gauss reach), engaged the approach (`appr=1`), spun up
 and closed 41k -> 34k -> 31k into the standoff, kill confirmed; the hunt-overrides-move guard

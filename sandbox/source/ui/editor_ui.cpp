@@ -125,6 +125,23 @@ void build_editor_panel(game_state* s) {
                     action_log_push(s, "ROE: %s (%d ship%s)", ROE_NAMES[roe_ui],
                                     fleet.selected_count(), fleet.selected_count() == 1 ? "" : "s");
                 }
+                // Phase 2 doctrine axes, same one-setter pattern as the ROE combo above.
+                i32 flak_ui = (i32)fleet.at(sel).flak_doctrine;
+                if (bs_ui_combo("Flak screen", &flak_ui, "Auto (screens ordnance)\0Manual (trigger/broadside only)\0") &&
+                    flak_ui >= 0 && flak_ui <= (i32)FLAK_MANUAL) {
+                    fleet.set_selected_flak_doctrine((u8)flak_ui);
+                    action_log_push(s, "Flak screen: %s", flak_ui == 0 ? "AUTO" : "MANUAL");
+                }
+                static const char* MP_NAMES[] = { "FREE", "CONSERVE", "HOLD" };
+                i32 mp_ui = (i32)fleet.at(sel).missile_policy;
+                if (bs_ui_combo("Missiles", &mp_ui, "Free\0Conserve (beyond gun reach)\0Hold (guns only)\0") &&
+                    mp_ui >= 0 && mp_ui <= (i32)MISSILE_HOLD) {
+                    fleet.set_selected_missile_policy((u8)mp_ui);
+                    action_log_push(s, "Missile policy: %s", MP_NAMES[mp_ui]);
+                }
+                f32 floor_ui = fleet.at(sel).cap_fire_floor;
+                if (bs_ui_slider_float("Gun cap floor", &floor_ui, 0.0f, 0.9f))
+                    fleet.set_selected_cap_floor(floor_ui);
             } else {
                 bs_ui_text("ROE: select ships to set rules of engagement.");
             }

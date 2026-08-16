@@ -13,18 +13,16 @@ void defense_laser_overlay_draw(game_state* s) {
     if (zoom < 1.0e-4f) zoom = 1.0e-4f;
 
     // ---- PD engagement ring (Phase E): flagship-centered, at the GATED range --------------
-    // Mirrors sim/point_defense.cpp: range = (override or Layer-1 radius) * gate fraction.
-    // Hidden when the PD is unmounted/disabled or holding; steel when STANDARD, amber when
-    // OVERDRIVE -- stance and gate changes get instant in-world feedback.
+    // Drawn at pd_resolved_range -- the same maths site the simulation fires by, so the ring
+    // cannot drift from the laser. Hidden when the PD is unmounted/disabled or holding; steel
+    // when STANDARD, amber when OVERDRIVE -- stance and gate changes get instant feedback.
     {
         const Ship&         flag = s->player_ship();
         const DefenseLaser& L    = flag.point_defense;
         // Mount test mirrors the simulation gate in sim/point_defense.cpp: no device, no ring,
         // even if an editor override left `enabled` set.
         if (L.enabled && flag.point_defense_mount >= 0 && L.stance != PD_HOLD) {
-            static const f32 GATE_FRAC[3] = { 0.6f, 0.8f, 1.0f };
-            f32 range = ((L.range > 0.0f) ? L.range : flag.sensors.layer0_radius)
-                        * GATE_FRAC[(L.gate_tier < 3) ? L.gate_tier : 2];
+            f32 range = pd_resolved_range(&flag);
             Vec2 center = render_from_hierpos(s, &flag.origin);
             bs_color ring = (L.stance == PD_OVERDRIVE)
                                 ? bs_color{ 0.79f, 0.59f, 0.25f, 0.33f }   // amber: overdrive

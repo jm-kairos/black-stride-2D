@@ -90,6 +90,23 @@ enum EngageRoe : u8 {
     ROE_RETURN_FIRE,      // self-acquire only factions that recently HIT a fleet hull
     ROE_HOLD,             // never self-acquire; player-designated targets only (legacy behaviour)
 };
+// Autonomy of the FLAK screen (sim/flak_screen.cpp): whether this hull's MODE_FLAK mounts
+// engage incoming hostile ordnance on their own. The player keeps MODE authority either way
+// (T toggles a fire group between AP and FLAK); this decides only whether flak-toggled guns
+// defend without being told to. AUTO is the default: a screen that waits for permission
+// while a missile arrives is not a screen.
+enum FlakDoctrine : u8 {
+    FLAK_AUTO = 0, // flak mounts engage ordnance threatening ANY fleet hull autonomously
+    FLAK_MANUAL,   // legacy: flak fires only through the trigger / attack-order broadside
+};
+// Autonomous missile release policy: how freely update_attack's missile branch launches.
+// The manual trigger is never gated -- this constrains only the autopilot's ordnance use.
+enum MissilePolicy : u8 {
+    MISSILE_FREE = 0, // launch whenever the validator allows (legacy behaviour)
+    MISSILE_CONSERVE, // launch only at targets beyond every ballistic mount's reach --
+                      // ordnance is finite-feeling even before ammo exists; guns do gun work
+    MISSILE_HOLD,     // never launch autonomously (guns only)
+};
 
 // One player ship: pose + dynamics + selection + per-ship order state.
 // Move and attack targets are independent: a ship can strafe toward a destination while its
@@ -105,6 +122,13 @@ struct FleetShip {
     f32           jump_radius;       // world-space FTL jump range (units)
     u8            stance;            // FleetStance; honoured by update_attack
     u8            roe;               // EngageRoe; autonomy of target ACQUISITION (update_engagement)
+    u8            flak_doctrine;     // FlakDoctrine; autonomy of the flak screen (flak_screen_update)
+    u8            missile_policy;    // MissilePolicy; autopilot ordnance release (update_attack)
+    // Offensive capacitor floor: update_attack's guns and launchers hold below this fraction
+    // of cap_max (turrets keep tracking, same as HOLD_FIRE). Sits ABOVE the PD reserve floor
+    // (0.15) by design, so the power budget layers: offense yields first, the flak screen and
+    // PD spend down to the reserve, an in-progress PD dwell burns to the bottom.
+    f32           cap_fire_floor;
     b8            auto_acquired;     // attack_target came from the ROE pass, not a player order
     // ---- Standing orders ---------------------------------------------------------------
     // Distinct from move_target because their destination is not a POINT -- it tracks another
@@ -190,6 +214,10 @@ public:
     void set_selected_stance(u8 stance);
     // Apply an EngageRoe to every selected ship. Same orthogonality contract as stance.
     void set_selected_roe(u8 roe);
+    // Same one-setter pattern for the remaining doctrine axes (editor / future HUD chips).
+    void set_selected_flak_doctrine(u8 doctrine);
+    void set_selected_missile_policy(u8 policy);
+    void set_selected_cap_floor(f32 floor);
     // ---- Return-fire aggression memory ------------------------------------------------
     // Factions that recently HIT a fleet hull, each with a decaying timer. Faction-level
     // rather than Ship* so a despawning NPC shooter can never dangle; ROE_RETURN_FIRE ships

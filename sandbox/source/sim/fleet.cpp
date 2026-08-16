@@ -35,6 +35,13 @@ static constexpr f32 ROE_ACQUIRE_RANGE_MUL = 1.5f;
 static constexpr f32 ROE_DROP_RANGE_MUL    = 1.3f;
 // How long a faction stays an aggressor after last landing a hit on a fleet hull.
 static constexpr f32 ROE_AGGRESSION_S      = 20.0f;
+// Focus fire: a hostile already engaged by a wingman scores as if this much closer, so the
+// fleet converges on one kill instead of spreading damage across the contact list.
+static constexpr f32 ROE_FOCUS_BONUS       = 8000.0f;
+// Kiting: an AGGRESSIVE ship backs out when the target pushes inside this fraction of its
+// preferred standoff, holding the gun band open. The zone between here and the standoff is
+// the hold band -- no thrust either way -- so the two regimes cannot oscillate.
+static constexpr f32 RTS_KITE_FRAC         = 0.55f;
 static constexpr f32 RTS_ATTACK_STOP_DIST  = 120.0f; // keep this distance from target
 static constexpr f32 RTS_ATTACK_MIN_RANGE  = 150.0f; // do not fire closer than this
 // Strafing movement controller: how aggressively the ship corrects its velocity toward the
@@ -249,7 +256,8 @@ void FleetShip::update_engagement(game_state* s) {
     // RETURN_FIRE additionally requires the target's faction to hold a live aggression
     // entry (someone of theirs recently hit someone of ours).
     const Fleet& fleet = s->fleet_state.fleet;
-    f32   best_d      = best_reach * ROE_ACQUIRE_RANGE_MUL;
+    const f32 acquire_r   = best_reach * ROE_ACQUIRE_RANGE_MUL;
+    f32   best_score  = 1.0e30f;
     Ship* best_target = nullptr;
     for (i32 ci = 0; ci < s->combat_entity_count; ++ci) {
         const CombatEntity* ce = &s->combat_entities[ci];
@@ -259,7 +267,19 @@ void FleetShip::update_engagement(game_state* s) {
         if (roe == ROE_RETURN_FIRE && !fleet.is_aggressor(ce->faction_id)) continue;
         Vec2 to = hierpos_diff(&ce->position, &sh->origin);
         f32 d = vec2_length(to);
-        if (d < best_d) { best_d = d; best_target = ce->ship; }
+        if (d > acquire_r) continue;   // hard envelope; the focus bonus never extends it
+        // Focus fire: converge on a wingman's pick -- a target already under fleet attack
+        // scores as if ROE_FOCUS_BONUS closer, so escorts mass fire instead of spreading it.
+        f32 score = d;
+        for (i32 fi = 0; fi < fleet.count(); ++fi) {
+            const FleetShip& other = fleet.at(fi);
+            if (&other == this) continue;
+            if (other.has_attack_target && other.attack_target == ce->ship) {
+                score -= ROE_FOCUS_BONUS;
+                break;
+            }
+        }
+        if (score < best_score) { best_score = score; best_target = ce->ship; }
     }
     if (!best_target) return;
     has_attack_target = TRUE;
@@ -307,6 +327,16 @@ void FleetShip::update_attack(game_state* s, f32 dt) {
     } else {
         whp = ship_select_bearing_weapon(sh, to_target);
     }
+    // A MODE_FLAK gun never engages SHIPS: flak shells cannot hit hulls (the collision pass
+    // skips PROJ_FLAK), so hull-tracking one is pure waste -- and the every-frame aim
+    // assertion here was the bug that starved the autonomous screen: it dragged the barrel
+    // back onto the hull target each tick, the screen re-aimed it at the ordnance a moment
+    // later, and the turret ping-ponged between the two goals without ever converging inside
+    // the validator's slew gate. A screen CLAIM (any mount defending against ordnance this
+    // tick, AP included) yields the same way -- defense preempts offense for the mount.
+    if (whp >= 0 && ((sh->mounts[whp]->wkind == WEAPON_KIND_BALLISTIC &&
+                      static_cast<BallisticWeapon*>(sh->mounts[whp])->fire_mode == MODE_FLAK) ||
+                     sh->flak_screen_claimed[whp])) whp = -1;
     Weapon* w = (whp >= 0) ? sh->mounts[whp] : nullptr;
     // ONLY the engaging mount tracks the designated target. Every other turret is left alone so
     // the weapons in the player's fire selection keep following the cursor (game_update sets that
@@ -316,12 +346,17 @@ void FleetShip::update_attack(game_state* s, f32 dt) {
     if (whp >= 0) ship_turret_aim_at(sh, whp, to_target);
     f32 fire_reach = weapon_effective_reach(w);
     f32 approach_reach = 0.0f;
+    f32 gun_reach      = 0.0f;   // longest BALLISTIC reach aboard (missile CONSERVE gate)
     if (sh->weapon_override >= 0) {
-        approach_reach = weapon_effective_reach(sh->mounts[sh->weapon_override]);
+        Weapon* ow = sh->mounts[sh->weapon_override];
+        approach_reach = weapon_effective_reach(ow);
+        if (ow && ow->wkind == WEAPON_KIND_BALLISTIC) gun_reach = approach_reach;
     } else {
         for (i32 hpi = 0; hpi < sh->hardpoint_count; ++hpi) {
             f32 r = weapon_effective_reach(sh->mounts[hpi]);
             if (r > approach_reach) approach_reach = r;
+            if (sh->mounts[hpi] && sh->mounts[hpi]->wkind == WEAPON_KIND_BALLISTIC &&
+                r > gun_reach) gun_reach = r;
         }
     }
     if (approach_reach <= 0.0f) approach_reach = RTS_ATTACK_RANGE;   // unarmed: legacy standoff
@@ -439,6 +474,24 @@ void FleetShip::update_attack(game_state* s, f32 dt) {
                             vec2_scale(corr_local, corr / (m.accel * dt)));
                     }
                 }
+            } else if (dist < desired_dist * RTS_KITE_FRAC && dist > 0.0001f) {
+                // KITE: the target pushed well inside the preferred band -- back out on the
+                // strafing controller while the guns stay unmasked (the arc plan above holds
+                // the heading; no nose flip). Clamped to the same per-axis authority as the
+                // precision regime, so retro and side jets read as a controlled fallback,
+                // never a second drive. The zone between here and the standoff brakes only,
+                // so kite and approach cannot oscillate.
+                Vec2 tdir = vec2_scale(to_target, 1.0f / dist);
+                Vec2 away = vec2_scale(tdir, -m.accel);
+                Vec2 fwd2 = vec2_rotate(Vec2{ 0.0f, 1.0f }, sh->angle);
+                Vec2 rgt2 = vec2_rotate(Vec2{ 1.0f, 0.0f }, sh->angle);
+                f32 fwd_acc   = clampf(vec2_dot(away, fwd2), -m.decel, m.accel);
+                f32 right_acc = clampf(vec2_dot(away, rgt2), -m.accel, m.accel);
+                fl->thrust_cmd.y += (fwd_acc >= 0.0f) ? ((m.accel > 0.0f) ? fwd_acc / m.accel : 0.0f)
+                                                      : ((m.decel > 0.0f) ? fwd_acc / m.decel : 0.0f);
+                fl->thrust_cmd.x += (m.accel > 0.0f) ? right_acc / m.accel : 0.0f;
+                fl->velocity = vec2_add(fl->velocity,
+                    vec2_scale(vec2_add(vec2_scale(fwd2, fwd_acc), vec2_scale(rgt2, right_acc)), dt));
             } else if (speed > 0.0f) {
                 fl->velocity = vec2_add(fl->velocity, vec2_scale(fl->velocity, -m.decel * dt / speed));
                 // Telemetry: a velocity-opposing brake decomposes onto whichever local
@@ -473,8 +526,18 @@ void FleetShip::update_attack(game_state* s, f32 dt) {
     // station -- and stops only at the trigger. That is deliberately a different thing from
     // PASSIVE: this ship is shadowing a target and ready, it is just not authorised to shoot.
     b8 fire_authorized = (stance != FLEET_STANCE_HOLD_FIRE);
+    // Offensive capacitor floor (doctrine): below it the guns and launchers hold while the
+    // turrets keep tracking -- the same shape as HOLD_FIRE, but temporary and automatic.
+    // The defensive systems keep their own LOWER reserve (PD's 0.15), so the power budget
+    // layers: offense yields first, the screens fight on.
+    if (sh->cap_current < cap_fire_floor * sh->cap_max) fire_authorized = FALSE;
     b8 range_ok = (dist >= RTS_ATTACK_MIN_RANGE);
     b8 guided = (w && w->wkind == WEAPON_KIND_MISSILE && fire_authorized);
+    // Missile release policy: HOLD never launches autonomously; CONSERVE spends ordnance
+    // only where the guns cannot do the work. The manual trigger is never gated by either.
+    if (missile_policy == MISSILE_HOLD) guided = FALSE;
+    else if (missile_policy == MISSILE_CONSERVE && gun_reach > 0.0f && dist <= gun_reach)
+        guided = FALSE;
     if (w && guided && range_ok && dist <= fire_reach) {
         {
             // Each shot leaves from its own hardpoint, honoring the slot's traverse arc.
@@ -515,6 +578,12 @@ void FleetShip::update_attack(game_state* s, f32 dt) {
             if (!bw || bw->wkind != WEAPON_KIND_BALLISTIC) continue;
             // The player's micro-selection narrows engagement to that one mount, same as whp.
             if (sh->weapon_override >= 0 && hpi != sh->weapon_override) continue;
+            // MODE_FLAK mounts sit the broadside out entirely -- flak cannot hit hulls, and
+            // aim-thrash between hull duty and screen duty was what starved the screen (see
+            // the whp demotion above and sim/flak_screen.cpp). A screen-claimed AP mount is
+            // on defense duty this tick and yields the same way.
+            if (static_cast<BallisticWeapon*>(bw)->fire_mode == MODE_FLAK ||
+                sh->flak_screen_claimed[hpi]) continue;
             // Per-mount geometry: each shot leaves from its own hardpoint, lead solved from there.
             HierPos2 fire_origin = ship_hardpoint_fire_origin(sh, hpi);
             Vec2 to_t = hierpos_diff(&target->origin, &fire_origin);
@@ -673,6 +742,10 @@ FleetShip& Fleet::add() {
     // without responding is the bug this field exists to fix. ROE_HOLD reproduces the old
     // designation-only behaviour for players who want full manual control.
     fs.roe = ROE_WEAPONS_FREE;
+    // AUTO for the same reason: a missile screen that waits for permission is not a screen.
+    fs.flak_doctrine = FLAK_AUTO;
+    fs.missile_policy = MISSILE_FREE;  // legacy launch behaviour; CONSERVE/HOLD are opt-in
+    fs.cap_fire_floor = 0.25f;         // offense yields first; defenses spend to the 0.15 reserve
     fs.auto_acquired = FALSE;
     fs.has_escort_target = FALSE;
     fs.escort_target     = nullptr;
@@ -838,6 +911,21 @@ void Fleet::set_selected_roe(u8 roe) {
     if (roe > ROE_HOLD) return;   // unknown value: leave the fleet alone
     for (i32 i = 0; i < m_count; ++i)
         if (m_ships[i].selected) m_ships[i].roe = roe;
+}
+void Fleet::set_selected_flak_doctrine(u8 doctrine) {
+    if (doctrine > FLAK_MANUAL) return;
+    for (i32 i = 0; i < m_count; ++i)
+        if (m_ships[i].selected) m_ships[i].flak_doctrine = doctrine;
+}
+void Fleet::set_selected_missile_policy(u8 policy) {
+    if (policy > MISSILE_HOLD) return;
+    for (i32 i = 0; i < m_count; ++i)
+        if (m_ships[i].selected) m_ships[i].missile_policy = policy;
+}
+void Fleet::set_selected_cap_floor(f32 floor) {
+    floor = clampf(floor, 0.0f, 0.9f);
+    for (i32 i = 0; i < m_count; ++i)
+        if (m_ships[i].selected) m_ships[i].cap_fire_floor = floor;
 }
 // ---- Return-fire aggression memory ----------------------------------------------------
 void Fleet::note_aggression(i16 faction_id) {

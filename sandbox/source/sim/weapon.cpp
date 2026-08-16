@@ -32,11 +32,13 @@ void BallisticWeapon::spawn_shot(HierPos2 origin, Vec2 direction, Vec2 ship_velo
     f32 len = vec2_length(dir);
     if (len > 0.0001f)
         dir = vec2_scale(dir, 1.0f / len);
-    // FLAK mode (Phase D): slower, short-lived proximity shells -- a defensive screen the
-    // player lays manually in front of incoming ordnance. Envelope = speed * lifetime.
+    // FLAK mode (Phase D): slower, short-lived proximity shells -- a defensive screen laid
+    // in front of incoming ordnance (manually, or by the autonomous screen pass).
+    // Envelope = speed * lifetime; the constants live in weapon.h beside weapon_flak_reach
+    // so the screen's engagement range and the shell's flight can never disagree.
     const b8  flak     = (fire_mode == MODE_FLAK);
-    const f32 speed    = projectile_speed_value * (flak ? 0.6f : 1.0f);
-    const f32 lifetime = flak ? 1.4f : projectile_lifetime;
+    const f32 speed    = projectile_speed_value * (flak ? FLAK_SPEED_MUL : 1.0f);
+    const f32 lifetime = flak ? FLAK_LIFETIME_S : projectile_lifetime;
     Vec2 vel = vec2_add(ship_velocity, vec2_scale(dir, speed));
     // colour by faction
     bs_color col = bs_color{ 1.0f, 1.0f, 1.0f, 1.0f };
@@ -145,6 +147,10 @@ f32 weapon_effective_reach(const Weapon* w) {
     }
     const BallisticWeapon* bw = static_cast<const BallisticWeapon*>(w);
     return bw->projectile_speed_value * bw->projectile_lifetime;
+}
+f32 weapon_flak_reach(const Weapon* w) {
+    if (!w || w->wkind != WEAPON_KIND_BALLISTIC) return 0.0f;
+    return w->projectile_speed() * FLAK_SPEED_MUL * FLAK_LIFETIME_S;
 }
 // ---------------------------------------------------------------------------
 // Instances are built from `.weapon` defs by weapon_instantiate (weapon_def.cpp);

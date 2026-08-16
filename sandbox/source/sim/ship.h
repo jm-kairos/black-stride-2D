@@ -260,7 +260,12 @@ struct DefenseLaser {
 
     u8  gate_tier          = 2;       // engagement gate: 0 = 60%, 1 = 80%, 2 = 100% of resolved range
 
-    f32 range              = 0.0f;    // 0 => use sensors.layer0_radius (live-coupled)
+    f32 range              = 5000.0f; // a TRUE last-ditch bubble. PD is the inner layer of the
+                                      // missile-defense onion (the flak screen kills at volume
+                                      // further out), so its reach is a hull-scale constant.
+                                      // 0 opts back into the legacy sensors.layer0_radius
+                                      // live-coupling (250k -- 50x the guns' reach, which is
+                                      // why it is no longer the default).
 
     f32 damage_per_second  = 12.0f;   // damage applied to a locked projectile's HP
 
@@ -537,6 +542,14 @@ struct Ship {
 
     b8            mount_aim_engaged[SHIP_MAX_HARDPOINTS]; // goal asserted this frame
 
+    // Per-tick DEFENSE claims by the autonomous flak screen (sim/flak_screen.cpp): set when
+    // the screen engages incoming ordnance with a mount, cleared at the top of every
+    // flak_screen_update. update_attack yields claimed mounts (no engaging-mount track, no
+    // broadside) -- defense preempts offense for the tick, which is what lets an AP cannon
+    // serve the screen without the hull-duty aim assertions dragging its barrel off the
+    // threat (the ping-pong that starved the original screen).
+    b8            flak_screen_claimed[SHIP_MAX_HARDPOINTS];
+
 };
 
 // ---- Hardpoint / mount queries ---------------------------------------------------------
@@ -564,6 +577,21 @@ b8 ship_try_spend_cap(Ship* ship, f32 cost);
 // Continuous capacitor regeneration + clamp to cap_max. Tick wherever the ship's
 // weapon cooldowns tick.
 void ship_capacitor_update(Ship* ship, f32 dt);
+
+// ---- Point-defense range resolution -----------------------------------------------------
+// THE one place the PD engagement-range maths lives: the sim (point_defense.cpp), the range
+// ring overlay and the HUD stat card all call these, so what the player sees is what the
+// laser does. Resolved range = the tuned/authored range (0 opts into the legacy Layer-0
+// sensor coupling) narrowed by the doctrine gate tier.
+inline f32 pd_gate_fraction(u8 gate_tier) {
+    const f32 GATE_FRAC[3] = { 0.6f, 0.8f, 1.0f };
+    return GATE_FRAC[(gate_tier < 3) ? gate_tier : 2];
+}
+inline f32 pd_resolved_range(const Ship* ship) {
+    const DefenseLaser& L = ship->point_defense;
+    f32 base = (L.range > 0.0f) ? L.range : ship->sensors.layer0_radius;
+    return base * pd_gate_fraction(L.gate_tier);
+}
 
 // ---- Per-hardpoint fire origins + traverse arcs (Phase 3) -------------------------------
 

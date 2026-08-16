@@ -32,15 +32,9 @@ void point_defense_update(game_state* s, f32 dt) {
         const f32 dps       = L.damage_per_second * (over ? 2.0f : 1.0f);
         const f32 drain     = L.cap_drain_per_s   * (over ? 3.0f : 1.0f);
         const f32 retarget  = L.retarget_cooldown * (over ? 0.5f : 1.0f);
-        // Engagement gate: fraction of the resolved range PD is allowed to engage inside.
-        static const f32 GATE_FRAC[3] = { 0.6f, 0.8f, 1.0f };
-        const f32 gate_frac = GATE_FRAC[(L.gate_tier < 3) ? L.gate_tier : 2];
-
-        // Engagement range: 0 => live-coupled to THIS ship's Layer 0 sensor radius, so the
-        // laser range tracks the Layer 0 slider automatically. The gate narrows it further.
-        // Layer 0 is the close-in "comfort zone": point defense is a last-ditch screen and must
-        // not reach out to identification range.
-        const f32 range = ((L.range > 0.0f) ? L.range : sh.sensors.layer0_radius) * gate_frac;
+        // Engagement range: the shared resolver (tuned range, or the legacy Layer-0 coupling
+        // when 0, narrowed by the doctrine gate). One maths site for sim, ring and HUD.
+        const f32 range = pd_resolved_range(&sh);
 
         // Tick the retarget cooldown down toward zero.
         if (L.cooldown_remaining > 0.0f) {
