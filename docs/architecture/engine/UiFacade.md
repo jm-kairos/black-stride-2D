@@ -99,7 +99,12 @@ a `bs__api__` declaration here plus an implementation at the bottom of the backe
 **Source paths:** `engine/source/renderer/bs_imgui.h`, `engine/source/renderer/bs_rml.h`
 (implementation: `engine/source/renderer/backend/renderer_backend_sdlgpu.cpp`)
 
-**Last verified:** 2026-08-16, working tree on `game` (`bs_rml_hud_state` gains the
+**Last verified:** 2026-08-17, working tree on `game` (`bs_rml_hud_state` gains the fleet
+skill hotbar — `bs_rml_skill_slot skill[BS_RML_SKILL_MAX 9]` + `skills_visible`/`skill_count`
+and the `skill_target_visible`/`skill_target_label` targeting banner, action grammar
+`"skill:N"`; the cooldown sweep rides the `fleet_cap_w`-style `data-style-width` string bind,
+and `BS_RML_BAY_MAX` grows 12 → 18 for the widened weapon catalog — see SkillSystem).
+Previously 2026-08-16 (`bs_rml_hud_state` gains the
 inspected-ship engagement doctrine — `insp_roe`/`insp_flak`/`insp_missile`/`insp_capfloor`
 behind the inspector DOCTRINE tab's Engagement chip rows, action grammar `"doc:roe:N"` /
 `"doc:flak:N"` / `"doc:mp:N"` / `"doc:capfloor:N"` — and `bs_rml_roster_chip chip[4]` becomes

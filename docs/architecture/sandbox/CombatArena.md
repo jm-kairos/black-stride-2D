@@ -29,6 +29,16 @@ GameStateModel; engine `math/math_utils.h`, `math/bs_hierpos.h`, `defines.h`.
   `combat_arena_update_projectiles`. The flak screen and PD both need synced positions and
   must precede the projectile advance (destroyed threats never move or collide that frame).
   Nothing enforces any of it. Getting it wrong lets intercepted missiles still hit.
+- **Missiles COLD-LAUNCH: eject → coast → ignition → turn-in.** A round leaves its cell at
+  the launcher's `eject_speed` (along the CELL's rest facing — a nose battery fans outward)
+  and coasts unpowered while `Projectile::ignition_in` runs down: the guidance loop skips it
+  entirely and render draws no plume. On ignition the pass steers with the turn-rate clamp
+  toward the seeker's lock when it has one, else toward `Projectile::aim_dir` — the lead
+  solution stored at trigger time — which bends the sideways eject onto a curved intercept.
+  The aim hint softens the old cone-break rule: a missile that loses its lock re-aligns to
+  the STALE launch bearing (still effectively dumbfire against a maneuvering target); a
+  legacy hot spawn with no hint flies straight exactly as before. Knobs are `.weapon` card
+  lines (`eject_speed`, `ignition_delay`; 0 delay = legacy hot launch at full speed).
 - **The missile-defense onion (Phase 2): flak screens at volume, PD catches leakers.**
   `flak_screen_update` gives every fleet hull with a `MODE_FLAK` ballistic mount autonomous
   anti-ordnance fire: threats scored fleet-wide (an escort screens the flagship), missiles

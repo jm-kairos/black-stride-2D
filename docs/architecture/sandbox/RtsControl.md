@@ -76,11 +76,14 @@ FrameOrchestrator.
   a screen-constant 22 px. The player aims at the marker and misses the hull. The floor matches
   the reticle so the drawn affordance and the click target are the same size at every zoom. With
   box selection retired this is no longer a convenience — **it is how a target gets designated.**
-- **The number row is NOT ours.** Keys 1–5 are the weapon fire-group selector in both control
-  modes (`game.cpp`). The old detached-only "number-row piloting selection" is retired in place:
-  with one hull it was already inert (NUM2–NUM4 guarded on fleet counts that never occur, NUM1
-  re-piloted the ship that was already piloted), so retiring it removed a live collision at no
-  cost.
+- **The number row is NOT ours — and it is mode-split now.** Detached, keys 1–9 are the fleet
+  SKILL hotbar (`skill_system_hotkey`, game.cpp); attached, keys 1–5 are the weapon fire-group
+  selector. The old detached-only "number-row piloting selection" stays retired (with one hull
+  it was already inert), and the brief mode-free fire-group row is gone with the split —
+  detached group selection lives in the HUD's `group:` rows. This module DOES arbitrate the
+  skill TARGETING mode: while armed it owns the left button (cast on hostile hover, disarm on
+  empty space), suppresses box selection and the context menus, turns RMB into a pure cancel,
+  consumes X, and is mutually exclusive with jump mode — see SkillSystem.
 - **The planet-inspector left-click requires the map look to be DOMINANT (`view_arena_w < 0.5`),
   not merely present (`< 1.0`).** The cross-fade band covers the compressed engagement
   envelope, so "map look partly visible" overlaps the zooms where a fight is framed — a

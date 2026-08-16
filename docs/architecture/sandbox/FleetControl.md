@@ -45,9 +45,12 @@ InWorldOverlays, FrameOrchestrator, GameStateModel.
 - **`set_count` truncates without destroying escort data**, keeping an `m_spawned` high-water
   mark so the editor's "multiple ship command" toggle can hide and restore escorts instantly.
   That is why `game_init` spawns four escorts and then immediately sets the count to 1.
-- Attack range is `weapon_effective_reach * RTS_ATTACK_REACH_FRAC` (0.85) with a 10000-unit
+- Attack range is `weapon_engage_range * RTS_ATTACK_REACH_FRAC` (0.85) with a 10000-unit
   fallback for an unarmed hull — the RTS half of ShipCombatModel's single-source-of-truth
-  guarantee.
+  guarantee. ENGAGE range, not flight reach: the two split at missiles (a harpoon's shot can
+  arrive from 4,000,000 units but is worth fighting from its authored `engage_range`), and
+  feeding flight reach in here made mounting a launcher read as the ship fleeing the fight.
+  `fire_reach` (the can-a-shot-arrive gate) stays on `weapon_effective_reach`.
 - **An attack order fires EVERYTHING; `auto_skip` is the whole player-vs-autopilot fire
   arbitration.** Every ship `update_autopilot` drives fires both missiles and ballistics under
   an attack order — the hull the player is hand-flying is simply skipped (`auto_skip`), and
@@ -61,8 +64,9 @@ InWorldOverlays, FrameOrchestrator, GameStateModel.
   `stance != FLEET_STANCE_HOLD_FIRE`.
 - **ROE is orthogonal to BOTH stance and orders: it decides whether a ship picks its own
   fight.** `update_engagement` runs before `update_attack` for every autopilot-driven hull and
-  self-acquires the nearest hostile ship inside the acquisition envelope (longest reach aboard
-  × 1.5, drop hysteresis × 1.3) — `ROE_WEAPONS_FREE` (the default: a warship that watches its
+  self-acquires the nearest hostile ship inside the acquisition envelope (longest ENGAGE
+  range aboard × 1.5, drop hysteresis × 1.3 — `weapon_engage_range`, so a missile's flight
+  endurance never sets the envelope) — `ROE_WEAPONS_FREE` (the default: a warship that watches its
   fleet get shot without responding was the bug), `ROE_RETURN_FIRE` (only factions with a live
   aggression entry — see the Fleet's decaying aggressor table, fed by CombatArena's hit path),
   `ROE_HOLD` (the legacy designation-only behaviour). A player designation always outranks the
@@ -93,10 +97,13 @@ InWorldOverlays, FrameOrchestrator, GameStateModel.
   KITE branch: an AGGRESSIVE ship with no move order backs out on the strafing controller
   when the target pushes inside `RTS_KITE_FRAC` (0.55) of its standoff, guns unmasked, with
   a brake-only hold band between kite and approach so the regimes cannot oscillate.
-- **Defense preempts offense per mount.** `update_attack` yields a mount from both the
-  engaging-mount slot (`whp`) and the ballistic broadside when it is (a) MODE_FLAK — flak
-  cannot hit hulls, the mount is a dedicated screen — or (b) screen-claimed this tick
-  (`Ship::flak_screen_claimed`: an AP cannon defending against inbound ordnance). The
+- **Defense preempts offense per mount — and so does an explicit cast.** `update_attack`
+  yields a mount from both the engaging-mount slot (`whp`) and the ballistic broadside when
+  it is (a) MODE_FLAK — flak cannot hit hulls, the mount is a dedicated screen — (b)
+  screen-claimed this tick (`Ship::flak_screen_claimed`: an AP cannon defending against
+  inbound ordnance), or (c) SKILL-claimed (`Ship::skill_claimed`: a fleet-skill volley is
+  pending on the tube — see SkillSystem; the cast outranks the standing order for exactly
+  those mounts, for exactly the volley's lifetime). The
   every-frame hull-target aim assertion was the bug that starved the autonomous screen —
   the turret ping-ponged between hull and ordnance goals without ever converging inside the
   validator's slew gate; the yield is what lets one gun serve both duties.

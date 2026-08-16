@@ -55,6 +55,20 @@
 >   ship's ROE (`froe:R`, selection-wide like the stance chips). `.ship` cards can
 >   author doctrine defaults (`roe` / `flak` / `missiles` / `cap_floor` lines) applied
 >   to player fleet spawns via `FleetShip::apply_card_doctrine`.
+> - **I — Missile offense buildout (2026-08-16/17)**: missiles became a first-class
+>   offensive system. The Alpha Strike fleet skill (`sim/skill_system.cpp`, see
+>   SkillSystem.md) volleys every committed tube at one designated hull, claiming the
+>   mounts (`Ship::skill_claimed`, the flak-claim contract) so the attack autopilot
+>   yields them. `weapon_engage_range` split tactical range from flight endurance
+>   (card `engage_range`; approach / ROE acquisition / avoid / HUD ring read it, the
+>   fire gate keeps `weapon_effective_reach`). Missiles COLD-LAUNCH: card
+>   `eject_speed` + `ignition_delay` — expelled along the firing cell's facing, an
+>   unpowered plume-less coast, then ignition and a turn-rate-limited arc onto the
+>   stored launch aim until the seeker locks (`combat_arena.cpp`). The Vanguard grew
+>   a five-cell missile-only nose battery (`missile` accepts kind, spine cell L), and
+>   the catalog grew Skewer (S, quick-cycle), Hydra (M, 3-tube salvo cluster) and the
+>   Heavy Torpedo made mountable. PD/flak counterplay is unchanged — a cold round is
+>   burnable the whole way.
 
 Design principle (agreed): **automated hands, player brain.** PD tracking is never manual;
 player agency lives in doctrine (stances/priorities), a shared resource (capacitor),

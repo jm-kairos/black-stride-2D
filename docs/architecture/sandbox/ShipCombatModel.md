@@ -25,7 +25,11 @@ damage (CombatArena), and does not own drawing — `render/ship_visual` here is 
 `ship_select_weapon_override`, `ship_clear_weapon_override`, `ship_hardpoint_in_group`,
 `ship_nth_group_weapon`.
 `sim/weapon.h` — `Weapon`, `BallisticWeapon`, `MissileLauncher`, `WeaponKind`, `FireMode`,
-`weapon_effective_reach`, `weapon_engage_range`, `Weapon::cooldown_duration_s`. `sim/weapon_def.h` — `WeaponDef`,
+`weapon_effective_reach`, `weapon_engage_range`, `weapon_lead_dir`,
+`Weapon::cooldown_duration_s`. `sim/ship.h` — `MODULE_TYPE_MISSILE` (missile-exclusive
+launch cells), `hardpoint_takes_weapon` (THE weapon kind-gate: any weapon on a `weapon`
+slot, missiles additionally on `missile`-only cells; the drop code, drag highlight and
+stat-card fit all route through it). `sim/weapon_def.h` — `WeaponDef`,
 `WeaponRegistry`, `MuzzlePattern`,
 `WEAPON_MAX_MUZZLES`, `VfxFamily`, `weapon_registry_load`, `weapon_registry_resolve_textures`,
 `weapon_registry_find`, `weapon_instantiate`.
@@ -125,6 +129,13 @@ the subsystem while sitting outside `ship.h`'s seven.)*
   under an attack order (`sim/fleet.cpp`), including the last-piloted hull the moment it is
   released, and point defense engages on its own doctrine wherever the fleet's PD device is
   mounted. `WeaponKind` still expresses the guided/unguided distinction at every fire site.
+- **Missiles COLD-LAUNCH rather than spawning at speed.** `MissileLauncher::spawn_shot`
+  ejects the round at the card's `eject_speed` along a per-shot direction stamped by
+  `ship_hardpoint_fire` from the firing CELL's rest facing (the `owner_faction_id` stamping
+  pattern; the NPC direct-`Weapon::fire` path falls back to the aim line), passes the lead
+  solution on as the projectile's aim hint, and leaves ignition to the combat-arena guidance
+  after `ignition_delay` seconds of unpowered coast — see CombatArena for the flight model.
+  `ignition_delay 0` authors the legacy hot launch.
 - **`proj_life` IS the flight time to maximum reach**, because `weapon_effective_reach` is
   `proj_speed * proj_life`. For a BALLISTIC, tuning engagement distance and tuning shot travel
   time are therefore the same edit (a missile decouples them: `engage_range` tunes where it

@@ -88,9 +88,11 @@ two armed modes are mutually exclusive.
   supports it.
 
 **Known limitations / tech debt:**
-- **Missiles are fire-and-seek** (ShipCombatModel): the lead-solved aim biases seeker
-  acquisition toward the clicked hull, but the skill cannot *guarantee* the clicked target
-  takes every hit — identical to the autopilot's launches. Not a bug.
+- **Missiles are fire-and-seek** (ShipCombatModel): the lead-solved aim is carried as the
+  round's launch-aim hint (cold-launch turn-in steers onto it until the seeker locks — see
+  CombatArena), which biases acquisition strongly toward the clicked hull, but the skill
+  still cannot *guarantee* the clicked target takes every hit — identical to the autopilot's
+  launches. Not a bug.
 - The piloted hull's manual cursor-traverse can still contest a volley tube's aim while
   ATTACHED (manual aim asserts before the skill tick each frame and wins) — rare, since
   casting is detached-only; the tube retries until the timeout either way.
@@ -109,4 +111,6 @@ two armed modes are mutually exclusive.
 **Source paths:** `sandbox/source/sim/skill_def.{cpp,h}`,
 `sandbox/source/sim/skill_system.{cpp,h}`, `assets/skills/`
 
-**Last verified:** 2026-08-16
+**Last verified:** 2026-08-17 (volley v2: skill claims + reload-tolerant ripple, verified
+live — cast committed 3 tubes under MISSILE_FREE, one launch rode a 3 s reload, target died
+mid-volley and the remainder aborted cleanly. Previously 2026-08-16: initial page.)
