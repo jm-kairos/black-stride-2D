@@ -16,4 +16,11 @@ emission    1.0
 proj_hp     6.0
 price       2600
 tier        2
+# Tactical range (autopilot approach / ROE acquisition / HUD ring); flight reach stays
+# proj_speed x proj_life (80k).
+engage_range 70000
+# Ponderous cold launch: a heavy round shoved slowly out of the tube, a full second of
+# silent coast, then the motor lights. Menace, not snap.
+eject_speed  180
+ignition_delay 1.0
 desc "Slow, blazing-hot, and nearly unstoppable once inside terminal range. Point-defense needs most of a second of beam time to burn one down."

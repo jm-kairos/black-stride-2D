@@ -10,7 +10,7 @@
 
 id vanguard_cruiser
 name "Vanguard-class Cruiser"
-desc "Flagship-grade heavy cruiser from the top of the yard's line. A deep hardpoint rack - eight medium weapon mounts, twin point-defense rings and a dorsal sensor dome - built for commanders who have outgrown everything else the shipwrights sell."
+desc "Flagship-grade heavy cruiser from the top of the yard's line. A deep hardpoint rack - seven medium weapon mounts, a heavy spine launch cell, twin point-defense rings and a dorsal sensor dome - built for commanders who have outgrown everything else the shipwrights sell."
 faction 2
 world_scale 1.0
 size 394 1586
@@ -58,11 +58,13 @@ hardpoint bow_gun    weapon          M    0  403   0 180
 # ~66 at row 270 per the bow lateral thrusters, widening aft) and one spine cell.
 # `missile` accepts refuses ballistics (vertical-launch cells, not turrets); full-circle
 # arcs because a launch cell has no traverse mask -- the seeker does the pointing.
+# The spine cell is LARGE: the hull's one heavy tube, sized for the torpedo catalog
+# (M rounds mount on it too -- a weapon fits slots of its own size or larger).
 hardpoint nose1_gun  missile         M  -70  343  45 360
 hardpoint nose2_gun  missile         M   70  343 -45 360
 hardpoint nose3_gun  missile         M  -95  233  60 360
 hardpoint nose4_gun  missile         M   95  233 -60 360
-hardpoint nose5_gun  missile         M    0  128   0 360
+hardpoint nose5_gun  missile         L    0  128   0 360
 hardpoint port_gun   weapon          M -122 -107  90 210
 hardpoint stbd_gun   weapon          M  122 -107 -90 210
 hardpoint dorsal_pd  defense         S    0   33   0 360

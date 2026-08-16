@@ -42,9 +42,10 @@
 
 // Unmounted-weapon stash capacity. The flagship's stash doubles as the FLEET-WIDE pool the
 // Arsenal inspector draws from, so it must hold the whole starting armory: the flagship's
-// six-weapon rack (four archetypes, harpoon x3 for multi-tube missile volleys) PLUS one
-// gauss per escort (escorts spawn unarmed by design).
-#define SHIP_MAX_WEAPONS 10
+// nine-weapon rack (four archetypes, harpoon x3 for multi-tube missile volleys, plus the
+// skewer / hydra / heavy-torpedo missile catalog) PLUS one gauss per escort (escorts spawn
+// unarmed by design).
+#define SHIP_MAX_WEAPONS 14
 
 #define SHIP_MAX_HARDPOINTS 16
 

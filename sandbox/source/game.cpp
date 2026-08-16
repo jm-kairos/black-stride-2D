@@ -496,7 +496,15 @@ b8 game_init(Game* game_inst) {
 
         fs.ship.weapon_stash[5]     = weapon_instantiate(weapon_registry_find(&s->weapon_registry, "harpoon_rack"),   fs.ship.faction);
 
-        fs.ship.weapon_stash_count  = 6;
+        // The rest of the missile catalog, one of each: light interceptor round, triple-tube
+        // swarm pod, and the heavy torpedo (L -- mounts only on the spine launch cell).
+        fs.ship.weapon_stash[6]     = weapon_instantiate(weapon_registry_find(&s->weapon_registry, "skewer_pod"),     fs.ship.faction);
+
+        fs.ship.weapon_stash[7]     = weapon_instantiate(weapon_registry_find(&s->weapon_registry, "hydra_rack"),     fs.ship.faction);
+
+        fs.ship.weapon_stash[8]     = weapon_instantiate(weapon_registry_find(&s->weapon_registry, "heavy_torpedo"),  fs.ship.faction);
+
+        fs.ship.weapon_stash_count  = 9;
 
         // The fleet owns ONE point-defense device, stocked in the fleet-wide pool like the
         // cannons above (mount it onto any hull's defense hardpoint from the inspector).
