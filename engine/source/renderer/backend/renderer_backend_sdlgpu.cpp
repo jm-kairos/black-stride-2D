@@ -5126,6 +5126,21 @@ struct BsRmlHudRosterRow
     Rml::Vector<BsRmlHudRosterChip> chip;
 };
 
+// One skill-hotbar slot, exposed to RML as { icon, key, action, cd_w, cd_text, badge,
+// ready, armed, denied }. cd_w defaults to a valid CSS length (the fleet_cap_w rule).
+struct BsRmlHudSkill
+{
+    Rml::String icon;
+    Rml::String key;
+    Rml::String action;
+    Rml::String cd_w = "0%";
+    Rml::String cd_text;
+    Rml::String badge;
+    bool        ready  = false;
+    bool        armed  = false;
+    bool        denied = false;
+};
+
 // The engine-side mirror of bs_rml_hud_state, using RmlUi string/array types the data model binds
 // to. Populated by bs_rml_hud_update from the game's POD snapshot.
 struct BsRmlHudModel
@@ -5168,6 +5183,11 @@ struct BsRmlHudModel
     Rml::Vector<BsRmlHudRosterRow>  roster;
 
     bool                     jump_visible = false;
+
+    bool                          skills_visible = false;
+    Rml::Vector<BsRmlHudSkill>    skill;
+    bool                          skill_target_visible = false;
+    Rml::String                   skill_target_label;
 
     bool                     debug_visible = false;
     Rml::String              debug_text;
@@ -5366,6 +5386,20 @@ b8 bs_rml_hud_init(const char* rml_path)
     }
     c.RegisterArray<Rml::Vector<BsRmlHudRosterRow>>();
 
+    if (auto h = c.RegisterStruct<BsRmlHudSkill>())
+    {
+        h.RegisterMember("icon",    &BsRmlHudSkill::icon);
+        h.RegisterMember("key",     &BsRmlHudSkill::key);
+        h.RegisterMember("action",  &BsRmlHudSkill::action);
+        h.RegisterMember("cd_w",    &BsRmlHudSkill::cd_w);
+        h.RegisterMember("cd_text", &BsRmlHudSkill::cd_text);
+        h.RegisterMember("badge",   &BsRmlHudSkill::badge);
+        h.RegisterMember("ready",   &BsRmlHudSkill::ready);
+        h.RegisterMember("armed",   &BsRmlHudSkill::armed);
+        h.RegisterMember("denied",  &BsRmlHudSkill::denied);
+    }
+    c.RegisterArray<Rml::Vector<BsRmlHudSkill>>();
+
     // Scalar bindings.
     c.Bind("nav_visible",  &g_hud_model.nav_visible);
     c.Bind("nav_sector",   &g_hud_model.nav_sector);
@@ -5419,6 +5453,11 @@ b8 bs_rml_hud_init(const char* rml_path)
     c.Bind("roster",         &g_hud_model.roster);
 
     c.Bind("jump_visible", &g_hud_model.jump_visible);
+
+    c.Bind("skills_visible",       &g_hud_model.skills_visible);
+    c.Bind("skill",                &g_hud_model.skill);
+    c.Bind("skill_target_visible", &g_hud_model.skill_target_visible);
+    c.Bind("skill_target_label",   &g_hud_model.skill_target_label);
 
     c.Bind("debug_visible", &g_hud_model.debug_visible);
     c.Bind("debug_text",    &g_hud_model.debug_text);
@@ -5650,6 +5689,31 @@ void bs_rml_hud_update(const bs_rml_hud_state* s)
     }
 
     g_hud_model.jump_visible = s->jump_visible ? true : false;
+
+    g_hud_model.skills_visible = s->skills_visible ? true : false;
+    {
+        i32 n = s->skill_count;
+        if (n < 0) n = 0;
+        if (n > BS_RML_SKILL_MAX) n = BS_RML_SKILL_MAX;
+        g_hud_model.skill.resize((size_t)n);
+        for (i32 i = 0; i < n; ++i)
+        {
+            const bs_rml_skill_slot& src = s->skill[i];
+            BsRmlHudSkill&           dst = g_hud_model.skill[(size_t)i];
+            bs_rml_assign(dst.icon,    src.icon,    sizeof(src.icon));
+            bs_rml_assign(dst.key,     src.key,     sizeof(src.key));
+            bs_rml_assign(dst.action,  src.action,  sizeof(src.action));
+            bs_rml_assign(dst.cd_w,    src.cd_w,    sizeof(src.cd_w));
+            bs_rml_assign(dst.cd_text, src.cd_text, sizeof(src.cd_text));
+            bs_rml_assign(dst.badge,   src.badge,   sizeof(src.badge));
+            dst.ready  = src.ready ? true : false;
+            dst.armed  = src.armed ? true : false;
+            dst.denied = src.denied ? true : false;
+        }
+    }
+    g_hud_model.skill_target_visible = s->skill_target_visible ? true : false;
+    bs_rml_assign(g_hud_model.skill_target_label, s->skill_target_label,
+                  sizeof(s->skill_target_label));
 
     g_hud_model.debug_visible = s->debug_visible ? true : false;
     bs_rml_assign(g_hud_model.debug_text, s->debug_text, sizeof(s->debug_text));

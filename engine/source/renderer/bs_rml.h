@@ -99,6 +99,7 @@ bs__api__ void bs_rml_set_sharpen(f32 amount);
 #define BS_RML_GROUP_MAX   5    // fleet-ship HUD fire-group rows (SHIP_WEAPON_GROUPS game-side)
 #define BS_RML_GM_COLS     8    // fire-group matrix: max weapon columns (mounted weapons)
 #define BS_RML_ROSTER_MAX  8    // fleet roster rows (FLEET_MAX_SHIPS game-side)
+#define BS_RML_SKILL_MAX   9    // skill hotbar slots (SKILL_SLOT_MAX game-side; number row 1-9)
 #define BS_RML_ACTION_CAP  32   // max bytes (incl. NUL) for a polled action string
 
 // One action-log line (already formatted, newest last).
@@ -123,6 +124,23 @@ typedef struct bs_rml_weapon_line
     b8   selected;   // highlighted row (the active fire group)
     b8   empty;      // no content (dim style; group rows stay clickable)
 } bs_rml_weapon_line;
+
+// One skill-hotbar slot: icon + keycap + cooldown sweep + participant badge. `action`
+// ("skill:N") is enqueued on click. `cd_w` drives the cooldown fill via a style-width
+// string bind (the fleet_cap_w recipe) and must ALWAYS hold a valid CSS length -- data
+// bindings evaluate even while the bar is hidden.
+typedef struct bs_rml_skill_slot
+{
+    char icon[16];    // ui-icons sprite name ("ic-missile"; "" = empty slot)
+    char key[4];      // keycap label "1".."9"
+    char action[16];  // "skill:N" enqueued on click
+    char cd_w[16];    // cooldown sweep fill width ("37%"; "0%" when ready)
+    char cd_text[16]; // remaining seconds ("37s"); "" when ready
+    char badge[16];   // participant tube count ("6"); "" hides
+    b8   ready;       // off cooldown, no volley in flight, >= 1 tube would fire
+    b8   armed;       // this slot's targeting mode is armed (highlight)
+    b8   denied;      // denial flash (failed cast / on-cooldown press)
+} bs_rml_skill_slot;
 
 // One Modules-bay tile (flagship inspector): a draggable item (weapon / point-defense /
 // ship module) or an inert empty socket. `icon` names a ui-icons emblem sprite (falls back
@@ -276,6 +294,13 @@ typedef struct bs_rml_hud_state
 
     // Jump-mode banner (bottom-center; "Currently in Jump Mode").
     b8 jump_visible;
+
+    // Skill hotbar (bottom-center; detached RTS camera only) + entity-targeting banner.
+    b8                skills_visible;
+    i32               skill_count;                  // valid slots in skill[0..count-1]
+    bs_rml_skill_slot skill[BS_RML_SKILL_MAX];
+    b8                skill_target_visible;
+    char              skill_target_label[64];       // "Select target - Alpha Strike"
 
     // HierPos2 debug readout (top-left, dev toggle). debug_text may contain '\n' line breaks.
     b8   debug_visible;
