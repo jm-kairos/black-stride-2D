@@ -543,16 +543,8 @@ void FleetShip::update_attack(game_state* s, f32 dt) {
             // Each shot leaves from its own hardpoint, honoring the slot's traverse arc.
             {
                 HierPos2 fire_origin = ship_hardpoint_fire_origin(sh, whp);
-                Vec2 aim_dir = to_target;
-                Vec2 target_vel = ce->velocity;
-                if ((target_vel.x != 0.0f || target_vel.y != 0.0f) && dist > 0.0001f) {
-                    f32 proj_speed = w->projectile_speed();
-                    if (proj_speed > 0.0001f) {
-                        f32 lead_time = dist / proj_speed;
-                        HierPos2 lead_pos = hierpos_add_vec2(&target->origin, vec2_scale(target_vel, lead_time));
-                        aim_dir = hierpos_diff(&lead_pos, &fire_origin);
-                    }
-                }
+                Vec2 aim_dir = weapon_lead_dir(fire_origin, target->origin, ce->velocity,
+                                               w->projectile_speed(), to_target, dist);
                 w->owner_faction_id = sh->faction_id;   // stamp attacker faction for hit attribution
                 // One shared validator (arc / cooldown / reach / power / operational status),
                 // the same one the manual fire path and the selection hub use. The capacitor is

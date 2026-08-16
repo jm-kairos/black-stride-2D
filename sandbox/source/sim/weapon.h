@@ -154,6 +154,17 @@ f32 weapon_effective_reach(const Weapon* w);
 // engagement envelope, guaranteed to match what spawn_shot actually flies.
 f32 weapon_flak_reach(const Weapon* w);
 
+// Single-pass missile lead: the aim direction from `fire_origin` toward where the target
+// will be after the projectile's straight-line flight time. SINGLE SOURCE OF TRUTH for
+// this solve -- extracted from the autopilot missile branch (sim/fleet.cpp, update_attack).
+// The two-pass RELATIVE-velocity solves (ballistic broadside, ai_ship gunner) are a
+// different problem and deliberately stay at their sites. `to_target`/`dist` are the
+// already-computed origin->target vector and its length (every caller has them); a zero
+// target velocity, distance or projectile speed returns `to_target` unchanged.
+bs_math::Vec2 weapon_lead_dir(bs_math::HierPos2 fire_origin, bs_math::HierPos2 target_pos,
+                              bs_math::Vec2 target_vel, f32 proj_speed,
+                              bs_math::Vec2 to_target, f32 dist);
+
 // ---------------------------------------------------------------------------
 // Helper: instances are normally built from `.weapon` defs by weapon_instantiate
 // (sim/weapon_def.h). No hardcoded factories remain.

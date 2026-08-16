@@ -152,6 +152,20 @@ f32 weapon_flak_reach(const Weapon* w) {
     if (!w || w->wkind != WEAPON_KIND_BALLISTIC) return 0.0f;
     return w->projectile_speed() * FLAK_SPEED_MUL * FLAK_LIFETIME_S;
 }
+bs_math::Vec2 weapon_lead_dir(bs_math::HierPos2 fire_origin, bs_math::HierPos2 target_pos,
+                              bs_math::Vec2 target_vel, f32 proj_speed,
+                              bs_math::Vec2 to_target, f32 dist) {
+    using namespace bs_math;
+    Vec2 aim_dir = to_target;
+    if ((target_vel.x != 0.0f || target_vel.y != 0.0f) && dist > 0.0001f) {
+        if (proj_speed > 0.0001f) {
+            f32 lead_time = dist / proj_speed;
+            HierPos2 lead_pos = hierpos_add_vec2(&target_pos, vec2_scale(target_vel, lead_time));
+            aim_dir = hierpos_diff(&lead_pos, &fire_origin);
+        }
+    }
+    return aim_dir;
+}
 // ---------------------------------------------------------------------------
 // Instances are built from `.weapon` defs by weapon_instantiate (weapon_def.cpp);
 // the old hardcoded factories are gone.
