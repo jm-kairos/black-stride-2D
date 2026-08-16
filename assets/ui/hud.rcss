@@ -544,7 +544,7 @@ body {
 /* --- FTL jump-mode banner (bottom-center) ----------------------------------------- */
 #jumpmode {
     position: absolute;
-    bottom: 40px;
+    bottom: 104px;               /* the shared banner slot, clear of the skill hotbar below */
     left: 0;
     width: 100%;
     text-align: center;
@@ -554,6 +554,135 @@ body {
     letter-spacing: 4px;
     /* Earned glow exception: an active FTL field announcement, not decoration. */
     font-effect: shadow(1px 2px #000000c0), glow(2px 5px #c9963f50);
+}
+
+/* --- Fleet skill hotbar (bottom-center; detached RTS camera only) ------------------ */
+/* The container is click-through scaffolding centered by the #inspector-btn negative-
+   margin trick; the slots opt back in with pointer-events:auto. */
+#skillbar {
+    position: absolute;
+    bottom: 52px;                /* above the Inspector button, below the banner slot */
+    left: 50%;
+    width: 460px;
+    margin-left: -230px;
+    text-align: center;
+    pointer-events: none;
+}
+
+/* One 44px hotbar tile: the .weapon-symbol armor-plate recipe, sized up, no drag. */
+.skill-slot {
+    display: inline-block;
+    width: 44px;
+    height: 44px;
+    margin: 0 3px;
+    background-color: #2e333a;
+    decorator: ninepatch(btn, btn-inner);
+    border: 1px transparent;     /* box-size keeper; hosts the armed/denied edge flashes */
+    transition: decorator color 0.12s quadratic-out;
+    color: #ddd6c4;
+    position: relative;
+    pointer-events: auto;
+}
+
+.skill-slot:hover {
+    decorator: ninepatch(btn-hi, btn-hi-inner);
+    color: #f2ead6;
+}
+
+.skill-slot.armed {
+    decorator: ninepatch(btn-amber, btn-amber-inner);
+    border-color: #c9963f;
+    color: #e8b45a;
+    animation: 0.4s cubic-out 1 sel-flash;   /* one-shot flash on arm */
+}
+
+/* One-shot red edge flash on a refused press (on cooldown / nothing able to fire). */
+@keyframes deny-flash {
+    0%   { border-color: #e05545; }
+    100% { border-color: #00000000; }
+}
+
+.skill-slot.denied {
+    animation: 0.35s cubic-out 1 deny-flash;
+}
+
+/* Emblem stencil: dim while the skill cannot fire, ivory when ready, amber while armed.
+   pointer-events:none is LOAD-BEARING -- the per-frame data-attr-sprite churn must never
+   own the click (the insp-fleet-list lesson). */
+.skill-icon {
+    display: block;
+    width: 32px;
+    height: 32px;
+    margin: 6px auto;
+    image-color: #6e6555;        /* dim: on cooldown / no tube ready */
+    transition: image-color 0.12s quadratic-out;
+    pointer-events: none;
+}
+
+.skill-slot.ready .skill-icon { image-color: #ddd6c4; }
+.skill-slot:hover .skill-icon { image-color: #f2ead6; }
+.skill-slot.armed .skill-icon { image-color: #e8b45a; }
+
+/* Cooldown strip along the tile's bottom edge: width = REMAINING fraction, driven by the
+   cd_w string bind (the cap-gauge-fill recipe), shrinking to nothing as the skill readies. */
+.skill-cd {
+    position: absolute;
+    left: 1px;
+    bottom: 1px;
+    height: 4px;
+    width: 0%;                   /* driven per-frame by data-style-width */
+    decorator: horizontal-gradient(#7a4a35 #c9963f);
+    pointer-events: none;
+}
+
+/* Corner labels: keycap top-left, participant tube count top-right. */
+.skill-key {
+    position: absolute;
+    top: 1px;
+    left: 4px;
+    font-size: 10px;
+    color: #a89a7e;
+    pointer-events: none;
+}
+
+.skill-badge {
+    position: absolute;
+    top: 1px;
+    right: 4px;
+    font-size: 10px;
+    color: #9db4c0;
+    pointer-events: none;
+}
+
+/* Remaining-seconds readout, centered over the dimmed icon while cooling. */
+.skill-cdtext {
+    position: absolute;
+    top: 14px;
+    left: 0;
+    width: 100%;
+    text-align: center;
+    font-size: 13px;
+    font-weight: 700;
+    color: #f2ead6;
+    font-effect: shadow(1px 1px #000000c0);
+    pointer-events: none;
+}
+
+/* Skill entity-targeting banner: #jumpmode's voice in the same banner slot (the two armed
+   modes are mutually exclusive, so they share it). Click-through: it announces, the world
+   underneath takes the targeting click. */
+#skilltarget {
+    position: absolute;
+    bottom: 104px;
+    left: 0;
+    width: 100%;
+    text-align: center;
+    color: #c9963f;
+    font-size: 22px;
+    text-transform: uppercase;
+    letter-spacing: 4px;
+    font-effect: shadow(1px 2px #000000c0), glow(2px 5px #c9963f50);
+    pointer-events: none;
 }
 
 /* --- HierPos2 debug readout (top-left, dev toggle) -------------------------------- */

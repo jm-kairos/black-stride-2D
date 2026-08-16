@@ -1725,6 +1725,43 @@ static void game_push_hud(game_state* s, f32 dt) {
     if (!s->editor.edit_mode_active && s->rts_controls.jump_mode_active())
         hud.jump_visible = TRUE;
 
+    // ---- Fleet skill hotbar (bottom-center; detached RTS camera only) -------------------
+    // cd_w must ALWAYS hold a valid CSS length (the fleet_cap_w rule: bindings evaluate even
+    // while the bar is hidden) and the snapshot was zeroed above, so stamp every slot first.
+    for (i32 k = 0; k < BS_RML_SKILL_MAX; ++k)
+        snprintf(hud.skill[k].cd_w, sizeof(hud.skill[k].cd_w), "0%%");
+    if (!s->editor.edit_mode_active && s->camera_state.free_camera_active &&
+        s->skills.slot_count > 0) {
+        hud.skills_visible = TRUE;
+        hud.skill_count = s->skills.slot_count;
+        for (i32 k = 0; k < s->skills.slot_count && k < BS_RML_SKILL_MAX; ++k) {
+            const SkillSlot& sl = s->skills.slots[k];
+            if (!sl.def) continue;
+            bs_rml_skill_slot& row = hud.skill[k];
+            snprintf(row.icon,   sizeof(row.icon),   "%s", sl.def->icon);
+            snprintf(row.key,    sizeof(row.key),    "%d", k + 1);
+            snprintf(row.action, sizeof(row.action), "skill:%d", k);
+            // The badge counts the SAME query the cast enqueues (skill_system_collect_tubes):
+            // what the button shows is exactly the volley the click would launch.
+            i32 tubes = skill_system_collect_tubes(s, sl.def, nullptr, 0);
+            snprintf(row.badge, sizeof(row.badge), "%d", tubes);
+            f32 frac = (sl.def->cooldown > 1.0e-4f && sl.cooldown > 0.0f)
+                           ? sl.cooldown / sl.def->cooldown : 0.0f;
+            snprintf(row.cd_w, sizeof(row.cd_w), "%.0f%%", frac * 100.0f);
+            if (sl.cooldown > 0.0f)
+                snprintf(row.cd_text, sizeof(row.cd_text), "%.0fs", sl.cooldown);
+            row.ready  = (sl.cooldown <= 0.0f && !s->skills.volley.active && tubes > 0) ? TRUE : FALSE;
+            row.armed  = (s->skills.targeting_active && s->skills.targeting_slot == (i8)k) ? TRUE : FALSE;
+            row.denied = (s->skills.denied_timer > 0.0f && s->skills.denied_slot == (i8)k) ? TRUE : FALSE;
+        }
+        if (s->skills.targeting_active && s->skills.targeting_slot >= 0 &&
+            s->skills.slots[s->skills.targeting_slot].def) {
+            hud.skill_target_visible = TRUE;
+            snprintf(hud.skill_target_label, sizeof(hud.skill_target_label), "Select target - %s",
+                     s->skills.slots[s->skills.targeting_slot].def->name);
+        }
+    }
+
     // Active UI font kit (editor-panel selectable): drives the body class that swaps typefaces.
     hud.ui_kit = s->ui_font_kit;
 
@@ -2509,6 +2546,12 @@ static void game_push_hud(game_state* s, f32 dt) {
         }
         // Fleet ship panel: fire-group chip click selects that weapon group (same feedback as
         // the number keys).
+        // Skill hotbar click: the same entry point as the number key (arm / re-press-cancel /
+        // deny with feedback) -- one behavior, two triggers.
+        if (strncmp(action, "skill:", 6) == 0) {
+            skill_system_hotkey(s, atoi(action + 6));
+            continue;
+        }
         if (strncmp(action, "group:", 6) == 0) {
             i32 g = atoi(action + 6);
             FleetShip* p = s->fleet_state.fleet.piloted();

@@ -111,8 +111,27 @@
         <div class="modal-btn" data-event-click="hud_action('observe')">Observe</div>
     </div>
 
-    <!-- FTL jump-mode banner (bottom-center) -->
+    <!-- FTL jump-mode banner (bottom-center, above the skill hotbar; shares the banner slot
+         with #skilltarget -- the two armed modes are mutually exclusive) -->
     <div id="jumpmode" data-if="jump_visible">Currently in Jump Mode</div>
+
+    <!-- Fleet skill hotbar (bottom-center, above the Inspector button; detached camera only).
+         The container is click-through; the slots opt back in. The icon is pointer-events:none
+         so per-frame data-attr-sprite churn can never eat the tile's click (insp-fleet lesson). -->
+    <div id="skillbar" data-if="skills_visible">
+        <div class="skill-slot" data-for="sk : skill"
+             data-class-ready="sk.ready" data-class-armed="sk.armed" data-class-denied="sk.denied"
+             data-event-click="hud_action(sk.action)">
+            <img class="skill-icon" data-if="sk.icon != ''" data-attr-sprite="sk.icon"/>
+            <div class="skill-cd" data-style-width="sk.cd_w"></div>
+            <div class="skill-key">{{ sk.key }}</div>
+            <div class="skill-cdtext" data-if="sk.cd_text != ''">{{ sk.cd_text }}</div>
+            <div class="skill-badge" data-if="sk.badge != ''">{{ sk.badge }}</div>
+        </div>
+    </div>
+
+    <!-- Skill entity-targeting banner (#jumpmode's voice, same banner slot) -->
+    <div id="skilltarget" data-if="skill_target_visible">{{ skill_target_label }}</div>
 
     <!-- HierPos2 debug readout (top-left, dev toggle from the COORDINATE SPACE editor panel) -->
     <div id="debug" data-if="debug_visible">{{ debug_text }}</div>
